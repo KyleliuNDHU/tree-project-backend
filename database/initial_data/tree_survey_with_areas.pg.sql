@@ -7,30 +7,30 @@ DROP VIEW IF EXISTS tree_survey_with_areas;
 CREATE VIEW tree_survey_with_areas AS
 SELECT
     ts.id,
-    ts.專案區位,
-    ts.專案代碼,
-    ts.專案名稱,
-    ts.系統樹木,
-    ts.專案樹木,
-    ts.樹種編號,
-    ts.樹種名稱,
-    ts.X坐標,
-    ts.Y坐標,
-    ts.狀況,
-    ts.註記,
-    ts.樹木備註,
-    ts."樹高（公尺）",
-    ts."胸徑（公分）",
-    ts.調查備註,
-    ts.調查時間,
-    ts.碳儲存量,
-    ts.推估年碳吸存量,
+    ts.project_location,
+    ts.project_code,
+    ts.project_name,
+    ts.system_tree_id,
+    ts.project_tree_id,
+    ts.species_id,
+    ts.species_name,
+    ts.x_coord,
+    ts.y_coord,
+    ts.status,
+    ts.notes,
+    ts.tree_notes,
+    ts.tree_height_m,
+    ts.dbh_cm,
+    ts.survey_notes,
+    ts.survey_time,
+    ts.carbon_storage,
+    ts.carbon_sequestration_per_year,
     pa.id AS area_id,
     pa.area_code,
     pa.description AS area_description
 FROM
     tree_survey ts
 LEFT JOIN
-    project_areas pa ON ts.專案區位 = pa.area_name;
+    project_areas pa ON ts.project_location = pa.area_name;
 
 COMMENT ON VIEW tree_survey_with_areas IS '一個將 tree_survey 和 project_areas 結合的檢視表，方便查詢區域資訊。';
