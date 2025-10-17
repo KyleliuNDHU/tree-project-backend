@@ -2,6 +2,7 @@ const { Pool } = require('pg');
 const fs = require('fs');
 const path = require('path');
 const { parse } = require('csv-parse/sync');
+const { copyFrom } = require('pg-copy-streams'); // Import the helper
 require('dotenv').config();
 
 const pool = new Pool({
@@ -62,12 +63,15 @@ async function migrate() {
 
         const copyCommand = `COPY tree_survey(${header}) FROM STDIN WITH (FORMAT CSV, HEADER)`;
         
-        const stream = client.query(copyCommand);
-        fs.createReadStream(absolutePath).pipe(stream);
+        // Use the copyFrom helper to create a writable stream
+        const stream = client.query(copyFrom(copyCommand));
+        const fileStream = fs.createReadStream(absolutePath);
 
         await new Promise((resolve, reject) => {
-            stream.on('finish', resolve);
+            fileStream.on('error', reject);
             stream.on('error', reject);
+            stream.on('finish', resolve);
+            fileStream.pipe(stream);
         });
 
         console.log('tree_survey_data.csv imported successfully.');
