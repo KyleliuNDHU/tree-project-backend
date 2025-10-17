@@ -1,6 +1,6 @@
 -- Drop existing objects for a clean run
 DROP TRIGGER IF EXISTS trigger_tree_species_updated_at ON tree_species;
-DROP FUNCTION IF EXISTS update_updated_at_column; -- Redefine for safety
+-- DROP FUNCTION IF EXISTS update_updated_at_column; -- Handled by 00_init_functions.pg.sql
 DROP TABLE IF EXISTS tree_species;
 
 --
@@ -19,15 +19,6 @@ COMMENT ON TABLE tree_species IS '樹種資料表';
 COMMENT ON COLUMN tree_species.id IS '樹種編號';
 COMMENT ON COLUMN tree_species.name IS '樹種名稱';
 COMMENT ON COLUMN tree_species.scientific_name IS '學名';
-
--- Create the trigger function for updating the timestamp
-CREATE OR REPLACE FUNCTION update_updated_at_column()
-RETURNS TRIGGER AS $$
-BEGIN
-   NEW.updated_at = NOW();
-   RETURN NEW;
-END;
-$$ language 'plpgsql';
 
 -- Create the trigger
 CREATE TRIGGER trigger_tree_species_updated_at
@@ -100,7 +91,7 @@ INSERT INTO tree_species (id, name, scientific_name, created_at, updated_at) VAL
 ('0314', '雞蛋花', 'Plumeria rubra', '2025-05-12 16:15:12', '2025-05-12 16:38:31'),
 ('0315', '蓮霧', 'Syzygium samarangense', '2025-05-12 16:15:12', '2025-05-12 16:38:31'),
 ('0327', '鴨腳木', 'Schefflera octophylla', '2025-05-12 16:15:12', '2025-05-12 16:38:31'),
-('0328', '龍柏', 'Juniperus chinensis \'Kaizuka\'', '2025-05-12 16:15:12', '2025-05-12 16:38:31'),
+('0328', '龍柏', 'Juniperus chinensis ''Kaizuka''', '2025-05-12 16:15:12', '2025-05-12 16:38:31'),
 ('0329', '龍眼', 'Dimocarpus longan', '2025-05-12 16:15:12', '2025-05-12 16:38:31'),
 ('0331', '檄樹', 'Lannea coromandelica', '2025-05-12 16:15:12', '2025-05-12 16:38:31'),
 ('0346', '瓊崖海棠', 'Calophyllum inophyllum', '2025-05-12 16:15:12', '2025-05-12 16:38:31'),

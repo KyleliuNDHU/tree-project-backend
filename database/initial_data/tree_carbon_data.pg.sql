@@ -1,6 +1,5 @@
 -- Drop existing objects to ensure a clean run
 DROP TRIGGER IF EXISTS trigger_tree_carbon_data_updated_at ON tree_carbon_data;
-DROP FUNCTION IF EXISTS update_updated_at_column;
 DROP TABLE IF EXISTS tree_carbon_data;
 DROP TYPE IF EXISTS efficiency_level;
 DROP TYPE IF EXISTS growth_rate_level;
@@ -125,15 +124,6 @@ COMMENT ON COLUMN tree_carbon_data.notes IS '備註說明';
 COMMENT ON COLUMN tree_carbon_data.created_at IS '建立時間';
 COMMENT ON COLUMN tree_carbon_data.updated_at IS '最後更新時間';
 
-
--- Create the trigger function for updating the timestamp
-CREATE OR REPLACE FUNCTION update_updated_at_column()
-RETURNS TRIGGER AS $$
-BEGIN
-   NEW.updated_at = NOW();
-   RETURN NEW;
-END;
-$$ language 'plpgsql';
 
 -- Create the trigger
 CREATE TRIGGER trigger_tree_carbon_data_updated_at

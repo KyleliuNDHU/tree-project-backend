@@ -1,6 +1,6 @@
 -- Drop existing objects for a clean run
 DROP TRIGGER IF EXISTS trigger_tree_survey_updated_at ON tree_survey;
-DROP FUNCTION IF EXISTS update_updated_at_column; -- Redefine for safety
+-- DROP FUNCTION IF EXISTS update_updated_at_column; -- Handled by 00_init_functions.pg.sql
 DROP TABLE IF EXISTS tree_survey;
 
 --
@@ -44,15 +44,6 @@ COMMENT ON TABLE tree_survey IS '儲存樹木調查的主要資料';
 CREATE INDEX idx_tree_survey_project_code ON tree_survey(專案代碼);
 CREATE INDEX idx_tree_survey_species_name ON tree_survey(樹種名稱);
 
-
--- Create the trigger function for updating the timestamp
-CREATE OR REPLACE FUNCTION update_updated_at_column()
-RETURNS TRIGGER AS $$
-BEGIN
-   NEW.updated_at = NOW();
-   RETURN NEW;
-END;
-$$ language 'plpgsql';
 
 -- Create the trigger
 CREATE TRIGGER trigger_tree_survey_updated_at
