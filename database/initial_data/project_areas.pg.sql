@@ -3,7 +3,7 @@ DROP TRIGGER IF EXISTS trigger_project_areas_updated_at ON project_areas;
 -- DROP FUNCTION IF EXISTS update_updated_at_column; -- This is now handled by 00_init_functions.pg.sql
 
 -- Drop the table if it exists
-DROP TABLE IF EXISTS project_areas;
+DROP TABLE IF EXISTS project_areas CASCADE;
 
 --
 -- 資料表結構 `project_areas` for PostgreSQL

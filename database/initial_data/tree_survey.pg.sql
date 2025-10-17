@@ -1,7 +1,7 @@
 -- Drop existing objects for a clean run
 DROP TRIGGER IF EXISTS trigger_tree_survey_updated_at ON tree_survey;
 -- DROP FUNCTION IF EXISTS update_updated_at_column; -- Handled by 00_init_functions.pg.sql
-DROP TABLE IF EXISTS tree_survey;
+DROP TABLE IF EXISTS tree_survey CASCADE;
 
 --
 -- 資料表結構 `tree_survey` for PostgreSQL
