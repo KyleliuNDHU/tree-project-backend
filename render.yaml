@@ -2,7 +2,7 @@ services:
   - type: web
     name: tree-app-backend
     env: node
-    rootDir: ./project_code/backend
+    rootDir: ./
     plan: free
     branch: main
     buildCommand: "./build.sh"
