@@ -1,0 +1,12 @@
+# 忽略 node.js 專案的依賴項
+/node_modules
+
+# 忽略環境變數檔案
+.env
+
+# 忽略作業系統產生的檔案
+.DS_Store
+Thumbs.db
+
+# 忽略日誌檔案
+*.log
