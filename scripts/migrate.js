@@ -13,6 +13,7 @@ const pool = new Pool({
 
 // Define the correct order for table creation
 const migrationFiles = [
+  '00_init_functions.pg.sql', // Initialize shared functions first
   'users.pg.sql',
   'project_areas.pg.sql',
   'tree_species.pg.sql',

@@ -1,6 +1,6 @@
 -- Drop dependent objects first
 DROP TRIGGER IF EXISTS trigger_users_updated_at ON users;
-DROP FUNCTION IF EXISTS update_updated_at_column();
+-- DROP FUNCTION IF EXISTS update_updated_at_column(); -- This is now handled by 00_init_functions.pg.sql
 
 -- Drop the table and type if they exist
 DROP TABLE IF EXISTS users;
@@ -41,16 +41,7 @@ COMMENT ON COLUMN users.created_at IS '帳號建立時間';
 COMMENT ON COLUMN users.updated_at IS '帳號最後更新時間';
 
 
--- 建立一個函數，用於在資料更新時自動更新 updated_at 欄位
-CREATE OR REPLACE FUNCTION update_updated_at_column()
-RETURNS TRIGGER AS $$
-BEGIN
-   NEW.updated_at = NOW();
-   RETURN NEW;
-END;
-$$ language 'plpgsql';
-
--- 建立一個觸發器，在每次更新 users 資料表時調用上述函數
+-- 建立一個觸發器，在每次更新 users 資料表時調用共用函數
 CREATE TRIGGER trigger_users_updated_at
 BEFORE UPDATE ON users
 FOR EACH ROW
