@@ -2,7 +2,7 @@ const { Pool } = require('pg');
 const fs = require('fs');
 const path = require('path');
 const { parse } = require('csv-parse/sync');
-const { copyFrom } = require('pg-copy-streams'); // Import the helper
+const copyFrom = require('pg-copy-streams').from; // Import the helper correctly
 require('dotenv').config();
 
 const pool = new Pool({
