@@ -3,6 +3,7 @@ const fs = require('fs');
 const path = require('path');
 const { parse } = require('csv-parse/sync');
 const copyFrom = require('pg-copy-streams').from; // Import the helper correctly
+const { Transform } = require('stream'); // Add Transform stream
 require('dotenv').config();
 
 const pool = new Pool({
@@ -67,11 +68,22 @@ async function migrate() {
         const stream = client.query(copyFrom(copyCommand));
         const fileStream = fs.createReadStream(absolutePath);
 
+        // Create a transform stream to replace invalid dates on the fly
+        const transformStream = new Transform({
+          transform(chunk, encoding, callback) {
+            // Convert chunk to string, replace the invalid date, and push it back
+            const transformedChunk = chunk.toString().replace(/0000-00-00 00:00:00/g, '');
+            this.push(transformedChunk);
+            callback();
+          }
+        });
+
         await new Promise((resolve, reject) => {
             fileStream.on('error', reject);
+            transformStream.on('error', reject); // Handle errors on the new stream
             stream.on('error', reject);
             stream.on('finish', resolve);
-            fileStream.pipe(stream);
+            fileStream.pipe(transformStream).pipe(stream);
         });
 
         console.log('tree_survey_data.csv imported successfully.');
