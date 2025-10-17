@@ -1,0 +1,21 @@
+services:
+  - type: web
+    name: tree-app-backend
+    env: node
+    rootDir: ./
+    plan: free
+    branch: main
+    buildCommand: "./build.sh"
+    startCommand: "npm start"
+    envVars:
+      - key: DATABASE_URL
+        fromDatabase:
+          name: tree-database
+          property: connectionString
+      - key: NODE_VERSION
+        value: 18.17.1
+
+databases:
+  - name: tree-database
+    databaseName: tree_data
+    plan: free
