@@ -35,7 +35,7 @@ async function migrate() {
     // Execute migration files for table creation and data insertion
     for (const file of migrationFiles) {
       console.log(`Executing ${file}...`);
-      const filePath = path.join(__dirname, '../../database/initial_data', file);
+      const filePath = path.join(__dirname, '../database/initial_data', file);
       const script = fs.readFileSync(filePath, 'utf8');
       await client.query(script);
       console.log(`${file} executed successfully.`);
@@ -43,7 +43,7 @@ async function migrate() {
 
     // Import data from CSV into tree_survey table
     console.log('Importing data from tree_survey_data.csv...');
-    const csvPath = path.join(__dirname, '../../database/initial_data', 'tree_survey_data.csv');
+    const csvPath = path.join(__dirname, '../database/initial_data', 'tree_survey_data.csv');
     if (fs.existsSync(csvPath)) {
         // Use COPY for high performance, requires absolute path on server
         // We need to resolve the full path for the COPY command
@@ -77,7 +77,7 @@ async function migrate() {
     // After all tables are created and data is imported, create the views
     for (const file of viewFiles) {
         console.log(`Executing view creation script ${file}...`);
-        const filePath = path.join(__dirname, '../../database/initial_data', file);
+        const filePath = path.join(__dirname, '../database/initial_data', file);
         const script = fs.readFileSync(filePath, 'utf8');
         await client.query(script);
         console.log(`${file} executed successfully.`);
