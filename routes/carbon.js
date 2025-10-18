@@ -3,7 +3,7 @@ const router = express.Router();
 const db = require('../config/db');
 const openaiController = require('../controllers/openaiController');
 const carbonSinkController = require('../controllers/carbonSinkController');
-const { aiLimiter } = require('../middleware/rateLimiter'); // Added aiLimiter import
+const { aiLimiter } = require('../middleware/rateLimiter');
 
 // 从 index_3.js 迁移过来的碳足跡抵銷 API
 router.post('/footprint/offset', aiLimiter, async (req, res) => {

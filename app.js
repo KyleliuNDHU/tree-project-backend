@@ -2,8 +2,8 @@ require('dotenv').config();
 const express = require('express');
 const cors = require('cors');
 const helmet = require('helmet');
-const rateLimit = require('express-rate-limit');
 const path = require('path');
+const { apiLimiter, loginLimiter } = require('./middleware/rateLimiter');
 
 const app = express();
 
@@ -16,16 +16,6 @@ app.use(cors({
 app.use(helmet());
 app.use(express.json({ limit: '50mb' })); // 增加請求大小限制以應對潛在的大請求
 app.use(express.urlencoded({ extended: true, limit: '50mb' }));
-
-// --- 速率限制 (Rate Limiting) ---
-const apiLimiter = rateLimit({
-    windowMs: 15 * 60 * 1000, // 15 分鐘
-    max: 200, // 增加通用請求限制
-    message: {
-        success: false,
-        message: '請求過於頻繁，請稍後再試'
-    },
-});
 
 // --- 路由 (Routes) ---
 // 將所有 API 路由都放在 /api 前綴下
