@@ -12,6 +12,16 @@ services:
         fromDatabase:
           name: tree-database
           property: connectionString
+      - key: NODE_ENV
+        value: production
+      - key: OPENAI_API_KEY
+        sync: false
+      - key: GEMINI_API_KEY
+        sync: false
+      - key: Claude_API_KEY
+        sync: false
+      - key: SiliconFlow_API_KEY
+        sync: false
       - key: NODE_VERSION
         value: 20.11.1
 
