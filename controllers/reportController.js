@@ -1,72 +1,76 @@
-const db = require('../config/database');
+const db = require('../config/db');
 
 // 生成永續報告
 exports.generateSustainabilityReport = async (req, res) => {
     try {
         // 1. 基本統計數據
-        const basicStats = await db.query(`
+        const { rows: basicStatsRows } = await db.query(`
             SELECT 
                 COUNT(*) as total_trees,
-                COUNT(DISTINCT 樹種名稱) as species_count,
-                AVG(樹高（公尺）) as avg_height,
-                AVG(胸徑（公分）) as avg_dbh,
-                SUM(碳儲存量) as total_carbon_storage,
-                SUM(推估年碳吸存量) as total_annual_carbon_sequestration
+                COUNT(DISTINCT species_name) as species_count,
+                AVG(tree_height_m) as avg_height,
+                AVG(dbh_cm) as avg_dbh,
+                SUM(carbon_storage) as total_carbon_storage,
+                SUM(carbon_sequestration_per_year) as total_annual_carbon_sequestration
             FROM tree_survey
         `);
+        const basicStats = basicStatsRows[0];
 
         // 2. 物種多樣性分析
-        const speciesDiversity = await db.query(`
+        const { rows: speciesDiversity } = await db.query(`
             SELECT 
-                樹種名稱,
+                species_name,
                 COUNT(*) as count,
                 (COUNT(*) * 100.0 / (SELECT COUNT(*) FROM tree_survey)) as percentage
             FROM tree_survey
-            GROUP BY 樹種名稱
+            WHERE species_name IS NOT NULL AND species_name != ''
+            GROUP BY species_name
             ORDER BY count DESC
         `);
 
         // 3. 健康狀況分析
-        const healthStatus = await db.query(`
+        const { rows: healthStatus } = await db.query(`
             SELECT 
-                狀況,
+                status,
                 COUNT(*) as count,
                 (COUNT(*) * 100.0 / (SELECT COUNT(*) FROM tree_survey)) as percentage
             FROM tree_survey
-            GROUP BY 狀況
+            WHERE status IS NOT NULL AND status != ''
+            GROUP BY status
         `);
 
         // 4. 徑級分佈
-        const dbhDistribution = await db.query(`
+        const { rows: dbhDistribution } = await db.query(`
             SELECT 
                 CASE 
-                    WHEN 胸徑（公分） < 10 THEN '小於10公分'
-                    WHEN 胸徑（公分） BETWEEN 10 AND 20 THEN '10-20公分'
-                    WHEN 胸徑（公分） BETWEEN 20 AND 30 THEN '20-30公分'
-                    WHEN 胸徑（公分） BETWEEN 30 AND 40 THEN '30-40公分'
+                    WHEN dbh_cm < 10 THEN '小於10公分'
+                    WHEN dbh_cm BETWEEN 10 AND 20 THEN '10-20公分'
+                    WHEN dbh_cm BETWEEN 20 AND 30 THEN '20-30公分'
+                    WHEN dbh_cm BETWEEN 30 AND 40 THEN '30-40公分'
                     ELSE '大於40公分'
                 END as dbh_range,
                 COUNT(*) as count,
                 (COUNT(*) * 100.0 / (SELECT COUNT(*) FROM tree_survey)) as percentage
             FROM tree_survey
             GROUP BY dbh_range
-            ORDER BY MIN(胸徑（公分）)
+            ORDER BY MIN(dbh_cm)
         `);
 
         // 5. 專案區位分析
-        const projectAnalysis = await db.query(`
+        const { rows: projectAnalysis } = await db.query(`
             SELECT 
-                專案區位,
+                project_location,
                 COUNT(*) as tree_count,
-                SUM(碳儲存量) as total_carbon,
-                SUM(推估年碳吸存量) as annual_carbon
+                SUM(carbon_storage) as total_carbon,
+                SUM(carbon_sequestration_per_year) as annual_carbon
             FROM tree_survey
-            GROUP BY 專案區位
+            WHERE project_location IS NOT NULL AND project_location != ''
+            GROUP BY project_location
         `);
 
         // 組合報告數據
         const report = {
-            basicStats: basicStats[0],
+            basicStats,
             speciesDiversity,
             healthStatus,
             dbhDistribution,

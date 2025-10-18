@@ -1,155 +1,135 @@
-const db = require('../config/database');
-const { OpenAI } = require('openai');
+const db = require('../config/db');
+const openai = require('../services/openaiService');
 const PDFDocument = require('pdfkit');
 const fs = require('fs');
 const path = require('path');
-
-// 初始化 OpenAI 客戶端
-const openai = new OpenAI({
-    apiKey: process.env.OPENAI_API_KEY,
-});
+const format = require('pg-format');
 
 // 生成 AI 永續報告
 exports.generateAIReport = async (req, res) => {
     try {
         // 獲取過濾條件（如果有）
         const filters = req.query;
-        let whereClause = '';
+        let whereClauses = [];
         const params = [];
+        let paramIndex = 1;
 
         // 構建 SQL 過濾條件
-        if (filters.projectArea) {
-            whereClause += ' WHERE 專案區位 = ?';
-            params.push(filters.projectArea);
-        }
-        
-        // 處理多個專案區位
         if (filters.projectAreas) {
-            const areasList = filters.projectAreas.split(',');
+            const areasList = filters.projectAreas.split(',').map(area => area.trim()).filter(Boolean);
             if (areasList.length > 0) {
-                whereClause += whereClause ? ' AND (' : ' WHERE (';
-                
-                const areasParams = areasList.map((_, index) => '專案區位 = ?');
-                whereClause += areasParams.join(' OR ');
-                whereClause += ')';
-                
-                params.push(...areasList);
+                whereClauses.push(format('project_location IN (%L)', areasList));
             }
         }
 
-        // 處理多重樹種選擇
         if (filters.species) {
-            const speciesList = filters.species.split(',');
+            const speciesList = filters.species.split(',').map(s => s.trim()).filter(Boolean);
             if (speciesList.length > 0) {
-                whereClause += whereClause ? ' AND (' : ' WHERE (';
-                
-                const speciesParams = speciesList.map((_, index) => '樹種名稱 = ?');
-                whereClause += speciesParams.join(' OR ');
-                whereClause += ')';
-                
-                params.push(...speciesList);
+                whereClauses.push(format('species_name IN (%L)', speciesList));
             }
         }
 
         if (filters.minDbh) {
-            whereClause += whereClause ? ' AND 胸徑（公分） >= ?' : ' WHERE 胸徑（公分） >= ?';
+            whereClauses.push(`dbh_cm >= $${paramIndex++}`);
             params.push(parseFloat(filters.minDbh));
         }
 
         if (filters.maxDbh) {
-            whereClause += whereClause ? ' AND 胸徑（公分） <= ?' : ' WHERE 胸徑（公分） <= ?';
+            whereClauses.push(`dbh_cm <= $${paramIndex++}`);
             params.push(parseFloat(filters.maxDbh));
         }
+
+        const whereClause = whereClauses.length > 0 ? `WHERE ${whereClauses.join(' AND ')}` : '';
 
         // 1. 基本統計數據
         const basicStatsSql = `
             SELECT 
                 COUNT(*) as total_trees,
-                COUNT(DISTINCT 樹種名稱) as species_count,
-                AVG(樹高（公尺）) as avg_height,
-                AVG(胸徑（公分）) as avg_dbh,
-                SUM(碳儲存量) as total_carbon_storage,
-                SUM(推估年碳吸存量) as total_annual_carbon_sequestration
-            FROM tree_survey${whereClause}
+                COUNT(DISTINCT species_name) as species_count,
+                AVG(tree_height_m) as avg_height,
+                AVG(dbh_cm) as avg_dbh,
+                SUM(carbon_storage) as total_carbon_storage,
+                SUM(carbon_sequestration_per_year) as total_annual_carbon_sequestration
+            FROM tree_survey
+            ${whereClause}
         `;
-
-        const basicStatsResult = await db.query(basicStatsSql, params);
-        const basicStats = basicStatsResult[0];
+        
+        const { rows: basicStatsRows } = await db.query(basicStatsSql, params);
+        const basicStats = basicStatsRows[0];
 
         // 組合基本統計數據
-        // 注意：這些參數是來自數據庫的原始單位 (kg)
         const basicStatsKg = {
-            total_trees: basicStats.total_trees,
-            species_count: basicStats.species_count,
-            avg_height: basicStats.avg_height,
-            avg_dbh: basicStats.avg_dbh,
-            total_carbon_storage: basicStats.total_carbon_storage,
-            total_annual_carbon_sequestration: basicStats.total_annual_carbon_sequestration
+            total_trees: parseInt(basicStats.total_trees, 10) || 0,
+            species_count: parseInt(basicStats.species_count, 10) || 0,
+            avg_height: parseFloat(basicStats.avg_height) || 0,
+            avg_dbh: parseFloat(basicStats.avg_dbh) || 0,
+            total_carbon_storage: parseFloat(basicStats.total_carbon_storage) || 0,
+            total_annual_carbon_sequestration: parseFloat(basicStats.total_annual_carbon_sequestration) || 0
         };
 
         // 2. 物種多樣性分析
         const speciesDiversitySql = `
             SELECT 
-                樹種名稱,
+                species_name,
                 COUNT(*) as count,
-                (COUNT(*) * 100.0 / (SELECT COUNT(*) FROM tree_survey${whereClause})) as percentage
-            FROM tree_survey${whereClause ? whereClause + ' AND 樹種名稱 IS NOT NULL' : ' WHERE 樹種名稱 IS NOT NULL'}
-            GROUP BY 樹種名稱
+                (COUNT(*) * 100.0 / NULLIF((SELECT COUNT(*) FROM tree_survey ${whereClause}), 0)) as percentage
+            FROM tree_survey
+            ${whereClause ? whereClause + ' AND species_name IS NOT NULL' : ' WHERE species_name IS NOT NULL'}
+            GROUP BY species_name
             ORDER BY count DESC
         `;
-
-        const speciesDiversity = await db.query(speciesDiversitySql, params.length ? [...params, ...params] : []);
+        const { rows: speciesDiversity } = await db.query(speciesDiversitySql, params);
 
         // 3. 健康狀況分析
         const healthStatusSql = `
             SELECT 
-                狀況,
+                status,
                 COUNT(*) as count,
-                (COUNT(*) * 100.0 / (SELECT COUNT(*) FROM tree_survey${whereClause})) as percentage
-            FROM tree_survey${whereClause ? whereClause + ' AND 狀況 IS NOT NULL' : ' WHERE 狀況 IS NOT NULL'}
-            GROUP BY 狀況
+                (COUNT(*) * 100.0 / NULLIF((SELECT COUNT(*) FROM tree_survey ${whereClause}), 0)) as percentage
+            FROM tree_survey
+            ${whereClause ? whereClause + ' AND status IS NOT NULL' : ' WHERE status IS NOT NULL'}
+            GROUP BY status
         `;
-
-        const healthStatus = await db.query(healthStatusSql, params.length ? [...params, ...params] : []);
-
+        const { rows: healthStatus } = await db.query(healthStatusSql, params);
+        
         // 4. 徑級分佈
         const dbhDistributionSql = `
             SELECT 
                 CASE 
-                    WHEN 胸徑（公分） < 10 THEN '小於10公分'
-                    WHEN 胸徑（公分） BETWEEN 10 AND 20 THEN '10-20公分'
-                    WHEN 胸徑（公分） BETWEEN 20 AND 30 THEN '20-30公分'
-                    WHEN 胸徑（公分） BETWEEN 30 AND 40 THEN '30-40公分'
+                    WHEN dbh_cm < 10 THEN '小於10公分'
+                    WHEN dbh_cm BETWEEN 10 AND 20 THEN '10-20公分'
+                    WHEN dbh_cm BETWEEN 20 AND 30 THEN '20-30公分'
+                    WHEN dbh_cm BETWEEN 30 AND 40 THEN '30-40公分'
                     ELSE '大於40公分'
                 END as dbh_range,
                 COUNT(*) as count,
-                (COUNT(*) * 100.0 / (SELECT COUNT(*) FROM tree_survey${whereClause})) as percentage
-            FROM tree_survey${whereClause}
+                (COUNT(*) * 100.0 / NULLIF((SELECT COUNT(*) FROM tree_survey ${whereClause}), 0)) as percentage
+            FROM tree_survey
+            ${whereClause}
             GROUP BY dbh_range
-            ORDER BY MIN(胸徑（公分）)
+            ORDER BY MIN(dbh_cm)
         `;
-
-        const dbhDistribution = await db.query(dbhDistributionSql, params.length ? [...params, ...params] : []);
+        const { rows: dbhDistribution } = await db.query(dbhDistributionSql, params);
 
         // 5. 專案區位分析
         const projectAreasSql = `
             SELECT 
-                專案區位,
+                project_location,
                 COUNT(*) as tree_count,
-                SUM(碳儲存量) as total_carbon,
-                SUM(推估年碳吸存量) as annual_carbon
-            FROM tree_survey${whereClause ? whereClause + ' AND 專案區位 IS NOT NULL' : ' WHERE 專案區位 IS NOT NULL'}
-            GROUP BY 專案區位
+                SUM(carbon_storage) as total_carbon,
+                SUM(carbon_sequestration_per_year) as annual_carbon
+            FROM tree_survey
+            ${whereClause ? whereClause + ' AND project_location IS NOT NULL' : ' WHERE project_location IS NOT NULL'}
+            GROUP BY project_location
         `;
-
-        const projectAreas = await db.query(projectAreasSql, params);
+        const { rows: projectAreas } = await db.query(projectAreasSql, params);
 
         // 準備專案區位數據
         const projectAreasKg = projectAreas.map(area => ({
-            name: area.專案區位,
-            tree_count: area.tree_count,
-            total_carbon: area.total_carbon,
-            annual_carbon: area.annual_carbon
+            name: area.project_location,
+            tree_count: parseInt(area.tree_count, 10),
+            total_carbon: parseFloat(area.total_carbon) || 0,
+            annual_carbon: parseFloat(area.annual_carbon) || 0
         }));
 
         // 組合報告數據
@@ -174,7 +154,7 @@ exports.generateAIReport = async (req, res) => {
         };
 
         // 生成 AI 分析報告
-        const aiAnalysis = await generateAIAnalysis(dataForAI);
+        const aiAnalysis = await openai.generateAIAnalysis(dataForAI);
 
         res.json({
             success: true,
@@ -209,11 +189,11 @@ async function generateAIAnalysis(reportData) {
 - 年碳吸存量: ${basicStats.total_annual_carbon_sequestration ? basicStats.total_annual_carbon_sequestration.toFixed(2) : 'N/A'} 公斤/年`;
 
         const formattedSpecies = speciesDiversity && speciesDiversity.length > 0
-            ? speciesDiversity.slice(0, 5).map(s => `- ${s.樹種名稱}: ${s.count} 棵 (${s.percentage ? s.percentage.toFixed(1) : 'N/A'}%)`).join('\n')
+            ? speciesDiversity.slice(0, 5).map(s => `- ${s.species_name}: ${s.count} 棵 (${s.percentage ? s.percentage.toFixed(1) : 'N/A'}%)`).join('\n')
             : '無物種多樣性數據';
 
         const formattedHealth = healthStatus && healthStatus.length > 0
-            ? healthStatus.map(h => `- ${h.狀況}: ${h.count} 棵 (${h.percentage ? h.percentage.toFixed(1) : 'N/A'}%)`).join('\n')
+            ? healthStatus.map(h => `- ${h.status}: ${h.count} 棵 (${h.percentage ? h.percentage.toFixed(1) : 'N/A'}%)`).join('\n')
             : '無健康狀況數據';
 
         const formattedDbh = dbhDistribution && dbhDistribution.length > 0
@@ -284,15 +264,7 @@ ${formattedDbh}
 
 
         // 調用 OpenAI API - 更換模型並稍微調整參數
-        const response = await openai.chat.completions.create({
-            model: "gpt-4o", // 更換為 gpt-4o
-            messages: [
-                { role: "system", content: "你是一位資深的林業與永續發展顧問，負責根據提供的數據生成專業分析報告。" },
-                { role: "user", content: prompt }
-            ],
-            max_tokens: 1200, // 稍微增加 token 限制以容納更詳細的報告
-            temperature: 0.6, // 稍微降低 temperature 使輸出更穩定和一致
-        });
+        const response = await openai.generateAIAnalysis(dataForAI);
 
         // 檢查是否有有效的回應內容
         if (response.choices && response.choices.length > 0 && response.choices[0].message && response.choices[0].message.content) {
@@ -395,7 +367,7 @@ async function generateAIReportPDF(reportDataWithAI) {
         doc.fontSize(14).text('2. 物種多樣性 (前5名)');
         if (speciesDiversity && speciesDiversity.length > 0) {
             speciesDiversity.slice(0, 5).forEach(s => {
-                doc.fontSize(11).text(`- ${s.樹種名稱}: ${s.count} 棵 (${s.percentage ? s.percentage.toFixed(1) : 'N/A'}%)`);
+                doc.fontSize(11).text(`- ${s.species_name}: ${s.count} 棵 (${s.percentage ? s.percentage.toFixed(1) : 'N/A'}%)`);
             });
         } else {
             doc.fontSize(11).text('無物種多樣性數據');
@@ -405,7 +377,7 @@ async function generateAIReportPDF(reportDataWithAI) {
         doc.fontSize(14).text('3. 健康狀況分佈');
         if (healthStatus && healthStatus.length > 0) {
             healthStatus.forEach(h => {
-                doc.fontSize(11).text(`- ${h.狀況}: ${h.count} 棵 (${h.percentage ? h.percentage.toFixed(1) : 'N/A'}%)`);
+                doc.fontSize(11).text(`- ${h.status}: ${h.count} 棵 (${h.percentage ? h.percentage.toFixed(1) : 'N/A'}%)`);
             });
         } else {
             doc.fontSize(11).text('無健康狀況數據');

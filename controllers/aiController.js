@@ -1,18 +1,4 @@
-const OpenAI = require('openai');
-const dotenv = require('dotenv');
-
-// 載入環境變量
-dotenv.config();
-
-// 檢查 API Key
-if (!process.env.OPENAI_API_KEY) {
-    console.error('錯誤：未設置 OPENAI_API_KEY 環境變量');
-    process.exit(1);
-}
-
-const openai = new OpenAI({
-    apiKey: process.env.OPENAI_API_KEY
-});
+const openai = require('../services/openaiService');
 
 // 智能諮詢功能
 async function handleTreeQuery(query, dbData) {

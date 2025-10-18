@@ -1,24 +1,7 @@
-const { OpenAI } = require('openai');
-const dotenv = require('dotenv');
+const db = require('../config/db'); // *** 改為使用 pg 連接池 ***
+const openai = require('../services/openaiService');
 const path = require('path');
 const fs = require('fs');
-
-// 確保環境變量被載入
-dotenv.config();
-
-// 檢查 API 金鑰最後更新時間
-const API_KEY_ROTATION_DAYS = 30; // 建議每30天輪換一次金鑰
-const apiKeyLastUpdated = process.env.API_KEY_LAST_UPDATED ? new Date(process.env.API_KEY_LAST_UPDATED) : new Date();
-const daysSinceLastUpdate = Math.floor((new Date() - apiKeyLastUpdated) / (1000 * 60 * 60 * 24));
-
-if (daysSinceLastUpdate >= API_KEY_ROTATION_DAYS) {
-    console.warn(`警告: API 金鑰已經 ${daysSinceLastUpdate} 天未更新，建議進行輪換`);
-}
-
-// 初始化 OpenAI API
-const openai = new OpenAI({
-    apiKey: process.env.OPENAI_API_KEY
-});
 
 // 全局存儲用戶對話歷史
 const conversationHistory = {};
@@ -226,20 +209,33 @@ async function calculateCarbonOffsetTree(carbonFootprint) {
             carbonKg = carbonAmount * 1000; // 噸轉公斤
         }
 
-        // 獲取樹木平均數據 (從資料庫或使用預設值)
-        // 假設一棵平均樹每年吸收25公斤CO2
-        const averageAnnualCarbonSequestrationPerTree = 25; // 公斤CO2/年
-        
+        // 從資料庫獲取樹木平均數據
+        const avgQuery = `
+            SELECT AVG((carbon_absorption_min + carbon_absorption_max) / 2) as avg_absorption 
+            FROM tree_carbon_data 
+            WHERE carbon_absorption_min IS NOT NULL AND carbon_absorption_max IS NOT NULL
+        `;
+        const { rows: avgRows } = await db.query(avgQuery);
+        const averageAnnualCarbonSequestrationPerTree = (avgRows[0] && parseFloat(avgRows[0].avg_absorption)) || 20; // 預設值 20kg
+
         // 計算需要多少棵樹來抵消碳足跡（一年內）
         const treesNeeded = Math.ceil(carbonKg / averageAnnualCarbonSequestrationPerTree);
         
-        // 計算不同樹種的抵消能力
-        const speciesOffset = {
-            '台灣欒樹': Math.ceil(carbonKg / 30), // 假設每年吸收30公斤CO2
-            '樟樹': Math.ceil(carbonKg / 22),    // 假設每年吸收22公斤CO2
-            '楓香': Math.ceil(carbonKg / 27),    // 假設每年吸收27公斤CO2
-            '榕樹': Math.ceil(carbonKg / 35)     // 假設每年吸收35公斤CO2
-        };
+        // 從資料庫獲取幾種常見樹種的抵消能力
+        const speciesQuery = `
+            SELECT common_name_zh, (carbon_absorption_min + carbon_absorption_max) / 2 as avg_absorption
+            FROM tree_carbon_data
+            WHERE common_name_zh IN ('臺灣欒樹', '樟樹', '楓香', '榕樹') 
+            AND carbon_absorption_min IS NOT NULL AND carbon_absorption_max IS NOT NULL
+        `;
+        const { rows: speciesRows } = await db.query(speciesQuery);
+        
+        const speciesOffset = {};
+        speciesRows.forEach(row => {
+            if (row.avg_absorption > 0) {
+                speciesOffset[row.common_name_zh] = Math.ceil(carbonKg / parseFloat(row.avg_absorption));
+            }
+        });
         
         // 計算10年和20年期間內所需的樹木數量
         const treesNeeded10Years = Math.ceil(carbonKg / (averageAnnualCarbonSequestrationPerTree * 10));
@@ -266,90 +262,60 @@ async function calculateCarbonOffsetTree(carbonFootprint) {
 // 樹種碳匯比較
 async function generateSpeciesCarbonComparison(speciesList) {
     try {
-        // 標準樹種生長和碳匯特性資料庫
-        const speciesData = {
-            "樟樹": {
-                growthRate: "中",
-                carbonFactor: 0.02,
-                lifespan: "長（可達百年以上）",
-                advantages: "適應性強，抗汙染，藥用價值高",
-                disadvantages: "生長較慢，需要較大空間"
-            },
-            "台灣欒樹": {
-                growthRate: "快",
-                carbonFactor: 0.04,
-                lifespan: "中等（50-80年）",
-                advantages: "生長快速，觀賞價值高，適應城市環境",
-                disadvantages: "樹冠較小，單株碳儲存潛力較有限"
-            },
-            "相思樹": {
-                growthRate: "快",
-                carbonFactor: 0.04,
-                lifespan: "中等（40-60年）",
-                advantages: "生長快速，固氮能力強，可改善土壤",
-                disadvantages: "木材密度較低，碳儲存密度相對較小"
-            },
-            "楓香": {
-                growthRate: "中-快",
-                carbonFactor: 0.03,
-                lifespan: "長（80-100年）",
-                advantages: "碳儲存能力強，觀賞價值高，葉面積大",
-                disadvantages: "需要適當管理，較易受病蟲害影響"
-            },
-            "榕樹": {
-                growthRate: "中",
-                carbonFactor: 0.02,
-                lifespan: "長（可達數百年）",
-                advantages: "生物量大，空氣淨化能力強，根系發達",
-                disadvantages: "根系侵略性強，不適合種植於建築物附近"
-            }
-        };
+        // 1. 從資料庫獲取已知樹種的數據
+        const knownSpeciesQuery = `
+            SELECT 
+                common_name_zh, 
+                growth_rate, 
+                (lifespan_min + lifespan_max) / 2 as avg_lifespan,
+                (carbon_absorption_min + carbon_absorption_max) / 2 as avg_carbon_absorption,
+                notes,
+                management_approach
+            FROM tree_carbon_data
+            WHERE common_name_zh IN (${speciesList.map((_, i) => `$${i + 1}`).join(',')})
+        `;
+        const { rows: knownSpeciesData } = await db.query(knownSpeciesQuery, speciesList);
+        
+        const availableSpecies = knownSpeciesData.map(row => row.common_name_zh);
+        const unavailableSpecies = speciesList.filter(species => !availableSpecies.includes(species));
 
         let comparisonContent = "";
-        
-        // 檢查請求的樹種是否在資料庫中
-        const availableSpecies = speciesList.filter(species => speciesData[species]);
-        const unavailableSpecies = speciesList.filter(species => !speciesData[species]);
-        
-        if (availableSpecies.length > 0) {
-            // 構建比較數據
-            comparisonContent = availableSpecies.map(species => {
-                const data = speciesData[species];
-                return `**${species}**:
-- 生長速度: ${data.growthRate}
-- 碳吸存率因子: ${data.carbonFactor} (年增長率)
-- 預期壽命: ${data.lifespan}
-- 優勢: ${data.advantages}
-- 限制: ${data.disadvantages}`;
+
+        if (knownSpeciesData.length > 0) {
+            comparisonContent = knownSpeciesData.map(data => {
+                return `**${data.common_name_zh}**:
+- 生長速度: ${data.growth_rate || '中等'}
+- 平均年碳吸存: ${data.avg_carbon_absorption ? data.avg_carbon_absorption.toFixed(2) : 'N/A'} kg/年
+- 預期壽命: ${data.avg_lifespan ? `約 ${Math.round(data.avg_lifespan)} 年` : 'N/A'}
+- 優勢與備註: ${data.notes || data.management_approach || '無'}
+`;
             }).join("\n\n");
         }
 
-        // 處理不在資料庫中的樹種
+        // 2. 對於資料庫中不存在的樹種，使用 OpenAI 查詢
         if (unavailableSpecies.length > 0) {
-            // 使用 OpenAI 生成這些未知樹種的估計資料
-            const unknownSpeciesPrompt = `以下是需要估計碳匯特性的樹種: ${unavailableSpecies.join('、')}
-
-請提供這些樹種的以下資訊:
-1. 生長速度 (慢/中/快)
-2. 碳吸存率因子 (0.01-0.04之間的年增長率，根據真實研究數據)
-3. 預期壽命範圍
-4. 主要優勢
-5. 主要限制
-
-只提供有可靠科學依據的資訊，對於不確定的部分請明確表示。`;
+            const unknownSpeciesPrompt = `請提供以下樹種的碳匯特性估計，若不確定請註明：${unavailableSpecies.join('、')}
+            
+            請提供每個樹種的以下資訊:
+            1. 生長速度 (慢/中/快)
+            2. 平均年碳吸存 (kg/年)
+            3. 預期壽命範圍
+            4. 主要優勢與限制
+            
+            只提供有可靠科學依據的資訊，對於不確定的部分請明確表示。`;
 
             const response = await openai.chat.completions.create({
-                model: "gpt-4.1",
+                model: "gpt-4o",
                 messages: [
                     { role: "system", content: "你是樹木生長與碳吸存專家，只提供有科學依據的資訊。對於不確定的內容，應明確表示這是估計值或缺乏資料。" },
                     { role: "user", content: unknownSpeciesPrompt }
                 ],
                 max_tokens: 800,
-                temperature: 0.7,
+                temperature: 0.6,
             });
 
             if (comparisonContent) {
-                comparisonContent += "\n\n--- 估計資料（可能需要進一步驗證）---\n\n";
+                comparisonContent += "\n\n--- AI 估計資料（僅供參考）---\n\n";
             }
             comparisonContent += response.choices[0].message.content;
         }
@@ -432,11 +398,8 @@ ${formattedData}
 // 永續發展政策建議引擎
 async function generateSustainabilityPolicyRecommendations(treeData, focusArea) {
     try {
-        // 添加請求計數
-        const requestCount = process.env.API_REQUEST_COUNT ? parseInt(process.env.API_REQUEST_COUNT) + 1 : 1;
-        process.env.API_REQUEST_COUNT = requestCount.toString();
-
-        // 格式化樹木數據
+        // 這是一個純 AI 函式，但它接收的 treeData 來自資料庫
+        // 我們需要確保呼叫它的路由已經轉換為 pg
         const formattedData = `
 總樹木數量: ${treeData.total_trees}棵
 總碳儲存量: ${treeData.total_carbon_storage}噸
@@ -446,7 +409,7 @@ async function generateSustainabilityPolicyRecommendations(treeData, focusArea) 
 主要樹種: ${treeData.main_species || '未提供'}
 區域分佈: ${treeData.area_distribution || '未提供'}
 `;
-
+        
         const completion = await openai.chat.completions.create({
             model: "gpt-4.1",
             messages: [
@@ -479,6 +442,7 @@ ${formattedData}
         });
 
         return completion.choices[0].message.content;
+
     } catch (error) {
         console.error('OpenAI 政策建議錯誤:', error);
         logApiError(error);

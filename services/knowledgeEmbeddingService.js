@@ -1,10 +1,5 @@
-const mysql = require('mysql');
-const { OpenAI } = require('openai');
-const db = require('../config/database'); // <--- 新增：直接導入您封裝的 db 對象
-
-// 初始化 OpenAI
-const OPENAI_API_KEY = process.env.OPENAI_API_KEY;
-const openai = new OpenAI({ apiKey: OPENAI_API_KEY });
+const openai = require('./openaiService');
+const db = require('../config/db'); // *** 已改為使用 pg 連接池 ***
 
 // 將資料庫中 BLOB / TEXT 形式的 embedding 轉為數值陣列
 function bufferToVector(buf) {
@@ -78,8 +73,7 @@ async function getSimilarPassages(queryText, topN = 5, similarityThreshold = 0.5
             FROM tree_knowledge_embeddings_v2
         `;
         
-        // 直接使用導入的 db.query 函數
-        const knowledgeEntries = await db.query(sql); 
+        const { rows: knowledgeEntries } = await db.query(sql); 
 
         if (!knowledgeEntries || knowledgeEntries.length === 0) {
             console.log('[KnowledgeService] 資料庫中沒有知識片段。');

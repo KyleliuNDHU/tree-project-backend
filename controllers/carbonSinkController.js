@@ -1,4 +1,4 @@
-const db = require('../config/database');
+const db = require('../config/db');
 const fs = require('fs');
 const path = require('path');
 
@@ -15,22 +15,22 @@ exports.calculateSpeciesCarbon = async (req, res) => {
     let params = [];
     
     if (speciesId) {
-      query += 'id = ?';
+      query += 'id = $1';
       params.push(speciesId);
     } else if (speciesName) {
-      query += 'common_name_zh LIKE ? OR scientific_name LIKE ?';
+      query += 'common_name_zh LIKE $1 OR scientific_name LIKE $2';
       params.push(`%${speciesName}%`, `%${speciesName}%`);
     } else {
       return res.status(400).json({ success: false, message: '請提供樹種ID或樹種名稱' });
     }
     
-    const [species] = await db.query(query, params);
+    const { rows } = await db.query(query, params);
     
-    if (!species || species.length === 0) {
+    if (rows.length === 0) {
       return res.status(404).json({ success: false, message: '找不到該樹種' });
     }
     
-    const treeData = species[0];
+    const treeData = rows[0];
     let carbonAbsorption = 0;
     
     // 計算碳吸收量
@@ -89,27 +89,36 @@ exports.calculateTotalCarbon = async (req, res) => {
       return res.status(400).json({ success: false, message: '請提供有效的樹木資料' });
     }
     
+    // 1. 收集所有需要的 speciesId
+    const speciesIds = [...new Set(trees.map(t => t.speciesId).filter(id => id))];
+    if (speciesIds.length === 0) {
+        return res.json({ success: true, data: { results: [], totalCarbonAbsorption: 0, unit: 'kgCO₂' } });
+    }
+
+    // 2. 一次性查詢所有樹種資料
+    const { rows: speciesDataRows } = await db.query(
+        `SELECT * FROM tree_carbon_data WHERE id IN (${speciesIds.map((_, i) => `$${i + 1}`).join(',')})`,
+        speciesIds
+    );
+
+    // 3. 將樹種資料轉為 Map 以便快速查找
+    const speciesDataMap = new Map(speciesDataRows.map(sp => [sp.id, sp]));
+
     let totalCarbonAbsorption = 0;
     const results = [];
     
+    // 4. 迭代計算
     for (const tree of trees) {
       const { speciesId, count, age, dbh, height } = tree;
       
-      if (!speciesId || !count) {
-        continue; // 跳過無效資料
+      const treeData = speciesDataMap.get(speciesId);
+      if (!treeData || !count) {
+        continue; // 跳過無效資料或找不到的樹種
       }
       
-      const [species] = await db.query('SELECT * FROM tree_carbon_data WHERE id = ?', [speciesId]);
-      
-      if (!species || species.length === 0) {
-        continue; // 跳過找不到的樹種
-      }
-      
-      const treeData = species[0];
       let carbonAbsorption = 0;
       
       if (dbh && height) {
-        // 基於胸徑和樹高計算
         const woodDensity = (treeData.wood_density_min + treeData.wood_density_max) / 2;
         const carbonContent = (treeData.carbon_content_min + treeData.carbon_content_max) / 2;
         
@@ -118,7 +127,6 @@ exports.calculateTotalCarbon = async (req, res) => {
         
         carbonAbsorption = volume * woodDensity * 1000 * carbonContent * 3.67; // 轉換為CO2當量
       } else if (age) {
-        // 基於年齡計算
         const minAbsorption = treeData.carbon_absorption_min || 0;
         const maxAbsorption = treeData.carbon_absorption_max || 0;
         const avgYearlyAbsorption = (minAbsorption + maxAbsorption) / 2;
@@ -158,7 +166,7 @@ exports.calculateTotalCarbon = async (req, res) => {
  */
 exports.recommendByRegion = async (req, res) => {
   try {
-    const { region, purpose, limit } = req.query;
+    const { region, purpose, limit = 10 } = req.query;
     
     if (!region) {
       return res.status(400).json({ success: false, message: '請提供地區資訊' });
@@ -172,33 +180,33 @@ exports.recommendByRegion = async (req, res) => {
       case 'north':
       case 'northern':
       case '北部':
-        query += 'north_taiwan = 1';
+        query += 'north_taiwan = TRUE';
         break;
       case 'central':
       case '中部':
-        query += 'central_taiwan = 1';
+        query += 'central_taiwan = TRUE';
         break;
       case 'south':
       case 'southern':
       case '南部':
-        query += 'south_taiwan = 1';
+        query += 'south_taiwan = TRUE';
         break;
       case 'east':
       case 'eastern':
       case '東部':
-        query += 'east_taiwan = 1';
+        query += 'east_taiwan = TRUE';
         break;
       case 'coastal':
       case '沿海':
-        query += 'coastal_area = 1';
+        query += 'coastal_area = TRUE';
         break;
       case 'mountain':
       case '山區':
-        query += 'mountain_area = 1';
+        query += 'mountain_area = TRUE';
         break;
       case 'urban':
       case '都市':
-        query += 'urban_area = 1';
+        query += 'urban_area = TRUE';
         break;
       default:
         return res.status(400).json({ success: false, message: '無效的地區參數' });
@@ -227,13 +235,13 @@ exports.recommendByRegion = async (req, res) => {
     }
     
     // 限制結果數量
-    const resultLimit = limit ? parseInt(limit) : 10;
-    query += ' LIMIT ?';
+    const resultLimit = parseInt(limit);
+    query += ' LIMIT $1';
     params.push(resultLimit);
     
-    const [species] = await db.query(query, params);
+    const { rows: species } = await db.query(query, params);
     
-    if (!species || species.length === 0) {
+    if (species.length === 0) {
       return res.status(404).json({ success: false, message: '找不到符合條件的樹種' });
     }
     
@@ -254,20 +262,21 @@ exports.recommendByRegion = async (req, res) => {
  */
 exports.filterByEfficiency = async (req, res) => {
   try {
-    const { efficiency, growthRate, limit } = req.query;
+    const { efficiency, growthRate, limit = 20 } = req.query;
     
     let query = 'SELECT * FROM tree_carbon_data WHERE 1=1';
     let params = [];
+    let paramIndex = 1;
     
     // 碳吸收效率條件
     if (efficiency) {
-      query += ' AND carbon_efficiency = ?';
+      query += ` AND carbon_efficiency = $${paramIndex++}`;
       params.push(efficiency);
     }
     
     // 生長速率條件
     if (growthRate) {
-      query += ' AND growth_rate = ?';
+      query += ` AND growth_rate = $${paramIndex++}`;
       params.push(growthRate);
     }
     
@@ -275,13 +284,13 @@ exports.filterByEfficiency = async (req, res) => {
     query += ' ORDER BY carbon_absorption_max DESC';
     
     // 限制結果數量
-    const resultLimit = limit ? parseInt(limit) : 20;
-    query += ' LIMIT ?';
+    const resultLimit = parseInt(limit);
+    query += ` LIMIT $${paramIndex++}`;
     params.push(resultLimit);
     
-    const [species] = await db.query(query, params);
+    const { rows: species } = await db.query(query, params);
     
-    if (!species || species.length === 0) {
+    if (species.length === 0) {
       return res.status(404).json({ success: false, message: '找不到符合條件的樹種' });
     }
     
@@ -308,35 +317,36 @@ exports.filterByEnvironment = async (req, res) => {
       saltTolerance,
       pollutionResistance,
       soilType,
-      limit 
+      limit = 20
     } = req.query;
     
     let query = 'SELECT * FROM tree_carbon_data WHERE 1=1';
     let params = [];
+    let paramIndex = 1;
     
     // 環境條件篩選
     if (droughtTolerance) {
-      query += ' AND drought_tolerance = ?';
+      query += ` AND drought_tolerance = $${paramIndex++}`;
       params.push(droughtTolerance);
     }
     
     if (wetTolerance) {
-      query += ' AND wet_tolerance = ?';
+      query += ` AND wet_tolerance = $${paramIndex++}`;
       params.push(wetTolerance);
     }
     
     if (saltTolerance) {
-      query += ' AND salt_tolerance = ?';
+      query += ` AND salt_tolerance = $${paramIndex++}`;
       params.push(saltTolerance);
     }
     
     if (pollutionResistance) {
-      query += ' AND pollution_resistance = ?';
+      query += ` AND pollution_resistance = $${paramIndex++}`;
       params.push(pollutionResistance);
     }
     
     if (soilType) {
-      query += ' AND soil_types LIKE ?';
+      query += ` AND soil_types LIKE $${paramIndex++}`;
       params.push(`%${soilType}%`);
     }
     
@@ -344,13 +354,13 @@ exports.filterByEnvironment = async (req, res) => {
     query += ' ORDER BY carbon_absorption_max DESC';
     
     // 限制結果數量
-    const resultLimit = limit ? parseInt(limit) : 20;
-    query += ' LIMIT ?';
+    const resultLimit = parseInt(limit);
+    query += ` LIMIT $${paramIndex++}`;
     params.push(resultLimit);
     
-    const [species] = await db.query(query, params);
+    const { rows: species } = await db.query(query, params);
     
-    if (!species || species.length === 0) {
+    if (species.length === 0) {
       return res.status(404).json({ success: false, message: '找不到符合條件的樹種' });
     }
     
@@ -386,39 +396,40 @@ exports.generateMixedForest = async (req, res) => {
     // 先根據地區篩選適合的樹種
     let query = 'SELECT * FROM tree_carbon_data WHERE ';
     let params = [];
-    
+    let paramIndex = 1;
+
     // 地區條件
     switch (region.toLowerCase()) {
       case 'north':
       case 'northern':
       case '北部':
-        query += 'north_taiwan = 1';
+        query += 'north_taiwan = TRUE';
         break;
       case 'central':
       case '中部':
-        query += 'central_taiwan = 1';
+        query += 'central_taiwan = TRUE';
         break;
       case 'south':
       case 'southern':
       case '南部':
-        query += 'south_taiwan = 1';
+        query += 'south_taiwan = TRUE';
         break;
       case 'east':
       case 'eastern':
       case '東部':
-        query += 'east_taiwan = 1';
+        query += 'east_taiwan = TRUE';
         break;
       case 'coastal':
       case '沿海':
-        query += 'coastal_area = 1';
+        query += 'coastal_area = TRUE';
         break;
       case 'mountain':
       case '山區':
-        query += 'mountain_area = 1';
+        query += 'mountain_area = TRUE';
         break;
       case 'urban':
       case '都市':
-        query += 'urban_area = 1';
+        query += 'urban_area = TRUE';
         break;
       default:
         return res.status(400).json({ success: false, message: '無效的地區參數' });
@@ -427,27 +438,27 @@ exports.generateMixedForest = async (req, res) => {
     // 環境條件篩選
     if (environmentalConditions) {
       if (environmentalConditions.droughtTolerance) {
-        query += ' AND drought_tolerance = ?';
+        query += ` AND drought_tolerance = $${paramIndex++}`;
         params.push(environmentalConditions.droughtTolerance);
       }
       
       if (environmentalConditions.wetTolerance) {
-        query += ' AND wet_tolerance = ?';
+        query += ` AND wet_tolerance = $${paramIndex++}`;
         params.push(environmentalConditions.wetTolerance);
       }
       
       if (environmentalConditions.saltTolerance) {
-        query += ' AND salt_tolerance = ?';
+        query += ` AND salt_tolerance = $${paramIndex++}`;
         params.push(environmentalConditions.saltTolerance);
       }
       
       if (environmentalConditions.pollutionResistance) {
-        query += ' AND pollution_resistance = ?';
+        query += ` AND pollution_resistance = $${paramIndex++}`;
         params.push(environmentalConditions.pollutionResistance);
       }
       
       if (environmentalConditions.soilType) {
-        query += ' AND soil_types LIKE ?';
+        query += ` AND soil_types LIKE $${paramIndex++}`;
         params.push(`%${environmentalConditions.soilType}%`);
       }
     }
@@ -475,11 +486,12 @@ exports.generateMixedForest = async (req, res) => {
     }
     
     // 限制結果數量，為了混合造林，選擇較多樹種
-    query += ' LIMIT 15';
+    query += ` LIMIT $${paramIndex++}`;
+    params.push(15);
+
+    const { rows: species } = await db.query(query, params);
     
-    const [species] = await db.query(query, params);
-    
-    if (!species || species.length === 0) {
+    if (species.length === 0) {
       return res.status(404).json({ success: false, message: '找不到符合條件的樹種' });
     }
     
@@ -738,7 +750,7 @@ exports.getTreeSpecies = async (req, res) => {
       });
     } else {
       // 如果本地文件不存在，則從數據庫獲取數據
-      const [treeSpecies] = await db.query('SELECT * FROM tree_species');
+      const { rows: treeSpecies } = await db.query('SELECT * FROM tree_carbon_data');
       
       if (!treeSpecies || treeSpecies.length === 0) {
         return res.status(404).json({ 
@@ -778,11 +790,11 @@ exports.getTreeSpecies = async (req, res) => {
 function _getRegionsFromSpecies(species) {
   const regions = [];
   
-  if (species.north_taiwan === 1) regions.push('北部');
-  if (species.central_taiwan === 1) regions.push('中部');
-  if (species.south_taiwan === 1) regions.push('南部');
-  if (species.east_taiwan === 1) regions.push('東部');
-  if (species.coastal_area === 1) regions.push('離島');
+  if (species.north_taiwan) regions.push('北部');
+  if (species.central_taiwan) regions.push('中部');
+  if (species.south_taiwan) regions.push('南部');
+  if (species.east_taiwan) regions.push('東部');
+  if (species.coastal_area) regions.push('離島');
   
   // 如果沒有指定地區，默認為全台適合
   if (regions.length === 0) {

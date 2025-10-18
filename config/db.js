@@ -1,7 +1,23 @@
-// 為了統一管理，這個檔案將會直接導出 database.js 的連接池
-// 這樣可以確保整個應用程式使用同一個連接池實例
-const { pool } = require('./database');
+const { Pool } = require('pg');
+require('dotenv').config();
 
-console.log('Config/DB: 已載入共享的 PostgreSQL 連接池。');
+const pool = new Pool({
+  connectionString: process.env.DATABASE_URL,
+  ssl: {
+    rejectUnauthorized: false
+  }
+});
 
-module.exports = pool;
+pool.on('connect', () => {
+  console.log('成功連接到 PostgreSQL 資料庫！');
+});
+
+pool.on('error', (err) => {
+  console.error('資料庫連接發生非預期錯誤:', err);
+  process.exit(-1);
+});
+
+module.exports = {
+  query: (text, params) => pool.query(text, params),
+  pool,
+};
