@@ -189,15 +189,15 @@ async function generateAIAnalysis(reportData) {
 - 年碳吸存量: ${basicStats.total_annual_carbon_sequestration ? basicStats.total_annual_carbon_sequestration.toFixed(2) : 'N/A'} 公斤/年`;
 
         const formattedSpecies = speciesDiversity && speciesDiversity.length > 0
-            ? speciesDiversity.slice(0, 5).map(s => `- ${s.species_name}: ${s.count} 棵 (${s.percentage ? s.percentage.toFixed(1) : 'N/A'}%)`).join('\n')
+            ? speciesDiversity.slice(0, 5).map(s => `- ${s.species_name}: ${s.count} 棵 (${s.percentage ? parseFloat(s.percentage).toFixed(1) : 'N/A'}%)`).join('\n')
             : '無物種多樣性數據';
 
         const formattedHealth = healthStatus && healthStatus.length > 0
-            ? healthStatus.map(h => `- ${h.status}: ${h.count} 棵 (${h.percentage ? h.percentage.toFixed(1) : 'N/A'}%)`).join('\n')
+            ? healthStatus.map(h => `- ${h.status}: ${h.count} 棵 (${h.percentage ? parseFloat(h.percentage).toFixed(1) : 'N/A'}%)`).join('\n')
             : '無健康狀況數據';
 
         const formattedDbh = dbhDistribution && dbhDistribution.length > 0
-            ? dbhDistribution.map(d => `- ${d.dbh_range}: ${d.count} 棵 (${d.percentage ? d.percentage.toFixed(1) : 'N/A'}%)`).join('\n')
+            ? dbhDistribution.map(d => `- ${d.dbh_range}: ${d.count} 棵 (${d.percentage ? parseFloat(d.percentage).toFixed(1) : 'N/A'}%)`).join('\n')
             : '無徑級分佈數據';
 
         // 準備 prompt - 優化結構和要求
