@@ -280,7 +280,10 @@ router.get('/next_project_number/:projectCode', async (req, res) => {
 router.get('/common_species/:projectCode', async (req, res) => {
     const { projectCode } = req.params;
     const query = `
-      SELECT species_id, species_name, COUNT(*) as count
+      SELECT 
+        species_id AS "樹種編號", 
+        species_name AS "樹種名稱", 
+        COUNT(*) as count
       FROM tree_survey
       WHERE project_code = $1
       GROUP BY species_id, species_name
