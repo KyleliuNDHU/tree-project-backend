@@ -43,7 +43,32 @@ const upload = multer({
 // 取得所有樹木資料 (可選通過 project name 或 area name 過濾)
 router.get('/', async (req, res) => {
     try {
-        const { rows } = await db.query('SELECT * FROM tree_survey ORDER BY id ASC');
+        // 使用 AS 將欄位名稱轉換為前端期望的中文名稱
+        const sql = `
+            SELECT 
+                id,
+                project_location AS "專案區位",
+                project_code AS "專案代碼",
+                project_name AS "專案名稱",
+                system_tree_id AS "系統樹木",
+                project_tree_id AS "專案樹木",
+                species_id AS "樹種編號",
+                species_name AS "樹種名稱",
+                x_coord AS "X坐標",
+                y_coord AS "Y坐標",
+                status AS "狀況",
+                notes AS "註記",
+                tree_notes AS "樹木備註",
+                tree_height_m AS "樹高（公尺）",
+                dbh_cm AS "胸徑（公分）",
+                survey_notes AS "調查備註",
+                survey_time AS "調查時間",
+                carbon_storage AS "碳儲存量",
+                carbon_sequestration_per_year AS "推估年碳吸存量"
+            FROM tree_survey 
+            ORDER BY id ASC
+        `;
+        const { rows } = await db.query(sql);
         res.json(rows);
     } catch (err) {
         console.error('獲取所有樹木資料錯誤:', err);

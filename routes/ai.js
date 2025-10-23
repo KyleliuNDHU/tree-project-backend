@@ -134,7 +134,7 @@ router.post('/chat', aiLimiter, async (req, res) => {
         const chatLog = {
             user_id: userId,
             message: message,
-            response: aiResponse + sourceInfo,
+            response: aiResponse, // 只儲存純粹的 AI 回應，不包含來源資訊
             model_used: modelUsed,
             project_areas: projectAreas ? JSON.stringify(projectAreas) : null,
         };
