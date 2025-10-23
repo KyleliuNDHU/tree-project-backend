@@ -69,7 +69,8 @@ router.get('/', async (req, res) => {
             ORDER BY id ASC
         `;
         const { rows } = await db.query(sql);
-        res.json(rows);
+        // 將回應包裹在標準格式中
+        res.json({ success: true, data: rows });
     } catch (err) {
         console.error('獲取所有樹木資料錯誤:', err);
         res.status(500).json({ success: false, message: '查詢資料庫時發生錯誤' });
@@ -81,7 +82,8 @@ router.get('/by_project/:projectName', async (req, res) => {
     const { projectName } = req.params;
     try {
         const { rows } = await db.query('SELECT * FROM tree_survey WHERE project_name = $1 ORDER BY project_tree_id ASC', [projectName]);
-        res.json(rows);
+        // 將回應包裹在標準格式中
+        res.json({ success: true, data: rows });
     } catch (err) {
         console.error(`獲取專案 [${projectName}] 的樹木資料錯誤:`, err);
         res.status(500).json({ success: false, message: '查詢資料庫時發生錯誤' });
@@ -93,7 +95,8 @@ router.get('/by_area/:areaName', async (req, res) => {
     const { areaName } = req.params;
     try {
         const { rows } = await db.query('SELECT * FROM tree_survey WHERE project_location = $1 ORDER BY system_tree_id ASC', [areaName]);
-        res.json(rows);
+        // 將回應包裹在標準格式中
+        res.json({ success: true, data: rows });
     } catch (err) {
         console.error(`獲取區位 [${areaName}] 的樹木資料錯誤:`, err);
         res.status(500).json({ success: false, message: '查詢資料庫時發生錯誤' });
