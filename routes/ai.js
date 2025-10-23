@@ -152,6 +152,39 @@ router.post('/chat', aiLimiter, async (req, res) => {
   }
 });
 
+
+// New route for direct OpenAI chat requests from frontend
+router.post('/ai/direct-chat', aiLimiter, async (req, res) => {
+    try {
+        const { message, systemPrompt } = req.body;
+
+        if (!message || !systemPrompt) {
+            return res.status(400).json({ success: false, message: '請求中缺少 message 或 systemPrompt' });
+        }
+
+        const completion = await openai.chat.completions.create({
+            model: 'gpt-4.1', 
+            messages: [
+                { role: "system", content: systemPrompt },
+                { role: "user", content: message }
+            ],
+            temperature: 0.7,
+            max_tokens: 1000,
+        });
+
+        const aiResponse = completion.choices[0].message.content;
+        res.json({
+            success: true,
+            response: aiResponse,
+        });
+
+    } catch (error) {
+        console.error('Direct OpenAI chat API 發生錯誤:', error);
+        res.status(500).json({ success: false, error: '處理 Direct OpenAI chat 時發生錯誤' });
+    }
+});
+
+
 // AI報告相關路由
 router.get('/reports/ai-sustainability', aiLimiter, aiReportController.generateAIReport);
 router.get('/reports/ai-sustainability/pdf', aiLimiter, async (req, res) => {
