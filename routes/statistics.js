@@ -17,24 +17,24 @@ router.get('/', async (req, res) => {
     const client = await db.pool.connect();
     try {
         const speciesQuery = `
-            SELECT species_name, COUNT(*) as count 
+            SELECT species_name AS "樹種名稱", COUNT(*) as count 
             FROM tree_survey 
             ${whereClause}
-            GROUP BY species_name 
+            GROUP BY "樹種名稱" 
             ORDER BY count DESC
         `;
 
         const projectQuery = `
-            SELECT project_name, COUNT(*) as count 
+            SELECT project_name AS "專案名稱", COUNT(*) as count 
             FROM tree_survey 
-            GROUP BY project_name 
+            GROUP BY "專案名稱" 
             ORDER BY count DESC
         `;
 
         const areaQuery = `
-            SELECT project_location, COUNT(*) as count 
+            SELECT project_location AS "專案區位", COUNT(*) as count 
             FROM tree_survey 
-            GROUP BY project_location 
+            GROUP BY "專案區位" 
             ORDER BY count DESC
         `;
 
@@ -71,9 +71,9 @@ router.get('/', async (req, res) => {
         res.json({
             success: true,
             data: {
-                species: speciesRes.rows.map(r => ({ "樹種名稱": r.species_name, count: r.count })),
-                projects: projectRes.rows.map(r => ({ "專案名稱": r.project_name, count: r.count })),
-                areas: areaRes.rows.map(r => ({ "專案區位": r.project_location, count: r.count })),
+                species: speciesRes.rows,
+                projects: projectRes.rows,
+                areas: areaRes.rows,
                 sizes: sizeRes.rows[0],
                 carbon: carbonRes.rows[0]
             }
