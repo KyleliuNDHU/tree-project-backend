@@ -154,7 +154,7 @@ exports.generateAIReport = async (req, res) => {
         };
 
         // 生成 AI 分析報告
-        const aiAnalysis = await openai.generateAIAnalysis(dataForAI);
+        const aiAnalysis = await generateAIAnalysis(dataForAI);
 
         res.json({
             success: true,
@@ -264,7 +264,12 @@ ${formattedDbh}
 
 
         // 調用 OpenAI API - 更換模型並稍微調整參數
-        const response = await openai.generateAIAnalysis(dataForAI);
+        const response = await openai.chat.completions.create({
+            model: "gpt-4-turbo", // 確保使用有效的模型名稱
+            messages: [{ role: "user", content: prompt }],
+            temperature: 0.5,
+            max_tokens: 1500,
+        });
 
         // 檢查是否有有效的回應內容
         if (response.choices && response.choices.length > 0 && response.choices[0].message && response.choices[0].message.content) {
