@@ -264,12 +264,14 @@ ${formattedDbh}
 
 
         // 調用 OpenAI API - 更換模型並稍微調整參數
+        console.log('[AI Report] Sending request to OpenAI API...');
         const response = await openai.chat.completions.create({
             model: "gpt-4-turbo", // 確保使用有效的模型名稱
             messages: [{ role: "user", content: prompt }],
             temperature: 0.5,
             max_tokens: 1500,
         });
+        console.log('[AI Report] Received response from OpenAI API.');
 
         // 檢查是否有有效的回應內容
         if (response.choices && response.choices.length > 0 && response.choices[0].message && response.choices[0].message.content) {
