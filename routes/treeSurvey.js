@@ -111,9 +111,12 @@ router.post('/', async (req, res) => {
     // --- DEBUG END ---
 
     const {
-        project_location, project_code, project_name, system_tree_id, project_tree_id, species_id, 
-        species_name, x_coord, y_coord, status, notes, tree_notes, tree_height_m, 
-        dbh_cm, survey_notes, survey_time, carbon_storage, carbon_sequestration_per_year
+        '專案區位': project_location, '專案代碼': project_code, '專案名稱': project_name, 
+        '系統樹木': system_tree_id, '專案樹木': project_tree_id, '樹種編號': species_id, 
+        '樹種名稱': species_name, 'X坐標': x_coord, 'Y坐標': y_coord, '狀況': status, 
+        '註記': notes, '樹木備註': tree_notes, '樹高（公尺）': tree_height_m, 
+        '胸徑（公分）': dbh_cm, '調查備註': survey_notes, '調查時間': survey_time, 
+        '碳儲存量': carbon_storage, '推估年碳吸存量': carbon_sequestration_per_year
     } = req.body;
 
     const values = [
