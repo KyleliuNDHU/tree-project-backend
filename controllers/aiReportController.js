@@ -156,6 +156,22 @@ exports.generateAIReport = async (req, res) => {
         // 生成 AI 分析報告
         const aiAnalysis = await generateAIAnalysis(dataForAI);
 
+        // --- 臨時測試程式碼 ---
+        // 為了診斷前端問題，我們暫時只回傳一個輕量的成功物件
+        // 而不是完整的 reportData，以判斷問題是否出在資料量過大或格式問題
+        res.json({
+            success: true,
+            data: {
+               aiAnalysis: aiAnalysis,
+               // 只包含最基本的統計數據，以利前端測試
+               basicStats: reportData.basicStats, 
+               filters: reportData.filters,
+               generatedAt: reportData.generatedAt
+            }
+        });
+        // --- 臨時測試程式碼結束 ---
+
+        /* --- 原始程式碼 (暫時註解) ---
         res.json({
             success: true,
             data: {
@@ -163,6 +179,7 @@ exports.generateAIReport = async (req, res) => {
                 aiAnalysis
             }
         });
+        */
 
     } catch (error) {
         console.error('Error generating AI sustainability report:', error);
@@ -275,37 +292,7 @@ ${formattedDbh}
 
         // 檢查是否有有效的回應內容
         if (response.choices && response.choices.length > 0 && response.choices[0].message && response.choices[0].message.content) {
-            const aiAnalysis = response.choices[0].message.content.trim();
-
-            // --- 臨時測試程式碼 ---
-            // 為了診斷前端問題，我們暫時只回傳一個輕量的成功物件
-            // 而不是完整的 reportData，以判斷問題是否出在資料量過大或格式問題
-            res.json({
-                success: true,
-                data: {
-                   aiAnalysis: aiAnalysis,
-                   // 只包含最基本的統計數據，以利前端測試
-                   basicStats: reportData.basicStats, 
-                   // 暫時移除其他龐大數據
-                   // speciesDiversity: reportData.speciesDiversity,
-                   // healthStatus: reportData.healthStatus,
-                   // dbhDistribution: reportData.dbhDistribution,
-                   // projectAreas: reportData.projectAreas,
-                   filters: reportData.filters,
-                   generatedAt: reportData.generatedAt
-                }
-            });
-            // --- 臨時測試程式碼結束 ---
-            
-            /* --- 原始程式碼 (暫時註解) ---
-            res.json({
-                success: true,
-                data: {
-                    ...reportData, 
-                    aiAnalysis
-                }
-            });
-            */
+            return response.choices[0].message.content.trim();
         } else {
             console.error('OpenAI API did not return valid content.');
             return "無法生成 AI 分析報告，因為 AI 模型未返回有效內容。";
