@@ -23,7 +23,8 @@ const migrationFiles = [
   'tree_carbon_data.pg.sql',
   'tree_survey.pg.sql', // Structure only
   'tree_management_actions.pg.sql',
-  'chat_logs.pg.sql' // 新增 chat_logs 表格
+  'chat_logs.pg.sql', // 新增 chat_logs 表格
+  'tree_knowledge_embeddings_v2.pg.sql' // 新增 AI 知識庫表格
 ];
 
 // Define the order for view creation
