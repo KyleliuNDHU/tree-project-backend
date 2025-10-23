@@ -156,22 +156,7 @@ exports.generateAIReport = async (req, res) => {
         // 生成 AI 分析報告
         const aiAnalysis = await generateAIAnalysis(dataForAI);
 
-        // --- 臨時測試程式碼 ---
-        // 為了診斷前端問題，我們暫時只回傳一個輕量的成功物件
-        // 而不是完整的 reportData，以判斷問題是否出在資料量過大或格式問題
-        res.json({
-            success: true,
-            data: {
-               aiAnalysis: aiAnalysis,
-               // 只包含最基本的統計數據，以利前端測試
-               basicStats: reportData.basicStats, 
-               filters: reportData.filters,
-               generatedAt: reportData.generatedAt
-            }
-        });
-        // --- 臨時測試程式碼結束 ---
-
-        /* --- 原始程式碼 (暫時註解) ---
+        // --- 恢復原始程式碼 ---
         res.json({
             success: true,
             data: {
@@ -179,8 +164,7 @@ exports.generateAIReport = async (req, res) => {
                 aiAnalysis
             }
         });
-        */
-
+        
     } catch (error) {
         console.error('Error generating AI sustainability report:', error);
         res.status(500).json({

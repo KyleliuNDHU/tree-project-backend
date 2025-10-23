@@ -22,7 +22,8 @@ const migrationFiles = [
   'species_region_score.pg.sql',
   'tree_carbon_data.pg.sql',
   'tree_survey.pg.sql', // Structure only
-  'tree_management_actions.pg.sql'
+  'tree_management_actions.pg.sql',
+  'chat_logs.pg.sql' // 新增 chat_logs 表格
 ];
 
 // Define the order for view creation
