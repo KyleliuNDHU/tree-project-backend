@@ -156,26 +156,31 @@ router.post('/', async (req, res) => {
 
 // 編輯樹木資料
 router.put('/:id', async (req, res) => {
+    // --- DEBUG START ---
+    console.log(`[DEBUG] Received PUT request for ID: ${req.params.id}`);
+    console.log('[DEBUG] Request Body for update:', JSON.stringify(req.body, null, 2));
+    // --- DEBUG END ---
+
     const { id } = req.params;
     const fields = {
-        project_location: req.body.project_location,
-        project_code: req.body.project_code,
-        project_name: req.body.project_name,
-        system_tree_id: req.body.system_tree_id,
-        project_tree_id: req.body.project_tree_id,
-        species_id: req.body.species_id,
-        species_name: req.body.species_name,
-        x_coord: req.body.x_coord,
-        y_coord: req.body.y_coord,
-        status: req.body.status,
-        notes: req.body.notes,
-        tree_notes: req.body.tree_notes,
-        tree_height_m: req.body.tree_height_m,
-        dbh_cm: req.body.dbh_cm,
-        survey_notes: req.body.survey_notes,
-        survey_time: req.body.survey_time,
-        carbon_storage: req.body.carbon_storage,
-        carbon_sequestration_per_year: req.body.carbon_sequestration_per_year
+        '專案區位': req.body['專案區位'],
+        '專案代碼': req.body['專案代碼'],
+        '專案名稱': req.body['專案名稱'],
+        '系統樹木': req.body['系統樹木'],
+        '專案樹木': req.body['專案樹木'],
+        '樹種編號': req.body['樹種編號'],
+        '樹種名稱': req.body['樹種名稱'],
+        'X坐標': req.body['X坐標'],
+        'Y坐標': req.body['Y坐標'],
+        '狀況': req.body['狀況'],
+        '註記': req.body['註記'],
+        '樹木備註': req.body['樹木備註'],
+        '樹高（公尺）': req.body['樹高（公尺）'],
+        '胸徑（公分）': req.body['胸徑（公分）'],
+        '調查備註': req.body['調查備註'],
+        '調查時間': req.body['調查時間'],
+        '碳儲存量': req.body['碳儲存量'],
+        '推估年碳吸存量': req.body['推估年碳吸存量']
     };
 
     const updates = [];
@@ -212,6 +217,9 @@ router.put('/:id', async (req, res) => {
 
 // 刪除樹木資料
 router.delete('/:id', async (req, res) => {
+    // --- DEBUG START ---
+    console.log(`[DEBUG] Received DELETE request for ID: ${req.params.id}`);
+    // --- DEBUG END ---
     const { id } = req.params;
     try {
         const { rowCount } = await db.query('DELETE FROM tree_survey WHERE id = $1', [id]);

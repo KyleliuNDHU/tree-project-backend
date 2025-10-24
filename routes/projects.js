@@ -119,7 +119,14 @@ router.post('/add', async (req, res) => {
             INSERT INTO tree_survey (project_name, project_code, project_location, species_name, system_tree_id) 
             VALUES ($1, $2, $3, '預設樹種', $4)
         `;
-        await client.query(insertQuery, [name, nextCode.toString(), area, systemTreeId]);
+        const insertParams = [name, nextCode.toString(), area, systemTreeId];
+        
+        // --- DEBUG START ---
+        console.log('[DEBUG] Creating placeholder tree record with SQL:', insertQuery.replace(/\s+/g, ' ').trim());
+        console.log('[DEBUG] Placeholder params:', JSON.stringify(insertParams, null, 2));
+        // --- DEBUG END ---
+
+        await client.query(insertQuery, insertParams);
         
         await client.query('COMMIT');
 
