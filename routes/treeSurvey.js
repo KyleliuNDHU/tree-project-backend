@@ -105,6 +105,11 @@ router.get('/by_area/:areaName', async (req, res) => {
 
 // 新增樹木資料
 router.post('/', async (req, res) => {
+    // --- DEBUG START ---
+    console.log('[DEBUG] Received POST request to /api/tree_survey');
+    console.log('[DEBUG] Request Body (raw) for POST:', JSON.stringify(req.body, null, 2));
+    // --- DEBUG END ---
+
     const {
         '專案區位': project_location, '專案代碼': project_code, '專案名稱': project_name, 
         '系統樹木': system_tree_id, '專案樹木': project_tree_id, '樹種編號': species_id, 
