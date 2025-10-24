@@ -162,34 +162,36 @@ router.put('/:id', async (req, res) => {
     // --- DEBUG END ---
 
     const { id } = req.params;
-    const fields = {
-        '專案區位': req.body['專案區位'],
-        '專案代碼': req.body['專案代碼'],
-        '專案名稱': req.body['專案名稱'],
-        '系統樹木': req.body['系統樹木'],
-        '專案樹木': req.body['專案樹木'],
-        '樹種編號': req.body['樹種編號'],
-        '樹種名稱': req.body['樹種名稱'],
-        'X坐標': req.body['X坐標'],
-        'Y坐標': req.body['Y坐標'],
-        '狀況': req.body['狀況'],
-        '註記': req.body['註記'],
-        '樹木備註': req.body['樹木備註'],
-        '樹高（公尺）': req.body['樹高（公尺）'],
-        '胸徑（公分）': req.body['胸徑（公分）'],
-        '調查備註': req.body['調查備註'],
-        '調查時間': req.body['調查時間'],
-        '碳儲存量': req.body['碳儲存量'],
-        '推估年碳吸存量': req.body['推估年碳吸存量']
+
+    // 中文鍵名到資料庫欄位的映射
+    const fieldMapping = {
+        '專案區位': 'project_location',
+        '專案代碼': 'project_code',
+        '專案名稱': 'project_name',
+        '系統樹木': 'system_tree_id',
+        '專案樹木': 'project_tree_id',
+        '樹種編號': 'species_id',
+        '樹種名稱': 'species_name',
+        'X坐標': 'x_coord',
+        'Y坐標': 'y_coord',
+        '狀況': 'status',
+        '註記': 'notes',
+        '樹木備註': 'tree_notes',
+        '樹高（公尺）': 'tree_height_m',
+        '胸徑（公分）': 'dbh_cm',
+        '調查備註': 'survey_notes',
+        '調查時間': 'survey_time',
+        '碳儲存量': 'carbon_storage',
+        '推估年碳吸存量': 'carbon_sequestration_per_year'
     };
 
     const updates = [];
     const values = [];
     let queryIndex = 1;
 
-    for (const [key, value] of Object.entries(fields)) {
-        if (value !== undefined) {
-            updates.push(`${key} = $${queryIndex++}`);
+    for (const [key, value] of Object.entries(req.body)) {
+        if (fieldMapping[key] && value !== undefined) {
+            updates.push(`${fieldMapping[key]} = $${queryIndex++}`);
             values.push(value);
         }
     }

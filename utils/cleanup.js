@@ -36,7 +36,7 @@ const cleanupOrphanedPlaceholders = async () => {
     const sql = `
       DELETE FROM tree_survey
       WHERE species_name = '預設樹種'
-      AND created_at < NOW() - INTERVAL '1 hour'
+      AND created_at < NOW() AT TIME ZONE 'UTC' - INTERVAL '1 hour'
     `;
     const result = await db.query(sql);
     console.log(`[Cleanup] Cleaned up orphaned placeholder trees. Rows affected: ${result.rowCount}`);
