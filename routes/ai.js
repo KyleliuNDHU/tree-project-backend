@@ -96,8 +96,10 @@ router.post('/chat', aiLimiter, async (req, res) => {
 
         try {
             if (model_preference.startsWith('gemini-')) {
-                aiResponse = await generateGeminiChatResponse(message, systemMessage, [], model_preference);
-                sourceInfo = ` (由 ${model_preference.replace('-latest','')} 回答)`;
+                // [FIX] 移除 Gemini 模型名稱中可能存在的 '-latest' 後綴
+                const correctedModelName = model_preference.replace('-latest', '');
+                aiResponse = await generateGeminiChatResponse(message, systemMessage, [], correctedModelName);
+                sourceInfo = ` (由 ${correctedModelName} 回答)`;
             } else if (model_preference.startsWith('claude-')) {
                 if (!anthropic) throw new Error("Claude服務未配置");
                 const claudeResponse = await anthropic.messages.create({

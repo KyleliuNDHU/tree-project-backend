@@ -3,9 +3,9 @@ const { GoogleGenerativeAI, HarmCategory, HarmBlockThreshold } = require('@googl
 const API_KEY = process.env.GEMINI_API_KEY;
 const genAI = new GoogleGenerativeAI(API_KEY);
 
-// 更快速、更經濟高效: gemini-1.5-flash-latest 
-// 更強大的性能和理解能力，價格相對較高 gemini-1.5-pro-latest
-const DEFAULT_MODEL_NAME = 'gemini-1.5-pro-latest'; 
+// 更快速、更經濟高效: gemini-1.5-flash
+// 更強大的性能和理解能力，價格相對較高 gemini-1.5-pro
+const DEFAULT_MODEL_NAME = 'gemini-1.5-flash'; 
 
 /**
  * 使用 Gemini API 生成聊天回應。

@@ -177,7 +177,7 @@ router.post('/cleanup', async (req, res) => {
         const speciesQuery = `
             DELETE FROM tree_species ts
             WHERE NOT EXISTS (
-                SELECT 1 FROM tree_survey tsv WHERE ts.id = tsv.樹種編號
+                SELECT 1 FROM tree_survey tsv WHERE ts.id = tsv.species_id
             ) AND ts.id != '0000';
         `;
         const speciesResult = await client.query(speciesQuery);
@@ -186,7 +186,7 @@ router.post('/cleanup', async (req, res) => {
         const areasQuery = `
             DELETE FROM project_areas pa
             WHERE NOT EXISTS (
-                SELECT 1 FROM tree_survey tsv WHERE pa.area_name = tsv.專案區位
+                SELECT 1 FROM tree_survey tsv WHERE pa.area_name = tsv.project_location
             );
         `;
         const areasResult = await client.query(areasQuery);

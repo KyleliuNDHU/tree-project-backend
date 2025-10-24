@@ -105,11 +105,6 @@ router.get('/by_area/:areaName', async (req, res) => {
 
 // 新增樹木資料
 router.post('/', async (req, res) => {
-    // --- DEBUG START ---
-    console.log('[DEBUG] Received POST request to /api/tree_survey');
-    console.log('[DEBUG] Request Body (raw):', JSON.stringify(req.body, null, 2));
-    // --- DEBUG END ---
-
     const {
         '專案區位': project_location, '專案代碼': project_code, '專案名稱': project_name, 
         '系統樹木': system_tree_id, '專案樹木': project_tree_id, '樹種編號': species_id, 
@@ -140,10 +135,6 @@ router.post('/', async (req, res) => {
         carbon_sequestration_per_year || 0
     ];
 
-    // --- DEBUG START ---
-    console.log('[DEBUG] Values for SQL query:', JSON.stringify(values, null, 2));
-    // --- DEBUG END ---
-
     const sql = `
         INSERT INTO tree_survey 
         (project_location, project_code, project_name, system_tree_id, project_tree_id, species_id, 
@@ -153,16 +144,13 @@ router.post('/', async (req, res) => {
         RETURNING id;
     `;
     
-    // --- DEBUG START ---
-    console.log('[DEBUG] Executing SQL:', sql.replace(/\s+/g, ' ').trim());
-    // --- DEBUG END ---
-
     try {
         const { rows } = await db.query(sql, values);
         res.status(201).json({ success: true, message: '資料插入成功', id: rows[0].id });
     } catch (err) {
         console.error('資料庫插入錯誤:', err);
-        res.status(500).send('資料庫插入錯誤');
+        // [FIX] 將錯誤回應改為 JSON 格式以符合前端期望
+        res.status(500).json({ success: false, message: '資料庫插入錯誤' });
     }
 });
 
