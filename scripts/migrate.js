@@ -102,6 +102,11 @@ async function migrate() {
         console.log(`${file} executed successfully.`);
     }
 
+    // [FIX] Reset the primary key sequence for tree_survey table
+    console.log('Resetting the primary key sequence for tree_survey...');
+    await client.query(`SELECT setval(pg_get_serial_sequence('tree_survey', 'id'), COALESCE(MAX(id), 1), true) FROM tree_survey;`);
+    console.log('Sequence reset successfully.');
+
 
     console.log('Database migration completed successfully!');
   } catch (error) {
