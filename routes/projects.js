@@ -116,8 +116,8 @@ router.post('/add', async (req, res) => {
         // 3. 插入一筆預設的樹木記錄來代表這個新專案
         // 這是一個簡化作法，確保專案存在於 tree_survey 表中
         const insertQuery = `
-            INSERT INTO tree_survey (project_name, project_code, project_location, species_name, system_tree_id) 
-            VALUES ($1, $2, $3, '預設樹種', $4)
+            INSERT INTO tree_survey (project_name, project_code, project_location, species_name, system_tree_id, project_tree_id) 
+            VALUES ($1, $2, $3, '預設樹種', $4, '1')
             RETURNING *
         `;
         const insertParams = [name, nextCode.toString(), area, systemTreeId];
