@@ -56,4 +56,4 @@ databases:
     plan: free
   - name: tree-database-staging
     databaseName: tree_data_staging
-    plan: free
+    plan: starter
