@@ -64,7 +64,7 @@ router.get('/', async (req, res) => {
         res.json({ success: true, data: rows });
     } catch (err) {
         console.error('查詢區位時發生錯誤:', err);
-        res.status(500).send('查詢區位時發生錯誤');
+        res.status(500).json({ success: false, message: '查詢區位時發生錯誤' });
     }
 });
 
@@ -72,7 +72,7 @@ router.get('/', async (req, res) => {
 router.post('/', async (req, res) => {
     const { area_name, description, city, xCoord, yCoord, isSubmit } = req.body;
     if (!area_name) {
-        return res.status(400).send('區位名稱不能為空');
+        return res.status(400).json({ success: false, message: '區位名稱不能為空' });
     }
 
     const client = await db.pool.connect();
@@ -124,7 +124,7 @@ router.post('/', async (req, res) => {
             return res.status(409).json({ success: false, message: '區位名稱或代碼已存在' });
         }
         console.error('新增區位時發生錯誤:', err);
-        res.status(500).send('新增區位時發生錯誤');
+        res.status(500).json({ success: false, message: '新增區位時發生錯誤' });
     } finally {
         client.release();
     }
