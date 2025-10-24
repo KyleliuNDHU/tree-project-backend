@@ -53,7 +53,7 @@ services:
 databases:
   - name: tree-database-prod
     databaseName: tree_data_prod
-    plan: free
+    plan: Basic-256mb
   - name: tree-database-staging
     databaseName: tree_data_staging
-    plan: starter-2
+    plan: free
