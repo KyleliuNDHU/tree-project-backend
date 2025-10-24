@@ -31,12 +31,11 @@ const cleanupUnusedSpecies = async () => {
 
 const cleanupOrphanedPlaceholders = async () => {
   try {
-    // 刪除建立超過1小時且尚未被真實資料覆蓋的預設樹種紀錄
-    // 這些通常是使用者建立了新專案但未完成第一筆樹木資料輸入而留下的
+    // 刪除所有尚未被真實資料覆蓋的預設樹種紀錄
+    // 這些是使用者建立了新專案但未完成第一筆樹木資料輸入而留下的
     const sql = `
       DELETE FROM tree_survey
       WHERE species_name = '預設樹種'
-      AND created_at < NOW() AT TIME ZONE 'UTC' - INTERVAL '1 hour'
     `;
     const result = await db.query(sql);
     console.log(`[Cleanup] Cleaned up orphaned placeholder trees. Rows affected: ${result.rowCount}`);

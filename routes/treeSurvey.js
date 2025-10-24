@@ -234,6 +234,30 @@ router.delete('/:id', async (req, res) => {
     }
 });
 
+// [NEW] 刪除指定的佔位樹木記錄
+router.delete('/placeholder/:id', async (req, res) => {
+    const { id } = req.params;
+    try {
+        // 增加一層額外的安全檢查，確保只刪除真的是'預設樹種'的紀錄
+        const sql = `
+            DELETE FROM tree_survey 
+            WHERE id = $1 AND species_name = '預設樹種'
+        `;
+        const { rowCount } = await db.query(sql, [id]);
+        
+        if (rowCount > 0) {
+            res.json({ success: true, message: '指定的佔位紀錄已成功刪除' });
+        } else {
+            // 這不是一個錯誤，可能紀錄已經被編輯或已被其他程序清理
+            res.status(200).json({ success: true, message: '指定的佔位紀錄不存在或已被編輯' });
+        }
+    } catch (err) {
+        console.error(`刪除佔位紀錄 (ID: ${id}) 錯誤:`, err);
+        res.status(500).json({ success: false, message: '刪除佔位紀錄時發生錯誤' });
+    }
+});
+
+
 // 獲取下一個系統樹木編號
 router.get('/next_system_number', async (req, res) => {
     try {
