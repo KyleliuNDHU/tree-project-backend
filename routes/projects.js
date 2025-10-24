@@ -107,13 +107,19 @@ router.post('/add', async (req, res) => {
         const { rows: maxCodeRows } = await client.query("SELECT MAX(CAST(project_code AS INTEGER)) as max_code FROM tree_survey WHERE project_code ~ '^[0-9]+$'");
         const nextCode = (maxCodeRows[0].max_code || 0) + 1;
 
-        // 2. 插入一筆預設的樹木記錄來代表這個新專案
+        // [FIX] 2. 產生下一個系統樹木編號以滿足 NOT NULL 約束
+        const { rows: maxSystemIdRows } = await client.query("SELECT MAX(CAST(regexp_replace(system_tree_id, '[^0-9]', '', 'g') AS INTEGER)) as max_id FROM tree_survey");
+        const nextSystemId = (maxSystemIdRows[0].max_id || 0) + 1;
+        const systemTreeId = `ST-${nextSystemId}`;
+
+
+        // 3. 插入一筆預設的樹木記錄來代表這個新專案
         // 這是一個簡化作法，確保專案存在於 tree_survey 表中
         const insertQuery = `
-            INSERT INTO tree_survey (project_name, project_code, project_location, species_name) 
-            VALUES ($1, $2, $3, '預設樹種')
+            INSERT INTO tree_survey (project_name, project_code, project_location, species_name, system_tree_id) 
+            VALUES ($1, $2, $3, '預設樹種', $4)
         `;
-        await client.query(insertQuery, [name, nextCode.toString(), area]);
+        await client.query(insertQuery, [name, nextCode.toString(), area, systemTreeId]);
         
         await client.query('COMMIT');
 
