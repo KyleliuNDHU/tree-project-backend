@@ -3,6 +3,11 @@ const router = express.Router();
 const db = require('../config/db');
 const turf = require('@turf/turf');
 const fs = require('fs');
+const { 
+    cleanupUnusedProjectAreas, 
+    cleanupUnusedSpecies, 
+    cleanupOrphanedPlaceholders 
+} = require('../utils/cleanup');
 
 // 載入台灣縣市 GeoJSON 資料
 let countyPolygons = new Map();
@@ -169,42 +174,21 @@ router.delete('/:id', async (req, res) => {
 
 // 手動觸發清理
 router.post('/cleanup', async (req, res) => {
-    const client = await db.pool.connect();
     try {
-        await client.query('BEGIN');
+        console.log('[API] Manual cleanup process triggered.');
+        // 呼叫所有清理函式
+        await cleanupOrphanedPlaceholders();
+        await cleanupUnusedSpecies();
+        await cleanupUnusedProjectAreas();
         
-        // 清理未使用的樹種
-        const speciesQuery = `
-            DELETE FROM tree_species ts
-            WHERE NOT EXISTS (
-                SELECT 1 FROM tree_survey tsv WHERE ts.id = tsv.species_id
-            ) AND ts.id != '0000';
-        `;
-        const speciesResult = await client.query(speciesQuery);
-
-        // 清理未使用的區位
-        const areasQuery = `
-            DELETE FROM project_areas pa
-            WHERE NOT EXISTS (
-                SELECT 1 FROM tree_survey tsv WHERE pa.area_name = tsv.project_location
-            );
-        `;
-        const areasResult = await client.query(areasQuery);
-        
-        await client.query('COMMIT');
-        
+        console.log('[API] Manual cleanup process finished successfully.');
         res.json({
             success: true,
-            message: '清理完成',
-            cleaned_species: speciesResult.rowCount,
-            cleaned_areas: areasResult.rowCount
+            message: '手動清理完成',
         });
     } catch (err) {
-        await client.query('ROLLBACK');
-        console.error('清理無用資料失敗:', err);
+        console.error('手動觸發清理失敗:', err);
         res.status(500).json({ success: false, message: '清理失敗' });
-    } finally {
-        client.release();
     }
 });
 

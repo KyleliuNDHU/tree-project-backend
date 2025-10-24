@@ -4,6 +4,11 @@ const cors = require('cors');
 const helmet = require('helmet');
 const path = require('path');
 const { apiLimiter, loginLimiter } = require('./middleware/rateLimiter');
+const { 
+    cleanupUnusedProjectAreas, 
+    cleanupUnusedSpecies, 
+    cleanupOrphanedPlaceholders 
+} = require('./utils/cleanup');
 
 const app = express();
 
@@ -80,4 +85,14 @@ app.listen(PORT, () => {
     console.log(`伺服器正在 http://localhost:${PORT} 上運行`);
     console.log('環境變數 DB_HOST:', process.env.DB_HOST ? '已設置' : '未設置');
     console.log('環境變數 DATABASE_URL:', process.env.DATABASE_URL ? '已設置' : '未設置');
+
+    // 設定每小時執行一次的定期清理任務
+    const cleanupInterval = 60 * 60 * 1000; // 1小時
+    setInterval(async () => {
+        console.log('[Scheduler] Running hourly cleanup tasks...');
+        await cleanupOrphanedPlaceholders();
+        await cleanupUnusedSpecies();
+        await cleanupUnusedProjectAreas();
+        console.log('[Scheduler] Hourly cleanup tasks finished.');
+    }, cleanupInterval);
 });
