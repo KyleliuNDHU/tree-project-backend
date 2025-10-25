@@ -43,16 +43,19 @@ const aiLimiter = rateLimit({
 // Chat API
 router.post('/chat', aiLimiter, async (req, res) => {
     try {
-        let { message, projectAreas, userId, model_preference = 'gpt-4.1-mini' } = req.body;
+        let { message, projectAreas, userId, model_preference = 'gemini-2.5-flash' } = req.body;
 
         // --- PRODUCTION MODEL ENFORCEMENT ---
         if (process.env.NODE_ENV === 'production') {
-            const isSiliconFlow = model_preference.startsWith('Qwen/') || model_preference.startsWith('deepseek-ai/');
-            const isFallback = model_preference === 'gpt-4.1-mini';
-
-            if (!isSiliconFlow && !isFallback) {
-                console.log(`[PROD-GUARD] Forbidden model '${model_preference}' requested. Overriding with fallback 'gpt-4.1-mini'.`);
-                model_preference = 'gpt-4.1-mini'; // Override to the safe fallback
+            const allowedProdModels = [
+                'deepseek-ai/DeepSeek-V3',
+                'Qwen/Qwen3-VL-32B-Instruct',
+                'gpt-5-mini'
+            ];
+            
+            if (!allowedProdModels.includes(model_preference)) {
+                console.log(`[PROD-GUARD] Forbidden model '${model_preference}' requested. Overriding with fallback 'gpt-5-mini'.`);
+                model_preference = 'gpt-5-mini'; // Override to the safe fallback
             }
         }
         // --- END ENFORCEMENT ---
@@ -131,7 +134,7 @@ router.post('/chat', aiLimiter, async (req, res) => {
                  sourceInfo = ` (由 ${model_preference} via SiliconFlow 回答)`;
             } else { // Default to OpenAI
                 const completion = await openai.chat.completions.create({
-                    model: model_preference, // e.g., 'gpt-4.1-mini'
+                    model: model_preference, // e.g., 'gpt-5', 'gpt-5-mini'
                     messages: [{ role: "system", content: systemMessage }, { role: "user", content: message }],
                 });
                 aiResponse = completion.choices[0].message.content;
