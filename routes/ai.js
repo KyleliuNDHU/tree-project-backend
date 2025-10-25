@@ -43,7 +43,19 @@ const aiLimiter = rateLimit({
 // Chat API
 router.post('/chat', aiLimiter, async (req, res) => {
     try {
-        const { message, projectAreas, userId, model_preference = 'gpt-4.1-mini' } = req.body;
+        let { message, projectAreas, userId, model_preference = 'gpt-4.1-mini' } = req.body;
+
+        // --- PRODUCTION MODEL ENFORCEMENT ---
+        if (process.env.NODE_ENV === 'production') {
+            const isSiliconFlow = model_preference.startsWith('Qwen/') || model_preference.startsWith('deepseek-ai/');
+            const isFallback = model_preference === 'gpt-4.1-mini';
+
+            if (!isSiliconFlow && !isFallback) {
+                console.log(`[PROD-GUARD] Forbidden model '${model_preference}' requested. Overriding with fallback 'gpt-4.1-mini'.`);
+                model_preference = 'gpt-4.1-mini'; // Override to the safe fallback
+            }
+        }
+        // --- END ENFORCEMENT ---
     
         let treeData = [];
         let treeDataError = null;
