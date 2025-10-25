@@ -1,7 +1,6 @@
 services:
   - type: web
     name: tree-app-backend-prod
-    region: singapore
     env: node
     rootDir: ./
     plan: free
@@ -27,7 +26,6 @@ services:
         value: 20.11.1
   - type: web
     name: tree-app-backend-staging
-    region: singapore
     env: node
     rootDir: ./
     plan: free
@@ -54,10 +52,8 @@ services:
 
 databases:
   - name: tree-database-prod
-    region: singapore
     databaseName: tree_data_prod
     plan: Basic-256mb
   - name: tree-database-staging
-    region: singapore
     databaseName: tree_data_staging
     plan: free
