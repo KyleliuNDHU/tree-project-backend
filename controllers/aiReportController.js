@@ -70,7 +70,7 @@ exports.generateAIReport = async (req, res) => {
         // 2. 物種多樣性分析
         const speciesDiversitySql = `
             SELECT 
-                species_name,
+                species_name AS "樹種名稱",
                 COUNT(*) as count,
                 (COUNT(*) * 100.0 / NULLIF((SELECT COUNT(*) FROM tree_survey ${whereClause}), 0)) as percentage
             FROM tree_survey
@@ -190,7 +190,7 @@ async function generateAIAnalysis(reportData) {
 - 年碳吸存量: ${basicStats.total_annual_carbon_sequestration ? basicStats.total_annual_carbon_sequestration.toFixed(2) : 'N/A'} 公斤/年`;
 
         const formattedSpecies = speciesDiversity && speciesDiversity.length > 0
-            ? speciesDiversity.slice(0, 5).map(s => `- ${s.species_name}: ${s.count} 棵 (${s.percentage ? parseFloat(s.percentage).toFixed(1) : 'N/A'}%)`).join('\n')
+            ? speciesDiversity.slice(0, 5).map(s => `- ${s['樹種名稱']}: ${s.count} 棵 (${s.percentage ? parseFloat(s.percentage).toFixed(1) : 'N/A'}%)`).join('\n')
             : '無物種多樣性數據';
 
         const formattedHealth = healthStatus && healthStatus.length > 0
@@ -375,7 +375,7 @@ async function generateAIReportPDF(reportDataWithAI) {
         doc.fontSize(14).text('2. 物種多樣性 (前5名)');
         if (speciesDiversity && speciesDiversity.length > 0) {
             speciesDiversity.slice(0, 5).forEach(s => {
-                doc.fontSize(11).text(`- ${s.species_name}: ${s.count} 棵 (${s.percentage ? s.percentage.toFixed(1) : 'N/A'}%)`);
+                doc.fontSize(11).text(`- ${s['樹種名稱']}: ${s.count} 棵 (${s.percentage ? parseFloat(s.percentage).toFixed(1) : 'N/A'}%)`);
             });
         } else {
             doc.fontSize(11).text('無物種多樣性數據');
