@@ -158,7 +158,7 @@ router.post('/chat', aiLimiter, async (req, res) => {
 
         res.json({
             success: true,
-            response: aiResponse + sourceInfo, 
+            response: aiResponse, // Return the pure AI response
             sources: passages, 
             modelUsed: modelUsed
         });
