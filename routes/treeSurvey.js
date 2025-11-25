@@ -81,7 +81,32 @@ router.get('/', async (req, res) => {
 router.get('/by_project/:projectName', async (req, res) => {
     const { projectName } = req.params;
     try {
-        const { rows } = await db.query('SELECT * FROM tree_survey WHERE project_name = $1 ORDER BY project_tree_id ASC', [projectName]);
+        const sql = `
+            SELECT 
+                id,
+                project_location AS "專案區位",
+                project_code AS "專案代碼",
+                project_name AS "專案名稱",
+                system_tree_id AS "系統樹木",
+                project_tree_id AS "專案樹木",
+                species_id AS "樹種編號",
+                species_name AS "樹種名稱",
+                x_coord AS "X坐標",
+                y_coord AS "Y坐標",
+                status AS "狀況",
+                notes AS "註記",
+                tree_notes AS "樹木備註",
+                tree_height_m AS "樹高（公尺）",
+                dbh_cm AS "胸徑（公分）",
+                survey_notes AS "調查備註",
+                survey_time AS "調查時間",
+                carbon_storage AS "碳儲存量",
+                carbon_sequestration_per_year AS "推估年碳吸存量"
+            FROM tree_survey 
+            WHERE project_name = $1 
+            ORDER BY project_tree_id ASC
+        `;
+        const { rows } = await db.query(sql, [projectName]);
         // 將回應包裹在標準格式中
         res.json({ success: true, data: rows });
     } catch (err) {
@@ -94,7 +119,32 @@ router.get('/by_project/:projectName', async (req, res) => {
 router.get('/by_area/:areaName', async (req, res) => {
     const { areaName } = req.params;
     try {
-        const { rows } = await db.query('SELECT * FROM tree_survey WHERE project_location = $1 ORDER BY system_tree_id ASC', [areaName]);
+        const sql = `
+            SELECT 
+                id,
+                project_location AS "專案區位",
+                project_code AS "專案代碼",
+                project_name AS "專案名稱",
+                system_tree_id AS "系統樹木",
+                project_tree_id AS "專案樹木",
+                species_id AS "樹種編號",
+                species_name AS "樹種名稱",
+                x_coord AS "X坐標",
+                y_coord AS "Y坐標",
+                status AS "狀況",
+                notes AS "註記",
+                tree_notes AS "樹木備註",
+                tree_height_m AS "樹高（公尺）",
+                dbh_cm AS "胸徑（公分）",
+                survey_notes AS "調查備註",
+                survey_time AS "調查時間",
+                carbon_storage AS "碳儲存量",
+                carbon_sequestration_per_year AS "推估年碳吸存量"
+            FROM tree_survey 
+            WHERE project_location = $1 
+            ORDER BY system_tree_id ASC
+        `;
+        const { rows } = await db.query(sql, [areaName]);
         // 將回應包裹在標準格式中
         res.json({ success: true, data: rows });
     } catch (err) {
