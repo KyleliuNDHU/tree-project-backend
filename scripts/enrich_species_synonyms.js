@@ -29,9 +29,27 @@ async function enrichSpeciesSynonyms() {
         // 1. 獲取所有樹種名稱 (從 tree_species 或 tree_carbon_data)
         // 這裡我們選擇 tree_species 作為權威來源，或者 tree_carbon_data 的 distinct common_name_zh
         const result = await db.query('SELECT DISTINCT common_name_zh FROM tree_carbon_data WHERE common_name_zh IS NOT NULL');
-        const speciesList = result.rows.map(r => r.common_name_zh);
+        let speciesList = result.rows.map(r => r.common_name_zh);
 
-        console.log(`找到 ${speciesList.length} 個樹種需要處理。`);
+        console.log(`從資料庫中讀取到 ${speciesList.length} 個樹種。`);
+
+        // [優化] 檢查已存在的同義詞索引，避免重複呼叫 LLM
+        const existingIndexResult = await db.query(
+            "SELECT internal_source_record_id FROM tree_knowledge_embeddings_v2 WHERE source_type = 'SPECIES_SYNONYM_INDEX'"
+        );
+        const existingSpeciesSet = new Set(existingIndexResult.rows.map(r => r.internal_source_record_id));
+
+        // 過濾掉已存在的樹種
+        const originalCount = speciesList.length;
+        speciesList = speciesList.filter(species => !existingSpeciesSet.has(species));
+        
+        console.log(`已跳過 ${originalCount - speciesList.length} 個已存在的樹種索引。`);
+        console.log(`實際需要處理 ${speciesList.length} 個新樹種。`);
+
+        if (speciesList.length === 0) {
+            console.log('沒有新樹種需要擴充，任務結束。');
+            return;
+        }
 
         // 2. 分批處理，避免 LLM Token 爆炸與記憶體溢出
         const BATCH_SIZE = 3; // 降低批次大小，減輕記憶體壓力 (原為 5)

@@ -233,15 +233,10 @@ async function processTreeCarbonData() {
             // 釋放原始長文本記憶體
             detailedText = null;
 
-            // 在處理該樹種的新片段之前，先刪除所有舊的相關片段
-            console.log(`正在刪除樹種 ${species.common_name_zh} (原始ID: ${species.id}) 的舊知識庫片段...`);
-            const deleteResult = await db.query(
-                'DELETE FROM tree_knowledge_embeddings_v2 WHERE internal_source_table_name = $1 AND internal_source_record_id = $2 AND source_type = $3',
-                ['tree_carbon_data', species.id.toString(), 'INTERNAL_DB_TREE_CARBON']
-            );
-            console.log(`樹種 ${species.common_name_zh} (原始ID: ${species.id}) 的舊片段已刪除 ${deleteResult.rowCount || 0} 條。`);
+            // 準備好所有要寫入的數據，再一次性進行 Transaction 操作
+            const fragmentsToInsert = [];
+            let validChunksCount = 0;
 
-            let validChunksProcessed = 0;
             for (let j = 0; j < textChunks.length; j++) {
                 const chunk = textChunks[j];
                 if (chunk.length < 30) { 
@@ -257,62 +252,89 @@ async function processTreeCarbonData() {
                     continue;
                 }
 
-                const knowledgeEntry = {
+                const uniqueChunkId = `${species.id}_chunk_${j + 1}`;
+                
+                fragmentsToInsert.push({
                     text_content: chunk,
                     summary_cn: chunk.substring(0, 100) + (chunk.length > 100 ? '...' : ''),
                     embedding: JSON.stringify(embeddingVector),
                     source_type: 'INTERNAL_DB_TREE_CARBON',
                     internal_source_table_name: 'tree_carbon_data',
-                    internal_source_record_id: species.id.toString(), 
+                    internal_source_record_id: uniqueChunkId, 
                     original_source_title: `樹種詳解: ${species.common_name_zh} - 片段 ${j + 1}/${textChunks.length}`,
                     original_source_author: 'AI模型綜合生成 (Qwen3 + GPT4.1-mini)',
                     original_source_publication_year: new Date().getFullYear().toString(),
                     keywords: `${species.common_name_zh},${species.scientific_name || ''},碳匯,樹種特性,片段${j+1}`.split(',').filter(k => k).join(','),
                     confidence_score: 4, 
                     last_verified_at: new Date().toISOString().slice(0, 19).replace('T', ' ')
-                };
+                });
                 
                 // 釋放 Embedding 記憶體
                 embeddingVector = null;
-                                
-                // 因為前面已經刪除了該樹種的所有舊片段，這裡總是執行插入
-                console.log(`插入樹種 ${species.common_name_zh} 的知識庫片段 ${j + 1} (Title: ${knowledgeEntry.original_source_title})`);
-                
-                // FIX: Make internal_source_record_id UNIQUE per chunk to satisfy unique constraint
-                // The unique constraint is (source_type, internal_source_record_id)
-                // Original ID "1" is used for multiple chunks, causing violation on 2nd chunk.
-                const uniqueChunkId = `${species.id}_chunk_${j + 1}`;
-
-                const insertQuery = `
-                    INSERT INTO tree_knowledge_embeddings_v2 
-                    (text_content, summary_cn, embedding, source_type, internal_source_table_name, 
-                     internal_source_record_id, original_source_title, original_source_author, 
-                     original_source_publication_year, keywords, confidence_score, last_verified_at)
-                    VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
-                `;
-                
-                await db.query(insertQuery, [
-                    knowledgeEntry.text_content,
-                    knowledgeEntry.summary_cn,
-                    knowledgeEntry.embedding,
-                    knowledgeEntry.source_type,
-                    knowledgeEntry.internal_source_table_name,
-                    uniqueChunkId, // Use the unique ID
-                    knowledgeEntry.original_source_title,
-                    knowledgeEntry.original_source_author,
-                    knowledgeEntry.original_source_publication_year,
-                    knowledgeEntry.keywords,
-                    knowledgeEntry.confidence_score,
-                    knowledgeEntry.last_verified_at
-                ]);
-                validChunksProcessed++;
-                console.log(`已處理樹種 ${species.common_name_zh} 的片段 ${j + 1}`);
+                validChunksCount++;
             }
-            
+
             // 釋放片段陣列記憶體
             textChunks = null;
+
+            if (validChunksCount === 0) {
+                console.warn(`樹種 ${species.common_name_zh} 沒有產生有效的片段，跳過資料庫更新。`);
+                continue;
+            }
+
+            // --- 開始 Transaction ---
+            const client = await db.pool.connect();
+            try {
+                await client.query('BEGIN');
+
+                // 1. 刪除舊資料
+                console.log(`正在刪除樹種 ${species.common_name_zh} (原始ID: ${species.id}) 的舊知識庫片段...`);
+                const deleteResult = await client.query(
+                    'DELETE FROM tree_knowledge_embeddings_v2 WHERE internal_source_table_name = $1 AND internal_source_record_id LIKE $2 AND source_type = $3',
+                    ['tree_carbon_data', `${species.id}%`, 'INTERNAL_DB_TREE_CARBON']
+                );
+                console.log(`舊片段已刪除 ${deleteResult.rowCount || 0} 條。`);
+
+                // 2. 插入新資料
+                for (let idx = 0; idx < fragmentsToInsert.length; idx++) {
+                    const entry = fragmentsToInsert[idx];
+                    const insertQuery = `
+                        INSERT INTO tree_knowledge_embeddings_v2 
+                        (text_content, summary_cn, embedding, source_type, internal_source_table_name, 
+                         internal_source_record_id, original_source_title, original_source_author, 
+                         original_source_publication_year, keywords, confidence_score, last_verified_at)
+                        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
+                    `;
+                    
+                    await client.query(insertQuery, [
+                        entry.text_content,
+                        entry.summary_cn,
+                        entry.embedding,
+                        entry.source_type,
+                        entry.internal_source_table_name,
+                        entry.internal_source_record_id,
+                        entry.original_source_title,
+                        entry.original_source_author,
+                        entry.original_source_publication_year,
+                        entry.keywords,
+                        entry.confidence_score,
+                        entry.last_verified_at
+                    ]);
+                    console.log(`已寫入片段 ${idx + 1}/${fragmentsToInsert.length}`);
+                }
+
+                await client.query('COMMIT');
+                console.log(`樹種 ${species.common_name_zh} 的資料更新交易已提交。`);
+            } catch (dbError) {
+                await client.query('ROLLBACK');
+                console.error(`資料庫交易失敗，已回滾 (Rollback) 樹種 ${species.common_name_zh} 的變更:`, dbError);
+                throw dbError; // 拋出錯誤以便外層 catch 處理
+            } finally {
+                client.release();
+            }
+            // --- Transaction 結束 ---
             
-            console.log(`已完成處理樹種: ${species.common_name_zh}，共生成和處理 ${validChunksProcessed} 個有效片段。`);
+            console.log(`已完成處理樹種: ${species.common_name_zh}，共生成和處理 ${validChunksCount} 個有效片段。`);
         }
         console.log('所有 tree_carbon_data 記錄處理完成。');
 

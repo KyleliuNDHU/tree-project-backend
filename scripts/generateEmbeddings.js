@@ -175,15 +175,22 @@ async function generateEmbeddings() {
         for (const fragment of knowledgeFragments) {
             if (!fragment.text_content || fragment.text_content.trim() === '') continue;
 
-            // 檢查是否已經存在 (避免重複生成浪費錢)
+            // 檢查是否已經存在且內容一致 (避免重複生成浪費錢)
             const existCheck = await client.query(
-                'SELECT id FROM tree_knowledge_embeddings_v2 WHERE source_type = $1 AND internal_source_record_id = $2 AND original_source_title = $3',
+                'SELECT id, text_content FROM tree_knowledge_embeddings_v2 WHERE source_type = $1 AND internal_source_record_id = $2 AND original_source_title = $3',
                 ['INTERNAL_DB_TREE_CARBON', tree.id.toString(), fragment.original_source_title]
             );
 
             if (existCheck.rows.length > 0) {
-                // console.log(`  [Skip] 已存在: ${fragment.original_source_title}`);
-                continue;
+                const existingRecord = existCheck.rows[0];
+                // 比對內容是否變更 (移除頭尾空白後比對)
+                if (existingRecord.text_content.trim() === fragment.text_content.trim()) {
+                    // console.log(`  [Skip] 內容未變更: ${fragment.original_source_title}`);
+                    continue;
+                } else {
+                    console.log(`  [Update] 內容已變更，重新生成: ${fragment.original_source_title}`);
+                    // 如果有變更，我們繼續往下執行，生成新的 Embedding 並 Update
+                }
             }
 
             const embeddingVector = await getEmbedding(fragment.text_content);
