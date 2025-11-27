@@ -110,6 +110,7 @@ async function migrate() {
 const populateKnowledge = require('./populate_knowledge'); // Import the knowledge population script
 const generateEmbeddings = require('./generateEmbeddings'); // Import the advanced embedding generation script
 const populateScores = require('./populateSpeciesRegionScore'); // Import the region score population script
+const enrichSynonyms = require('./enrich_species_synonyms'); // [New] Import the species synonym enrichment script
 
 // ... (existing code)
 
@@ -128,6 +129,13 @@ const populateScores = require('./populateSpeciesRegionScore'); // Import the re
 
         console.log('Calculating/Populating species region scores...');
         await populateScores();
+
+        console.log('Enriching species synonyms (AI)...');
+        // Note: enrichSynonyms uses LLM and might be slow/costly. 
+        // It has internal duplication checks, so it's safe to run, but maybe better to run manually/async.
+        // For now, we await it to ensure initial setup is complete.
+        await enrichSynonyms();
+
     } catch (kErr) {
         console.error('Warning: Knowledge population/generation failed, but continuing migration:', kErr);
     }
