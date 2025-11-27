@@ -15,14 +15,35 @@ const { execSync } = require('child_process');
 const app = express();
 
 // [CRITICAL FIX] 強制在應用程式啟動時執行資料庫遷移
-// 因為 Render 的 Start Command 可能未正確觸發
+// ------------------------------------------------------------------
+// [Context / 背景]
+// 由於部署平台 (Render) 的 Start Command 有時會覆蓋 package.json 的設定，
+// 導致 `npm start` 中的 `node scripts/migrate.js` 未被執行。
+// 這會造成新部署的程式碼依賴新的 DB Schema，但 DB 卻還沒更新，引發崩潰。
+//
+// [Current Solution / 當前解法]
+// 在 app.js 啟動前，透過 child_process 同步執行 migrate.js。
+// 優點：保證 Code 與 DB 絕對同步。
+// 缺點：增加啟動時間；若多實例同時啟動可能會有多重執行 (雖 SQL 已做冪等防護)。
+//
+// [Future Improvement / 未來改進]
+// 1. 修正 Render.com 的 Start Command 設定，確保它執行 `npm start`。
+// 2. 將 Migration 移至 CI/CD 流程的 "Pre-Deploy" 階段。
+// 3. 當確認平台設定正確後，可移除此段 execSync 程式碼。
+// ------------------------------------------------------------------
 try {
     console.log('[Startup] Forcing database migration...');
     const output = execSync('node scripts/migrate.js', { encoding: 'utf-8' });
     console.log('[Startup] Migration output:\n', output);
+
+    // [DEBUG] Run diagnosis script immediately after migration
+    console.log('[Startup] Running DB Diagnosis...');
+    const diagOutput = execSync('node scripts/diagnose_db.js', { encoding: 'utf-8' });
+    console.log('[Startup] Diagnosis output:\n', diagOutput);
+
 } catch (e) {
-    console.error('[Startup] Migration failed:', e.message);
-    console.error('[Startup] Migration details:', e.stdout || e.stderr);
+    console.error('[Startup] Migration/Diagnosis failed:', e.message);
+    console.error('[Startup] Details:', e.stdout || e.stderr);
     // 選擇性：如果遷移失敗，是否要讓伺服器崩潰？
     // process.exit(1); 
 }
