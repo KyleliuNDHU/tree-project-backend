@@ -103,7 +103,7 @@ router.post('/chat', aiLimiter, async (req, res) => {
         }
     
         // --- 獲取歷史對話上下文 (Context) ---
-        // 僅獲取該用戶在最近 30 分鐘內的最近 15 筆對話，以保持上下文連貫但不過期
+        // 僅獲取該用戶在最近 30 分鐘內的最近 30 筆對話，以保持上下文連貫但不過期
         let chatHistory = [];
         if (userId) {
             const historyQuery = `
@@ -112,7 +112,7 @@ router.post('/chat', aiLimiter, async (req, res) => {
                 WHERE user_id = $1 
                 AND created_at > NOW() - INTERVAL '30 minutes'
                 ORDER BY created_at DESC 
-                LIMIT 15
+                LIMIT 30
             `;
             try {
                 const { rows } = await db.query(historyQuery, [userId]);
