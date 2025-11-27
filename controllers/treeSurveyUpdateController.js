@@ -83,6 +83,7 @@ exports.updateTreeV2 = async (req, res) => {
             carbon_storage: carbon_storage,
             carbon_sequestration_per_year: carbon_sequestration_per_year,
             project_id: projectId, // 新增 project_id 的更新
+            project_tree_id: req.body.project_tree_id // [FIX] 允許更新專案樹木編號
         };
         
         for (const [dbField, value] of Object.entries(fieldMapping)) {
