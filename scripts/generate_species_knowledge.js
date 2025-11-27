@@ -133,7 +133,8 @@ function formatBoolean(value) {
 async function processTreeCarbonData() {
     console.log('開始處理 tree_carbon_data 數據並生成知識庫條目 (使用LLM分塊，先刪後插策略)...');
     try {
-        const speciesData = await db.query('SELECT * FROM tree_carbon_data'); 
+        const result = await db.query('SELECT * FROM tree_carbon_data'); 
+        const speciesData = result.rows;
         console.log(`從 tree_carbon_data 讀取到 ${speciesData.length} 條樹種記錄。`);
 
         for (const species of speciesData) {
@@ -198,10 +199,10 @@ async function processTreeCarbonData() {
             // 在處理該樹種的新片段之前，先刪除所有舊的相關片段
             console.log(`正在刪除樹種 ${species.common_name_zh} (原始ID: ${species.id}) 的舊知識庫片段...`);
             const deleteResult = await db.query(
-                'DELETE FROM tree_knowledge_embeddings_v2 WHERE internal_source_table_name = ? AND internal_source_record_id = ? AND source_type = ?',
+                'DELETE FROM tree_knowledge_embeddings_v2 WHERE internal_source_table_name = $1 AND internal_source_record_id = $2 AND source_type = $3',
                 ['tree_carbon_data', species.id.toString(), 'INTERNAL_DB_TREE_CARBON']
             );
-            console.log(`樹種 ${species.common_name_zh} (原始ID: ${species.id}) 的舊片段已刪除 ${deleteResult.affectedRows || 0} 條。`);
+            console.log(`樹種 ${species.common_name_zh} (原始ID: ${species.id}) 的舊片段已刪除 ${deleteResult.rowCount || 0} 條。`);
 
             let validChunksProcessed = 0;
             for (let i = 0; i < textChunks.length; i++) {
@@ -231,7 +232,29 @@ async function processTreeCarbonData() {
                                 
                 // 因為前面已經刪除了該樹種的所有舊片段，這裡總是執行插入
                 console.log(`插入樹種 ${species.common_name_zh} 的知識庫片段 ${i + 1} (Title: ${knowledgeEntry.original_source_title})`);
-                await db.query('INSERT INTO tree_knowledge_embeddings_v2 SET ?', knowledgeEntry);
+                
+                const insertQuery = `
+                    INSERT INTO tree_knowledge_embeddings_v2 
+                    (text_content, summary_cn, embedding, source_type, internal_source_table_name, 
+                     internal_source_record_id, original_source_title, original_source_author, 
+                     original_source_publication_year, keywords, confidence_score, last_verified_at)
+                    VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
+                `;
+                
+                await db.query(insertQuery, [
+                    knowledgeEntry.text_content,
+                    knowledgeEntry.summary_cn,
+                    knowledgeEntry.embedding,
+                    knowledgeEntry.source_type,
+                    knowledgeEntry.internal_source_table_name,
+                    knowledgeEntry.internal_source_record_id,
+                    knowledgeEntry.original_source_title,
+                    knowledgeEntry.original_source_author,
+                    knowledgeEntry.original_source_publication_year,
+                    knowledgeEntry.keywords,
+                    knowledgeEntry.confidence_score,
+                    knowledgeEntry.last_verified_at
+                ]);
                 validChunksProcessed++;
                 console.log(`已處理樹種 ${species.common_name_zh} 的片段 ${i + 1}`);
             }
