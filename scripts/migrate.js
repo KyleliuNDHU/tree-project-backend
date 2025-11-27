@@ -18,6 +18,7 @@ const migrationFiles = [
   '00_init_functions.pg.sql', // Initialize shared functions first
   'users.pg.sql',
   'project_areas.pg.sql',
+  '00_normalization_schema.pg.sql', // [Phase 1] Create projects & raw data tables
   'tree_species.pg.sql',
   'species_region_score.pg.sql',
   'tree_carbon_data.pg.sql',
