@@ -12,6 +12,15 @@ const {
 
 const app = express();
 
+// [DEBUG] Print package.json content to verify start script update
+try {
+    const packageJson = require('./package.json');
+    console.log('[DEBUG] Loaded package.json version:', packageJson.version);
+    console.log('[DEBUG] Start script:', packageJson.scripts.start);
+} catch (e) {
+    console.error('[DEBUG] Failed to load package.json:', e.message);
+}
+
 // 設定信任反向代理，修復 express-rate-limit 在 Render.com 上的問題
 // 數字 1 表示信任第一個躍點的代理
 app.set('trust proxy', 1);
@@ -81,6 +90,13 @@ app.use((err, req, res, next) => {
 
 // --- 啟動伺服器 ---
 const PORT = process.env.PORT || 3000;
+
+// [DEBUG] Explicitly try to run migration if not running via start script
+if (process.env.NODE_ENV === 'production') {
+    console.log('[DEBUG] Production environment detected. Checking migration status...');
+    // 這裡不直接執行 migrate，避免與 start script 衝突，僅作檢查
+}
+
 app.listen(PORT, () => {
     console.log(`伺服器正在 http://localhost:${PORT} 上運行`);
     console.log('環境變數 DB_HOST:', process.env.DB_HOST ? '已設置' : '未設置');
