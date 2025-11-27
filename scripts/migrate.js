@@ -18,11 +18,11 @@ const migrationFiles = [
   '00_init_functions.pg.sql', // Initialize shared functions first
   'users.pg.sql',
   'project_areas.pg.sql',
-  '00_normalization_schema.pg.sql', // [Phase 1] Create projects & raw data tables
   'tree_species.pg.sql',
   'species_region_score.pg.sql',
   'tree_carbon_data.pg.sql',
   'tree_survey.pg.sql', // Structure only
+  '00_normalization_schema.pg.sql', // [Moved] Run AFTER tree_survey is created
   'tree_management_actions.pg.sql',
   'chat_logs.pg.sql', // 新增 chat_logs 表格
   'tree_knowledge_embeddings_v2.pg.sql' // 新增 AI 知識庫表格

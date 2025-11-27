@@ -52,12 +52,6 @@ CREATE INDEX IF NOT EXISTS idx_raw_device_sn ON tree_measurement_raw(device_sn);
 CREATE INDEX IF NOT EXISTS idx_raw_measured_at ON tree_measurement_raw(measured_at);
 
 -- Add project_id to tree_survey (Migration Target)
--- We use DO block to safely add column if not exists
-DO $$
-BEGIN
-    IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name = 'tree_survey' AND column_name = 'project_id') THEN
-        ALTER TABLE tree_survey ADD COLUMN project_id INTEGER REFERENCES projects(id) ON DELETE SET NULL;
-        CREATE INDEX idx_tree_survey_project_id ON tree_survey(project_id);
-    END IF;
-END $$;
-
+-- Simplified: Use standard PostgreSQL syntax directly
+ALTER TABLE tree_survey ADD COLUMN IF NOT EXISTS project_id INTEGER REFERENCES projects(id) ON DELETE SET NULL;
+CREATE INDEX IF NOT EXISTS idx_tree_survey_project_id ON tree_survey(project_id);
