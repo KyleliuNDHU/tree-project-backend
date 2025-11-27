@@ -109,6 +109,7 @@ async function migrate() {
     await client.query(`SELECT setval(pg_get_serial_sequence('tree_survey', 'id'), COALESCE(MAX(id), 1), true) FROM tree_survey;`);
 const populateKnowledge = require('./populate_knowledge'); // Import the knowledge population script
 const generateEmbeddings = require('./generateEmbeddings'); // Import the advanced embedding generation script
+const populateScores = require('./populateSpeciesRegionScore'); // Import the region score population script
 
 // ... (existing code)
 
@@ -124,6 +125,9 @@ const generateEmbeddings = require('./generateEmbeddings'); // Import the advanc
         console.log('Checking/Generating advanced knowledge embeddings from DB...');
         // Only run this if you are sure it won't timeout, or if you have optimized generateEmbeddings to be incremental
         await generateEmbeddings();
+
+        console.log('Calculating/Populating species region scores...');
+        await populateScores();
     } catch (kErr) {
         console.error('Warning: Knowledge population/generation failed, but continuing migration:', kErr);
     }

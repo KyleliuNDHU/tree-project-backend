@@ -1,13 +1,5 @@
-require('dotenv').config({ path: '../.env' }); // 指定 .env 檔案的路徑
-const mysql = require('mysql');
-
-// 資料庫連接設定
-const db = mysql.createConnection({
-  host: process.env.DB_HOST,
-  user: process.env.DB_USER,
-  password: process.env.DB_PASSWORD,
-  database: process.env.DB_NAME
-});
+// require('dotenv').config({ path: '../.env' }); // Removed to use centralized config
+const db = require('../config/db'); // *** Changed to use pg pool ***
 
 // Enum 到分數的映射
 const carbonEfficiencyScores = {
@@ -31,7 +23,7 @@ const growthRateScores = {
 const ecologicalValueScores = {
   '極高': 0.5,
   '高': 0.25,
-  '中高': 0.15, // 新增 '中高' 的評分
+  '中高': 0.15, 
   '中等': 0,
   '中低': -0.25,
   '低': -0.5
@@ -39,27 +31,15 @@ const ecologicalValueScores = {
 
 
 async function populateScores() {
+  const client = await db.pool.connect();
   try {
-    // await db.connect(); // connect 方法不返回 Promise，應使用回調或事件
-    await new Promise((resolve, reject) => {
-        db.connect(err => {
-            if (err) return reject(err);
-            resolve();
-        });
-    });
-    console.log('已連接到資料庫');
+    console.log('已連接到資料庫 (PG)');
 
     // 1. 清空舊資料
-    await new Promise((resolve, reject) => {
-      db.query('DELETE FROM species_region_score', (err, result) => {
-        if (err) return reject(err);
+    await client.query('DELETE FROM species_region_score');
         console.log('已清空 species_region_score 表格');
-        resolve(result);
-      });
-    });
 
     // 2. 讀取 tree_carbon_data 並 JOIN tree_species 以獲取正確的 species_id (varchar)
-    //    在 JOIN 條件中指定校對規則以避免 ER_CANT_AGGREGATE_2COLLATIONS 錯誤
     const speciesDataQuery = `
       SELECT 
         tcd.*, 
@@ -67,14 +47,11 @@ async function populateScores() {
       FROM 
         tree_carbon_data tcd
       JOIN 
-        tree_species ts ON tcd.common_name_zh = ts.name COLLATE utf8mb4_unicode_ci;
-    `;
-    const speciesData = await new Promise((resolve, reject) => {
-      db.query(speciesDataQuery, (err, results) => {
-        if (err) return reject(err);
-        resolve(results);
-      });
-    });
+        tree_species ts ON tcd.common_name_zh = ts.name;
+    `; // Removed COLLATE utf8mb4_unicode_ci as PG usually handles utf8 fine, but if collation issues arise, adjust DB
+    
+    const speciesResult = await client.query(speciesDataQuery);
+    const speciesData = speciesResult.rows;
 
     console.log(`從 tree_carbon_data 和 tree_species 讀取到 ${speciesData.length} 筆有效的樹種資料`);
 
@@ -111,19 +88,10 @@ async function populateScores() {
           // 將評分限制在 1-5 之間，並四捨五入到小數點後一位
           let finalScore = Math.round(Math.max(1, Math.min(5, score)) * 10) / 10;
 
-          // 插入資料庫
-          const insertQuery = 'INSERT INTO species_region_score (species_id, region_code, score) VALUES (?, ?, ?)';
-          await new Promise((resolve, reject) => {
-            db.query(insertQuery, [speciesVarcharId, region.code, finalScore], (err, result) => {
-              if (err) {
-                // 即使有錯誤，也打印 speciesVarcharId 以便追蹤
-                console.error(`插入錯誤: species_id (varchar)=${speciesVarcharId}, tree_carbon_data.id=${species.id}, region_code=${region.code}`, err.message);
-                return reject(err); 
-              }
+          // 插入資料庫 (PG parameter syntax $1, $2, $3)
+          const insertQuery = 'INSERT INTO species_region_score (species_id, region_code, score) VALUES ($1, $2, $3)';
+          await client.query(insertQuery, [speciesVarcharId, region.code, finalScore]);
               insertedCount++;
-              resolve(result);
-            });
-          });
         }
       }
     }
@@ -133,13 +101,16 @@ async function populateScores() {
   } catch (error) {
     console.error('填充 species_region_score 時發生錯誤:', error);
   } finally {
-    if (db && db.state !== 'disconnected') {
-        db.end(err => {
-            if(err) console.error('關閉資料庫連接時發生錯誤:', err);
-            else console.log('資料庫連接已關閉');
-        });
+    client.release();
+    if (require.main === module) {
+        db.pool.end();
     }
   }
 }
 
+if (require.main === module) {
 populateScores(); 
+}
+
+module.exports = populateScores; 
+// populateScores(); // Removed automatic execution on require to prevent double run when imported by migrate.js 

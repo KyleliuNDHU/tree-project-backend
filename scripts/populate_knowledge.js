@@ -52,7 +52,7 @@ async function populateKnowledge() {
             (source_type, internal_source_record_id, text_content, summary_cn, embedding, updated_at,
              original_source_title, original_source_author, original_source_publication_year,
              original_source_url_or_doi, original_source_type_detailed, keywords, confidence_score) 
-            VALUES ($1, $2, $3, $4, $5, NOW(), $6, $7, $8, $9, $10, $11, $12, $13)
+            VALUES ($1, $2, $3, $4, $5, NOW(), $6, $7, $8, $9, $10, $11, $12)
           `;
 
           await client.query(insertQuery, [

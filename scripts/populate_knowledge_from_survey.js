@@ -6,8 +6,9 @@ async function processTreeSurveyData() {
     console.log('開始處理 tree_survey 數據並填充到知識庫 (優化版)...');
 
     try {
-        // 使用 db.query 函數，它直接返回結果 rows
-        const rows = await db.query('SELECT * FROM tree_survey'); 
+        // 使用 db.query 函數，它直接返回結果对象，包含 rows 屬性
+        const result = await db.query('SELECT * FROM tree_survey'); 
+        const rows = result.rows;
 
         if (!rows || typeof rows.length === 'undefined') {
              console.error('從資料庫讀取數據失敗，未返回有效的 rows 陣列。');
@@ -75,18 +76,47 @@ async function processTreeSurveyData() {
                 last_verified_at: new Date().toISOString().slice(0, 19).replace('T', ' ')
             };
             
-            const [existingRows] = await db.query(
-                'SELECT id FROM tree_knowledge_embeddings_v2 WHERE internal_source_table_name = ? AND internal_source_record_id = ? AND source_type = ?',
+            const existingResult = await db.query(
+                'SELECT id FROM tree_knowledge_embeddings_v2 WHERE internal_source_table_name = $1 AND internal_source_record_id = $2 AND source_type = $3',
                 [knowledgeEntry.internal_source_table_name, knowledgeEntry.internal_source_record_id, knowledgeEntry.source_type] // 加入 source_type 確保唯一性
             );
-            const existing = Array.isArray(existingRows) ? existingRows : []; // 確保 existing 是陣列
+            const existing = existingResult.rows;
 
             if (existing.length > 0) {
                 console.log(`更新 tree_survey ID: ${row.id} 的知識庫記錄 (知識庫 ID: ${existing[0].id})`);
-                await db.query('UPDATE tree_knowledge_embeddings_v2 SET ? WHERE id = ?', [knowledgeEntry, existing[0].id]);
+                // 構建 UPDATE 查詢
+                const updateQuery = `
+                    UPDATE tree_knowledge_embeddings_v2 
+                    SET text_content = $1, summary_cn = $2, embedding = $3, 
+                        original_source_title = $4, original_source_author = $5, 
+                        original_source_publication_year = $6, keywords = $7, 
+                        confidence_score = $8, last_verified_at = $9 
+                    WHERE id = $10
+                `;
+                await db.query(updateQuery, [
+                    knowledgeEntry.text_content, knowledgeEntry.summary_cn, knowledgeEntry.embedding,
+                    knowledgeEntry.original_source_title, knowledgeEntry.original_source_author,
+                    knowledgeEntry.original_source_publication_year, knowledgeEntry.keywords,
+                    knowledgeEntry.confidence_score, knowledgeEntry.last_verified_at,
+                    existing[0].id
+                ]);
             } else {
                 console.log(`插入 tree_survey ID: ${row.id} 到知識庫`);
-                await db.query('INSERT INTO tree_knowledge_embeddings_v2 SET ?', knowledgeEntry);
+                // 構建 INSERT 查詢
+                const insertQuery = `
+                    INSERT INTO tree_knowledge_embeddings_v2 
+                    (text_content, summary_cn, embedding, source_type, internal_source_table_name, 
+                     internal_source_record_id, original_source_title, original_source_author, 
+                     original_source_publication_year, keywords, confidence_score, last_verified_at)
+                    VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
+                `;
+                await db.query(insertQuery, [
+                    knowledgeEntry.text_content, knowledgeEntry.summary_cn, knowledgeEntry.embedding,
+                    knowledgeEntry.source_type, knowledgeEntry.internal_source_table_name,
+                    knowledgeEntry.internal_source_record_id, knowledgeEntry.original_source_title,
+                    knowledgeEntry.original_source_author, knowledgeEntry.original_source_publication_year,
+                    knowledgeEntry.keywords, knowledgeEntry.confidence_score, knowledgeEntry.last_verified_at
+                ]);
             }
             console.log(`已處理 tree_survey ID: ${row.id} - ${row.樹種名稱}`);
         }
