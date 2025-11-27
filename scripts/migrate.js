@@ -124,7 +124,7 @@ async function migrate() {
 
 // Allow running directly or importing
 if (require.main === module) {
-    migrate();
+migrate();
 }
 
 module.exports = migrate;

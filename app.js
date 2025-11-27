@@ -4,7 +4,7 @@ const cors = require('cors');
 const helmet = require('helmet');
 const path = require('path');
 const { apiLimiter, loginLimiter } = require('./middleware/rateLimiter');
-const {
+const { 
     cleanupUnusedProjectAreas, 
     cleanupUnusedSpecies, 
     cleanupOrphanedPlaceholders 
