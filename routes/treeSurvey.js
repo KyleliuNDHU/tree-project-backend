@@ -196,6 +196,12 @@ router.get('/by_area/:areaName', async (req, res) => {
     }
 });
 
+// --- Batch Import Route (v2) ---
+router.post('/batch_import', treeSurveyBatchController.batchImportTrees);
+
+// --- Single Create Route (v2) - For manual input with server-side ID generation ---
+router.post('/create_v2', treeSurveyCreateController.createTreeV2);
+
 // 新增樹木資料
 router.post('/', async (req, res) => {
     const {
@@ -246,6 +252,9 @@ router.post('/', async (req, res) => {
         res.status(500).json({ success: false, message: '資料庫插入錯誤' });
     }
 });
+
+// --- Single Update Route (v2) ---
+router.put('/update_v2/:id', treeSurveyUpdateController.updateTreeV2);
 
 // 編輯樹木資料
 router.put('/:id', async (req, res) => {
@@ -305,28 +314,6 @@ router.put('/:id', async (req, res) => {
 });
 
 
-// 刪除樹木資料
-router.delete('/:id', async (req, res) => {
-    const { id } = req.params;
-    try {
-        const { rowCount } = await db.query('DELETE FROM tree_survey WHERE id = $1', [id]);
-        if (rowCount > 0) {
-            res.json({ success: true, message: '樹木資料刪除成功' });
-
-            // 在回應發送後，異步執行清理任務
-            // "Fire-and-forget"
-            cleanupUnusedSpecies();
-            cleanupUnusedProjectAreas();
-
-        } else {
-            res.status(404).json({ success: false, message: '找不到指定的樹木資料' });
-        }
-    } catch (err) {
-        console.error('刪除樹木資料錯誤:', err);
-        res.status(500).json({ success: false, message: '刪除樹木資料失敗' });
-    }
-});
-
 // [NEW] 刪除指定的佔位樹木記錄
 router.delete('/placeholder/:id', async (req, res) => {
     const { id } = req.params;
@@ -347,6 +334,28 @@ router.delete('/placeholder/:id', async (req, res) => {
     } catch (err) {
         console.error(`刪除佔位紀錄 (ID: ${id}) 錯誤:`, err);
         res.status(500).json({ success: false, message: '刪除佔位紀錄時發生錯誤' });
+    }
+});
+
+// 刪除樹木資料
+router.delete('/:id', async (req, res) => {
+    const { id } = req.params;
+    try {
+        const { rowCount } = await db.query('DELETE FROM tree_survey WHERE id = $1', [id]);
+        if (rowCount > 0) {
+            res.json({ success: true, message: '樹木資料刪除成功' });
+
+            // 在回應發送後，異步執行清理任務
+            // "Fire-and-forget"
+            cleanupUnusedSpecies();
+            cleanupUnusedProjectAreas();
+
+        } else {
+            res.status(404).json({ success: false, message: '找不到指定的樹木資料' });
+        }
+    } catch (err) {
+        console.error('刪除樹木資料錯誤:', err);
+        res.status(500).json({ success: false, message: '刪除樹木資料失敗' });
     }
 });
 
@@ -539,14 +548,5 @@ router.get('/template', (req, res) => {
     });
 });
 
-
-// --- Batch Import Route (v2) ---
-router.post('/batch_import', treeSurveyBatchController.batchImportTrees);
-
-// --- Single Create Route (v2) - For manual input with server-side ID generation ---
-router.post('/create_v2', treeSurveyCreateController.createTreeV2);
-
-// --- Single Update Route (v2) ---
-router.put('/update_v2/:id', treeSurveyUpdateController.updateTreeV2);
 
 module.exports = router;
