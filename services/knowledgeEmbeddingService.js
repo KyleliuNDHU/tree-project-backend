@@ -62,81 +62,98 @@ async function getSimilarPassages(queryText, topN = 5, similarityThreshold = 0.5
         }
         const queryEmbedding = queryEmbeddingResponse.data[0].embedding;
 
-        const sql = `
-            SELECT 
-                id, text_content, summary_cn, embedding, source_type, 
-                internal_source_table_name, internal_source_record_id,
-                original_source_title, original_source_author,
-                original_source_publication_year, original_source_url_or_doi,
-                original_source_type_detailed, keywords, confidence_score,
-                last_verified_at
+        // 優化：分兩步查詢。
+        // 第一步：只查詢 ID 和 Embedding，避免一次性加載大量文本導致內存溢出 (OOM)。
+        const embeddingSql = `
+            SELECT id, embedding, internal_source_record_id
             FROM tree_knowledge_embeddings_v2
         `;
         
-        const { rows: knowledgeEntries } = await db.query(sql); 
+        const { rows: embeddingEntries } = await db.query(embeddingSql); 
 
-        if (!knowledgeEntries || knowledgeEntries.length === 0) {
+        if (!embeddingEntries || embeddingEntries.length === 0) {
             console.log('[KnowledgeService] 資料庫中沒有知識片段。');
             return [];
         }
         
-        const passagesWithSimilarity = knowledgeEntries.map(entry => {
+        // 在內存中計算相似度 (僅保留 ID 和 分數)
+        const scores = [];
+        
+        for (const entry of embeddingEntries) {
             let dbEmbedding;
             try {
                 if (entry.embedding instanceof Buffer) {
                     dbEmbedding = JSON.parse(entry.embedding.toString());
                 } else if (typeof entry.embedding === 'string') { 
                     dbEmbedding = JSON.parse(entry.embedding);
+                } else if (Array.isArray(entry.embedding)) {
+                    // 如果 pg driver 自動解析了 json
+                    dbEmbedding = entry.embedding;
                 } else {
-                    return null; 
+                    continue; 
                 }
             } catch (e) {
-                console.error(`[KnowledgeService] 解析知識片段 (ID: ${entry.id}) 的 embedding 時發生錯誤:`, e);
-                return null;
+                // 靜默失敗個別錯誤，避免日誌爆炸
+                continue;
             }
 
-            if (!dbEmbedding || !Array.isArray(dbEmbedding) || dbEmbedding.some(isNaN)) {
-                return null;
+            if (!dbEmbedding || !Array.isArray(dbEmbedding)) {
+                continue;
             }
 
             const similarity = cosineSimilarity(queryEmbedding, dbEmbedding);
+            if (similarity >= similarityThreshold) {
+                scores.push({
+                    id: entry.id,
+                    score: similarity,
+                    internal_source_record_id: entry.internal_source_record_id
+                });
+            }
+        }
+
+        // 排序並取 Top N
+        scores.sort((a, b) => b.score - a.score);
+        const topScores = scores.slice(0, topN);
+
+        if (topScores.length === 0) {
+            console.log(`[KnowledgeService] 沒有找到相似度高於 ${similarityThreshold} 的片段。`);
+            return [];
+        }
+
+        // 第二步：根據 ID 獲取詳細內容
+        const topIds = topScores.map(s => s.id);
+        const contentSql = `
+            SELECT 
+                id, text_content, summary_cn, source_type, 
+                internal_source_table_name, internal_source_record_id,
+                original_source_title, original_source_author,
+                original_source_publication_year, original_source_url_or_doi,
+                original_source_type_detailed, keywords, confidence_score,
+                last_verified_at
+            FROM tree_knowledge_embeddings_v2
+            WHERE id IN (${topIds.join(',')})
+        `;
+
+        const { rows: details } = await db.query(contentSql);
+
+        // 合併分數與詳細內容
+        const finalResults = details.map(detail => {
+            const scoreEntry = topScores.find(s => s.id === detail.id);
             return {
-                id: entry.id,
-                text_content: entry.text_content,
-                summary_cn: entry.summary_cn,
-                source_type: entry.source_type,
-                internal_source_table_name: entry.internal_source_table_name,
-                internal_source_record_id: entry.internal_source_record_id,
-                original_source_title: entry.original_source_title,
-                original_source_author: entry.original_source_author,
-                original_source_publication_year: entry.original_source_publication_year,
-                original_source_url_or_doi: entry.original_source_url_or_doi,
-                original_source_type_detailed: entry.original_source_type_detailed,
-                keywords: entry.keywords,
-                confidence_score: entry.confidence_score,
-                last_verified_at: entry.last_verified_at,
-                score: similarity
+                ...detail,
+                score: scoreEntry ? scoreEntry.score : 0
             };
-        }).filter(p => p !== null); 
+        });
 
-        if (passagesWithSimilarity.length > 0) {
-            console.log(`[KnowledgeService] 計算出的相似度分數 (未過濾，僅顯示 > 0.3):`);
-            passagesWithSimilarity.forEach(p => {
-                if (p.score > 0.3) { 
-                    console.log(`  - ID: ${p.id}, 原始source_id: ${p.internal_source_record_id}, 標題: ${(p.original_source_title || p.summary_cn || 'N/A').substring(0,30)}, 相似度: ${p.score.toFixed(4)}`);
-                }
-            });
-        }
-        const filteredPassages = passagesWithSimilarity.filter(p => p.score >= similarityThreshold);
-        filteredPassages.sort((a, b) => b.score - a.score);
-        const topPassages = filteredPassages.slice(0, topN);
+        // 再次排序確保順序正確 (因為 SQL IN 不保證順序)
+        finalResults.sort((a, b) => b.score - a.score);
 
-        console.log(`[KnowledgeService] 檢索到 ${topPassages.length} 個相關知識片段 (閾值: ${similarityThreshold}, TopN: ${topN})。`);
-        if (topPassages.length > 0) {
+        console.log(`[KnowledgeService] 檢索到 ${finalResults.length} 個相關知識片段 (閾值: ${similarityThreshold}, TopN: ${topN})。`);
+        if (finalResults.length > 0) {
             console.log('[KnowledgeService] 最終選取的片段 (部分資訊):');
-            topPassages.forEach(p => console.log(`  - ID: ${p.id}, 原始source_id: ${p.internal_source_record_id}, 相似度: ${p.score.toFixed(4)}, 標題: ${(p.original_source_title || p.summary_cn || 'N/A').substring(0,30)}...`));
+            finalResults.forEach(p => console.log(`  - ID: ${p.id}, 原始source_id: ${p.internal_source_record_id}, 相似度: ${p.score.toFixed(4)}, 標題: ${(p.original_source_title || p.summary_cn || 'N/A').substring(0,30)}...`));
         }
-        return topPassages;
+        return finalResults;
 
     } catch (error) {
         console.error('[KnowledgeService] getSimilarPassages 過程中發生錯誤:', error);
