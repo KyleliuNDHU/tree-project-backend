@@ -81,11 +81,13 @@ router.get('/export/pdf', async (req, res) => {
         const { rows } = await db.query(sql);
         const doc = new PDFDocument({ margin: 30, size: 'A4' });
 
-        const fontPath = path.join(__dirname, '../Noto_Sans_TC/NotoSansTC-Regular.otf');
+        const fontPath = path.join(__dirname, '../Noto_Sans_TC/static/NotoSansTC-Regular.ttf');
         if (fs.existsSync(fontPath)) {
             doc.font(fontPath);
         } else {
             console.error('中文字型檔案未找到:', fontPath);
+            // Fallback to standard font if custom font fails (Chinese will still be garbled but at least it runs)
+            console.warn('使用系統預設字型 (中文將無法顯示)');
         }
 
         const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
