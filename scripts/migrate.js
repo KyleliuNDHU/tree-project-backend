@@ -107,8 +107,21 @@ async function migrate() {
     // [FIX] Reset the primary key sequence for tree_survey table
     console.log('Resetting the primary key sequence for tree_survey...');
     await client.query(`SELECT setval(pg_get_serial_sequence('tree_survey', 'id'), COALESCE(MAX(id), 1), true) FROM tree_survey;`);
+const populateKnowledge = require('./populate_knowledge'); // Import the knowledge population script
+
+// ... (existing code)
+
     console.log('Sequence reset successfully.');
 
+    // [New] Populate knowledge base if needed
+    // Note: This is a potentially long-running operation, so we run it here but with awareness
+    // The populate script has internal checks to skip if already populated.
+    try {
+        console.log('Checking/Populating knowledge base...');
+        await populateKnowledge(); 
+    } catch (kErr) {
+        console.error('Warning: Knowledge population failed, but continuing migration:', kErr);
+    }
 
     console.log('Database migration completed successfully!');
   } catch (error) {
