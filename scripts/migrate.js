@@ -115,8 +115,16 @@ async function migrate() {
     process.exit(1); // Exit with an error code
   } finally {
     client.release();
-    pool.end();
+    // pool.end(); // Don't end the pool here if we want to reuse it or if app.js handles DB connections
+    // But since migrate.js uses its own pool, we should end it.
+    // ideally, migrate should accept a client or pool.
+    await pool.end();
   }
 }
 
-migrate();
+// Allow running directly or importing
+if (require.main === module) {
+    migrate();
+}
+
+module.exports = migrate;
