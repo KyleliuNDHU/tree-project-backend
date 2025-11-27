@@ -153,6 +153,25 @@ async function processTreeCarbonData() {
                 try { global.gc(); } catch (e) { console.log("GC unavailable"); }
             }
 
+            // [優化] 檢查是否已經生成過該樹種的 AI 知識
+            // 我們檢查 tree_knowledge_embeddings_v2 中是否有該樹種 ID 且來源為 INTERNAL_DB_TREE_CARBON 的記錄
+            // 並且標題包含 "樹種詳解" (這是此腳本特有的標題特徵)
+            const checkExistQuery = `
+                SELECT COUNT(*) as count 
+                FROM tree_knowledge_embeddings_v2 
+                WHERE internal_source_table_name = 'tree_carbon_data' 
+                  AND internal_source_record_id LIKE $1
+                  AND original_source_title LIKE '樹種詳解:%'
+            `;
+            // record_id 格式為 "id" 或 "id_chunk_x"，所以用 LIKE 'id%'
+            const existResult = await db.query(checkExistQuery, [`${species.id}%`]);
+            const existCount = parseInt(existResult.rows[0].count, 10);
+
+            if (existCount > 0) {
+                console.log(`[Skip] 樹種 ${species.common_name_zh} (ID: ${species.id}) 已有 ${existCount} 條 AI 知識片段，跳過生成。`);
+                continue;
+            }
+
             let prompt = `請你扮演一位資深的林業科學家和編輯。根據以下提供的關於某一樹種的結構化數據，請撰寫一段全面而詳細的介紹文本 (約 400-600 字)。
 這段文本將被用於一個知識庫，以輔助 AI 聊天機器人回答相關問題。請確保文本內容科學、準確、流暢，並將提供的數據點自然地融入到描述中，並進行適當的關聯性思考和擴展。
 
@@ -311,7 +330,7 @@ async function processTreeCarbonData() {
 }
 
 if (require.main === module) {
-    processTreeCarbonData();
+processTreeCarbonData(); 
 }
 
 module.exports = processTreeCarbonData; 
