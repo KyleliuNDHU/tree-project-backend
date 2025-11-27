@@ -139,18 +139,21 @@ async function processTreeSurveyData() {
     } catch (error) {
         console.error('處理 tree_survey 數據時發生錯誤:', error);
     } finally {
-        if (db.pool && typeof db.pool.end === 'function') {
-            db.pool.end(err => { // 使用回調函數處理關閉錯誤
-                if (err) {
-                    console.error('關閉資料庫連接池時發生錯誤:', err);
-                } else {
-                    console.log('資料庫連接池已關閉。');
-                }
+        // 只有在作為腳本直接執行時才關閉連接池，避免作為模組引入時關閉共享的 pool
+        if (require.main === module && db.pool && typeof db.pool.end === 'function') {
+            db.pool.end(err => { 
+                if (err) console.error('關閉資料庫連接池時發生錯誤:', err);
+                else console.log('資料庫連接池已關閉。');
             });
-        } else {
-            console.log('db.pool.end 不是一個函數，無法關閉連接池。');
         }
     }
 }
 
+// 只有在直接執行腳本時才調用函數
+if (require.main === module) {
+    processTreeSurveyData();
+}
+
+// 導出函數供其他模組使用 (如 API admin endpoint)
+module.exports = processTreeSurveyData; 
 processTreeSurveyData(); 

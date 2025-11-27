@@ -300,7 +300,8 @@ async function processTreeCarbonData() {
     } catch (error) {
         console.error('處理 tree_carbon_data 時發生錯誤:', error);
     } finally {
-        if (db.pool && typeof db.pool.end === 'function') {
+        // 只有在作為腳本直接執行時才關閉連接池
+        if (require.main === module && db.pool && typeof db.pool.end === 'function') {
             db.pool.end(err => { 
                 if (err) console.error('關閉資料庫連接池時發生錯誤:', err);
                 else console.log('資料庫連接池已關閉。');
@@ -309,4 +310,8 @@ async function processTreeCarbonData() {
     }
 }
 
-processTreeCarbonData(); 
+if (require.main === module) {
+    processTreeCarbonData();
+}
+
+module.exports = processTreeCarbonData; 
