@@ -9,6 +9,7 @@ const fs = require('fs');
 const { cleanupUnusedSpecies, cleanupUnusedProjectAreas } = require('../utils/cleanup');
 const treeSurveyBatchController = require('../controllers/treeSurveyBatchController');
 const treeSurveyCreateController = require('../controllers/treeSurveyCreateController');
+const treeSurveyUpdateController = require('../controllers/treeSurveyUpdateController'); // 引入新的 Update Controller
 
 // --- Multer 設定 (用於檔案上傳) ---
 const storage = multer.diskStorage({
@@ -75,6 +76,46 @@ router.get('/', async (req, res) => {
         res.json({ success: true, data: rows });
     } catch (err) {
         console.error('獲取所有樹木資料錯誤:', err);
+        res.status(500).json({ success: false, message: '查詢資料庫時發生錯誤' });
+    }
+});
+
+// [V2 NEW] 根據 ID 獲取單筆樹木資料
+router.get('/by_id/:id', async (req, res) => {
+    const { id } = req.params;
+    try {
+        const sql = `
+            SELECT 
+                id,
+                project_location AS "專案區位",
+                project_code AS "專案代碼",
+                project_name AS "專案名稱",
+                system_tree_id AS "系統樹木",
+                project_tree_id AS "專案樹木",
+                species_id AS "樹種編號",
+                species_name AS "樹種名稱",
+                x_coord AS "X坐標",
+                y_coord AS "Y坐標",
+                status AS "狀況",
+                notes AS "註記",
+                tree_notes AS "樹木備註",
+                tree_height_m AS "樹高（公尺）",
+                dbh_cm AS "胸徑（公分）",
+                survey_notes AS "調查備註",
+                survey_time AS "調查時間",
+                carbon_storage AS "碳儲存量",
+                carbon_sequestration_per_year AS "推估年碳吸存量"
+            FROM tree_survey 
+            WHERE id = $1
+        `;
+        const { rows } = await db.query(sql, [id]);
+        if (rows.length > 0) {
+            res.json({ success: true, data: rows[0] });
+        } else {
+            res.status(404).json({ success: false, message: '找不到指定的樹木資料' });
+        }
+    } catch (err) {
+        console.error(`獲取樹木 ID [${id}] 資料錯誤:`, err);
         res.status(500).json({ success: false, message: '查詢資料庫時發生錯誤' });
     }
 });
@@ -499,10 +540,13 @@ router.get('/template', (req, res) => {
 });
 
 
-module.exports = router;
-
 // --- Batch Import Route (v2) ---
 router.post('/batch_import', treeSurveyBatchController.batchImportTrees);
 
 // --- Single Create Route (v2) - For manual input with server-side ID generation ---
 router.post('/create_v2', treeSurveyCreateController.createTreeV2);
+
+// --- Single Update Route (v2) ---
+router.put('/update_v2/:id', treeSurveyUpdateController.updateTreeV2);
+
+module.exports = router;
