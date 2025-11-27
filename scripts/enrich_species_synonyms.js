@@ -82,7 +82,7 @@ async function enrichSpeciesSynonyms() {
                 // 清理可能存在的 markdown 標記
                 content = content.replace(/```json/g, '').replace(/```/g, '').trim();
                 
-                const enrichedData = JSON.parse(content);
+                let enrichedData = JSON.parse(content);
 
                 // 3. 為每個擴充後的數據生成 Embedding 並存入知識庫
                 for (const item of enrichedData) {
