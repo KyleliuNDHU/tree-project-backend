@@ -33,11 +33,20 @@ async function enrichSpeciesSynonyms() {
 
         console.log(`找到 ${speciesList.length} 個樹種需要處理。`);
 
-        // 2. 分批處理，避免 LLM Token 爆炸
-        const BATCH_SIZE = 5;
+        // 2. 分批處理，避免 LLM Token 爆炸與記憶體溢出
+        const BATCH_SIZE = 3; // 降低批次大小，減輕記憶體壓力 (原為 5)
+        
         for (let i = 0; i < speciesList.length; i += BATCH_SIZE) {
             const batch = speciesList.slice(i, i + BATCH_SIZE);
-            console.log(`正在處理批次: ${batch.join(', ')}`);
+            console.log(`[${Math.floor(i/BATCH_SIZE) + 1}/${Math.ceil(speciesList.length/BATCH_SIZE)}] 正在處理批次: ${batch.join(', ')}`);
+
+            // 手動觸發 Garbage Collection (如果 Node 啟動時帶有 --expose-gc)
+            if (global.gc) {
+                global.gc();
+            }
+            
+            // 讓 Event Loop 喘息，釋放上一批次的資源
+            await new Promise(resolve => setTimeout(resolve, 2000));
 
             const prompt = `
             請作為一位植物學家與翻譯專家。我會給你一組樹木的中文俗名。
@@ -77,43 +86,59 @@ async function enrichSpeciesSynonyms() {
 
                 // 3. 為每個擴充後的數據生成 Embedding 並存入知識庫
                 for (const item of enrichedData) {
-                    // 構建豐富的索引文本
-                    // 格式：[索引] 相思樹 (Acacia confusa). EN: Taiwan Acacia. Alias: 台灣相思. Taxonomy: 豆科.
-                    const indexText = `[樹種索引] ${item.input_name} (${item.scientific_name}). 英文名: ${item.english_names}. 中文別名: ${item.chinese_aliases}. 分類: ${item.taxonomy}.`;
-                    
-                    console.log(`生成索引: ${indexText}`);
-                    
-                    const embeddingVector = await getEmbedding(indexText);
-                    const embeddingJson = JSON.stringify(embeddingVector);
+                    try {
+                        // 構建豐富的索引文本
+                        // 格式：[索引] 相思樹 (Acacia confusa). EN: Taiwan Acacia. Alias: 台灣相思. Taxonomy: 豆科.
+                        const indexText = `[樹種索引] ${item.input_name} (${item.scientific_name}). 英文名: ${item.english_names}. 中文別名: ${item.chinese_aliases}. 分類: ${item.taxonomy}.`;
+                        
+                        console.log(`生成索引: ${indexText.substring(0, 50)}...`);
+                        
+                        let embeddingVector = await getEmbedding(indexText);
+                        
+                        if (!embeddingVector || embeddingVector.length === 0) {
+                             console.warn(`Skipping ${item.input_name}: Embedding generation failed.`);
+                             continue;
+                        }
 
-                    // 存入 tree_knowledge_embeddings_v2
-                    // 使用特殊的 source_type 區分
-                    const insertQuery = `
-                        INSERT INTO tree_knowledge_embeddings_v2 
-                        (source_type, internal_source_record_id, text_content, summary_cn, embedding, 
-                         original_source_title, keywords, confidence_score, last_verified_at)
-                        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, NOW())
-                        ON CONFLICT (source_type, internal_source_record_id) 
-                        DO UPDATE SET 
-                            text_content = EXCLUDED.text_content,
-                            embedding = EXCLUDED.embedding,
-                            last_verified_at = NOW()
-                    `;
+                        const embeddingJson = JSON.stringify(embeddingVector);
+                        embeddingVector = null; // 明確釋放記憶體
 
-                    await db.query(insertQuery, [
-                        'SPECIES_SYNONYM_INDEX', // 特殊來源類型
-                        item.input_name,         // ID 使用中文名即可
-                        indexText,               // 完整文本作為內容
-                        `樹種多語言對照索引: ${item.input_name}`, // 摘要
-                        embeddingJson,
-                        `索引: ${item.input_name}`,
-                        `${item.input_name},${item.scientific_name},${item.english_names},${item.chinese_aliases}`, // 關鍵字
-                        10 // 給予極高的置信度，讓它在檢索時優先浮現
-                    ]);
+                        // 存入 tree_knowledge_embeddings_v2
+                        // 使用特殊的 source_type 區分
+                        const insertQuery = `
+                            INSERT INTO tree_knowledge_embeddings_v2 
+                            (source_type, internal_source_record_id, text_content, summary_cn, embedding, 
+                             original_source_title, keywords, confidence_score, last_verified_at)
+                            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, NOW())
+                            ON CONFLICT (source_type, internal_source_record_id) 
+                            DO UPDATE SET 
+                                text_content = EXCLUDED.text_content,
+                                embedding = EXCLUDED.embedding,
+                                last_verified_at = NOW()
+                        `;
+
+                        await db.query(insertQuery, [
+                            'SPECIES_SYNONYM_INDEX', // 特殊來源類型
+                            item.input_name,         // ID 使用中文名即可
+                            indexText,               // 完整文本作為內容
+                            `樹種多語言對照索引: ${item.input_name}`, // 摘要
+                            embeddingJson,
+                            `索引: ${item.input_name}`,
+                            `${item.input_name},${item.scientific_name},${item.english_names},${item.chinese_aliases}`, // 關鍵字
+                            10 // 給予極高的置信度，讓它在檢索時優先浮現
+                        ]);
+                    } catch (innerErr) {
+                        console.error(`處理單一項目失敗 (${item.input_name}):`, innerErr.message);
+                    }
                 }
+
+                enrichedData = null; // 釋放批次資料記憶體
+                content = null;      // 釋放 LLM 回應記憶體
 
             } catch (err) {
                 console.error(`批次處理失敗 (${batch.join(', ')}):`, err.message);
+                // 失敗後稍微暫停更久
+                await new Promise(resolve => setTimeout(resolve, 5000));
             }
         }
 
