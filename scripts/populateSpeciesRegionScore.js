@@ -85,8 +85,8 @@ async function populateScores() {
           score += growthRateScores[species.growth_rate] || 0;
           score += ecologicalValueScores[species.ecological_value] || 0;
           
-          // 將評分限制在 1-5 之間，並四捨五入到小數點後一位
-          let finalScore = Math.round(Math.max(1, Math.min(5, score)) * 10) / 10;
+          // 將評分限制在 1-5 之間，並四捨五入為整數 (DB schema expects SMALLINT)
+          let finalScore = Math.round(Math.max(1, Math.min(5, score)));
 
           // 插入資料庫 (PG parameter syntax $1, $2, $3)
           const insertQuery = 'INSERT INTO species_region_score (species_id, region_code, score) VALUES ($1, $2, $3)';
