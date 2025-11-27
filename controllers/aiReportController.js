@@ -5,9 +5,43 @@ const fs = require('fs');
 const path = require('path');
 const format = require('pg-format');
 
+// Simple in-memory cache
+const reportCache = new Map();
+const CACHE_DURATION = 30 * 60 * 1000; // 30 minutes
+
+// Helper to clean expired cache
+const cleanCache = () => {
+    const now = Date.now();
+    for (const [key, value] of reportCache.entries()) {
+        if (now - value.timestamp > CACHE_DURATION) {
+            reportCache.delete(key);
+        }
+    }
+};
+// Clean cache every 30 mins
+setInterval(cleanCache, CACHE_DURATION);
+
 // 生成 AI 永續報告
 exports.generateAIReport = async (req, res) => {
     try {
+        // Create a deterministic cache key from query parameters
+        const sortedParams = Object.keys(req.query).sort().reduce((acc, key) => {
+            acc[key] = req.query[key];
+            return acc;
+        }, {});
+        const cacheKey = JSON.stringify(sortedParams);
+
+        // Check cache
+        if (reportCache.has(cacheKey)) {
+            const cachedEntry = reportCache.get(cacheKey);
+            if (Date.now() - cachedEntry.timestamp < CACHE_DURATION) {
+                console.log('[AI Report] Serving from cache for key:', cacheKey);
+                return res.json(cachedEntry.data);
+            } else {
+                reportCache.delete(cacheKey);
+            }
+        }
+
         // 獲取過濾條件（如果有）
         const filters = req.query;
         let whereClauses = [];
@@ -156,14 +190,21 @@ exports.generateAIReport = async (req, res) => {
         // 生成 AI 分析報告
         const aiAnalysis = await generateAIAnalysis(dataForAI);
 
-        // --- 恢復原始程式碼 ---
-        res.json({
+        const responseData = {
             success: true,
             data: {
                 ...reportData, 
                 aiAnalysis
             }
+        };
+
+        // Update cache
+        reportCache.set(cacheKey, {
+            timestamp: Date.now(),
+            data: responseData
         });
+
+        res.json(responseData);
         
     } catch (error) {
         console.error('Error generating AI sustainability report:', error);
@@ -426,5 +467,5 @@ async function generateAIReportPDF(reportDataWithAI) {
     });
 }
 
-// 導出新的 PDF 生成函數，以便在 index.js 中使用
+// 導出新的 PDF 生成函數
 exports.generateAIReportPDF = generateAIReportPDF; 
