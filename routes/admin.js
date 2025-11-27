@@ -73,6 +73,15 @@ router.post('/run-script', adminAuth, async (req, res) => {
                 resultMessage = 'Species knowledge generation started in background (this may take a while).';
                 break;
 
+            case 'enrich_species_synonyms':
+                console.log('[Admin] Triggering enrich_species_synonyms...');
+                // Background execution for LLM-heavy task
+                runScriptInChildProcess('enrich_species_synonyms.js')
+                    .then(() => console.log('[Admin] enrich_species_synonyms completed.'))
+                    .catch(err => console.error('[Admin] enrich_species_synonyms failed:', err));
+                resultMessage = 'Species synonym enrichment started in background (this may take a while).';
+                break;
+
             default:
                 return res.status(400).json({ success: false, message: 'Unknown script name' });
         }

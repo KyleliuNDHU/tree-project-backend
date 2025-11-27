@@ -233,6 +233,11 @@ async function processTreeCarbonData() {
                 // 因為前面已經刪除了該樹種的所有舊片段，這裡總是執行插入
                 console.log(`插入樹種 ${species.common_name_zh} 的知識庫片段 ${i + 1} (Title: ${knowledgeEntry.original_source_title})`);
                 
+                // FIX: Make internal_source_record_id UNIQUE per chunk to satisfy unique constraint
+                // The unique constraint is (source_type, internal_source_record_id)
+                // Original ID "1" is used for multiple chunks, causing violation on 2nd chunk.
+                const uniqueChunkId = `${species.id}_chunk_${i + 1}`;
+
                 const insertQuery = `
                     INSERT INTO tree_knowledge_embeddings_v2 
                     (text_content, summary_cn, embedding, source_type, internal_source_table_name, 
@@ -247,7 +252,7 @@ async function processTreeCarbonData() {
                     knowledgeEntry.embedding,
                     knowledgeEntry.source_type,
                     knowledgeEntry.internal_source_table_name,
-                    knowledgeEntry.internal_source_record_id,
+                    uniqueChunkId, // Use the unique ID
                     knowledgeEntry.original_source_title,
                     knowledgeEntry.original_source_author,
                     knowledgeEntry.original_source_publication_year,
