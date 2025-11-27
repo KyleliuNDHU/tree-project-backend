@@ -382,7 +382,8 @@ async function generateAIReportPDF(reportDataWithAI) {
         doc.fontSize(14).text('2. 物種多樣性 (前5名)');
         if (speciesDiversity && speciesDiversity.length > 0) {
             speciesDiversity.slice(0, 5).forEach(s => {
-                doc.fontSize(11).text(`- ${s['樹種名稱']}: ${s.count} 棵 (${s.percentage ? parseFloat(s.percentage).toFixed(1) : 'N/A'}%)`);
+                const percentage = s.percentage ? parseFloat(s.percentage) : 0;
+                doc.fontSize(11).text(`- ${s['樹種名稱']}: ${s.count} 棵 (${percentage.toFixed(1)}%)`);
             });
         } else {
             doc.fontSize(11).text('無物種多樣性數據');
@@ -392,7 +393,8 @@ async function generateAIReportPDF(reportDataWithAI) {
         doc.fontSize(14).text('3. 健康狀況分佈');
         if (healthStatus && healthStatus.length > 0) {
             healthStatus.forEach(h => {
-                doc.fontSize(11).text(`- ${h.status}: ${h.count} 棵 (${h.percentage ? h.percentage.toFixed(1) : 'N/A'}%)`);
+                const percentage = h.percentage ? parseFloat(h.percentage) : 0;
+                doc.fontSize(11).text(`- ${h.status}: ${h.count} 棵 (${percentage.toFixed(1)}%)`);
             });
         } else {
             doc.fontSize(11).text('無健康狀況數據');
@@ -402,7 +404,8 @@ async function generateAIReportPDF(reportDataWithAI) {
         doc.fontSize(14).text('4. 徑級 (胸徑) 分佈');
         if (dbhDistribution && dbhDistribution.length > 0) {
             dbhDistribution.forEach(d => {
-                doc.fontSize(11).text(`- ${d.dbh_range}: ${d.count} 棵 (${d.percentage ? d.percentage.toFixed(1) : 'N/A'}%)`);
+                const percentage = d.percentage ? parseFloat(d.percentage) : 0;
+                doc.fontSize(11).text(`- ${d.dbh_range}: ${d.count} 棵 (${percentage.toFixed(1)}%)`);
             });
         } else {
             doc.fontSize(11).text('無徑級分佈數據');
