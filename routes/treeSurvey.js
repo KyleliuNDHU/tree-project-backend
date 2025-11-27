@@ -8,6 +8,7 @@ const path = require('path');
 const fs = require('fs');
 const { cleanupUnusedSpecies, cleanupUnusedProjectAreas } = require('../utils/cleanup');
 const treeSurveyBatchController = require('../controllers/treeSurveyBatchController');
+const treeSurveyCreateController = require('../controllers/treeSurveyCreateController');
 
 // --- Multer 設定 (用於檔案上傳) ---
 const storage = multer.diskStorage({
@@ -502,3 +503,6 @@ module.exports = router;
 
 // --- Batch Import Route (v2) ---
 router.post('/batch_import', treeSurveyBatchController.batchImportTrees);
+
+// --- Single Create Route (v2) - For manual input with server-side ID generation ---
+router.post('/create_v2', treeSurveyCreateController.createTreeV2);
