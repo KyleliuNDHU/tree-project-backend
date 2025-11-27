@@ -67,19 +67,21 @@ exports.batchImportTrees = async (req, res) => {
         // ---------------------------------------------------------
         
         // A. 系統樹木編號 (System ID)
-        // 鎖定 tree_survey 表以獲取當前最大 ID (防止並發衝突)
-        // 注意：在大流量下這可能會影響效能，但在樹木調查場景下是可以接受的
-        // 更好的做法是使用 Redis 或獨立的 Sequence Table，這裡採用簡單可靠的 MAX() + Lock 策略
+        // 使用 Advisory Lock (Key 1) 確保 System ID 生成的原子性
+        // 這會阻塞其他嘗試獲取 Key 1 鎖的事務，直到當前事務結束
+        await client.query('SELECT pg_advisory_xact_lock(1)'); 
+
         const sysIdRes = await client.query(`
             SELECT MAX(CAST(regexp_replace(system_tree_id, '[^0-9]', '', 'g') AS INTEGER)) as max_id 
             FROM tree_survey 
             WHERE system_tree_id ~ '^[A-Za-z]+-[0-9]+$' OR system_tree_id ~ '^[0-9]+$'
-            FOR UPDATE; -- Row-level lock on the max row (conceptually)
         `);
         let nextSysId = (sysIdRes.rows[0].max_id || 0) + 1;
 
         // B. 專案樹木編號 (Project ID)
         // 針對該專案代碼鎖定最大 ID
+        // 使用 Advisory Lock (Key 2) + ProjectCode Hash 確保專案內序列原子性
+        // 簡單起見，這裡我們複用 Key 1 的鎖定範圍 (因為 System ID 是全局的，鎖了它等於鎖了所有)，所以不需要額外鎖定
         let nextPrjId = 1;
         if (project_code) {
             const prjIdRes = await client.query(`
@@ -87,7 +89,6 @@ exports.batchImportTrees = async (req, res) => {
                 FROM tree_survey 
                 WHERE project_code = $1 
                 AND (project_tree_id ~ '^[A-Za-z]+-[0-9]+$' OR project_tree_id ~ '^[0-9]+$')
-                FOR UPDATE;
             `, [project_code]);
             nextPrjId = (prjIdRes.rows[0].max_id || 0) + 1;
         }
