@@ -48,8 +48,6 @@ async function processTreeSurveyData() {
             textContent += surveyTimeText + "\n";
             textContent += `估算的碳匯效益：此樹木的碳儲存量約為 ${row.碳儲存量 || 0} 公斤，推估的年碳吸存量為 ${row.推估年碳吸存量 || 0} 公斤/年。\n`;
 
-            const embeddingVector = await getEmbedding(textContent.substring(0, 8191));
-
             const keywordsArray = [
                 `樹木ID:${row.id}`,
                 row.專案區位,
@@ -64,7 +62,7 @@ async function processTreeSurveyData() {
             const knowledgeEntry = {
                 text_content: textContent,
                 summary_cn: `樹木ID ${row.id} (${row.樹種名稱 || '未知'}) 於 \"${row.專案區位 || '未知'}\" 的詳細調查記錄。樹高 ${row['樹高（公尺）'] || 0}m, 胸徑 ${row['胸徑（公分）'] || 0}cm。`,
-                embedding: JSON.stringify(embeddingVector),
+                // embedding: null, // Embedding generated later if needed
                 source_type: 'INTERNAL_DB_TREE_SURVEY',
                 internal_source_table_name: 'tree_survey',
                 internal_source_record_id: row.id.toString(),
@@ -77,13 +75,24 @@ async function processTreeSurveyData() {
             };
             
             const existingResult = await db.query(
-                'SELECT id FROM tree_knowledge_embeddings_v2 WHERE internal_source_table_name = $1 AND internal_source_record_id = $2 AND source_type = $3',
-                [knowledgeEntry.internal_source_table_name, knowledgeEntry.internal_source_record_id, knowledgeEntry.source_type] // 加入 source_type 確保唯一性
+                'SELECT id, text_content FROM tree_knowledge_embeddings_v2 WHERE internal_source_table_name = $1 AND internal_source_record_id = $2 AND source_type = $3',
+                [knowledgeEntry.internal_source_table_name, knowledgeEntry.internal_source_record_id, knowledgeEntry.source_type]
             );
             const existing = existingResult.rows;
 
             if (existing.length > 0) {
-                console.log(`更新 tree_survey ID: ${row.id} 的知識庫記錄 (知識庫 ID: ${existing[0].id})`);
+                // 檢查內容是否有變更
+                if (existing[0].text_content === knowledgeEntry.text_content) {
+                    console.log(`tree_survey ID: ${row.id} 內容未變更，跳過更新 (知識庫 ID: ${existing[0].id})`);
+                    continue; // 跳過本次迴圈，不執行 Embedding 與 Update
+                }
+
+                console.log(`更新 tree_survey ID: ${row.id} 的知識庫記錄 (知識庫 ID: ${existing[0].id}) - 內容已變更，重新生成 Embedding...`);
+                
+                // 內容有變更，生成新的 Embedding
+                const embeddingVector = await getEmbedding(textContent.substring(0, 8191));
+                knowledgeEntry.embedding = JSON.stringify(embeddingVector);
+
                 // 構建 UPDATE 查詢
                 const updateQuery = `
                     UPDATE tree_knowledge_embeddings_v2 
@@ -101,7 +110,12 @@ async function processTreeSurveyData() {
                     existing[0].id
                 ]);
             } else {
-                console.log(`插入 tree_survey ID: ${row.id} 到知識庫`);
+                console.log(`插入 tree_survey ID: ${row.id} 到知識庫 - 生成 Embedding...`);
+                
+                // 新記錄，生成 Embedding
+                const embeddingVector = await getEmbedding(textContent.substring(0, 8191));
+                knowledgeEntry.embedding = JSON.stringify(embeddingVector);
+
                 // 構建 INSERT 查詢
                 const insertQuery = `
                     INSERT INTO tree_knowledge_embeddings_v2 

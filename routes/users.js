@@ -105,10 +105,18 @@ router.post('/login', loginLimiter, async (req, res) => {
 // 取得使用者列表
 router.get('/users', async (req, res) => {
     try {
+        // [FIX] 明確轉換 is_active 為布林值 (true/false)，避免前端混淆
         const { rows } = await db.query('SELECT user_id, username, display_name, role, is_active FROM users ORDER BY user_id ASC');
+        
+        // 確保 is_active 輸出為 boolean
+        const users = rows.map(user => ({
+            ...user,
+            is_active: !!user.is_active // 強制轉為 bool，PostgreSQL BOOLEAN 類型驅動可能已處理，但雙重保險
+        }));
+
         res.json({
             success: true,
-            users: rows
+            users: users
         });
     } catch (err) {
         console.error('取得使用者列表錯誤:', err);

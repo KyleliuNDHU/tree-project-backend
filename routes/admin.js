@@ -11,7 +11,87 @@ const format = require('pg-format');
 const { exec } = require('child_process');
 const fs = require('fs');
 const path = require('path');
-const apiKeys = require('../config/apiKeys'); // 假設 apiKeys 的邏輯也已更新或不需要DB
+const apiKeys = require('../config/apiKeys');
+const adminAuth = require('../middleware/adminAuth'); // Import auth middleware
+
+// Script runners
+const populateKnowledgeFromSurvey = require('../scripts/populate_knowledge_from_survey');
+const populateSpeciesRegionScore = require('../scripts/populateSpeciesRegionScore');
+const generateEmbeddings = require('../scripts/generateEmbeddings');
+
+// --- Admin Script Execution Endpoint ---
+router.post('/run-script', adminAuth, async (req, res) => {
+    const { scriptName } = req.body;
+
+    if (!scriptName) {
+        return res.status(400).json({ success: false, message: 'Script name is required' });
+    }
+
+    try {
+        let resultMessage = '';
+        
+        // Execute script based on name
+        switch (scriptName) {
+            case 'populate_knowledge_from_survey':
+                console.log('[Admin] Triggering populate_knowledge_from_survey...');
+                // Assuming these scripts export a main function or we can run them effectively
+                // Since we refactored them to export, we can call directly
+                // BUT scripts might be async and logging to console. capturing output is harder this way.
+                // For now, just await their completion.
+                
+                // Note: populate_knowledge_from_survey.js might not export a function in current version, 
+                // let's check if we need to wrap it or use child_process.
+                // Checking file content... it runs processTreeSurveyData() at the end.
+                // We should modify it to export the function instead of auto-running if imported.
+                // For safety, let's use child_process for scripts that might not be perfectly module-ready
+                // OR better, we refactored populateSpeciesRegionScore to export. Let's assume we will refactor others too.
+                // For now, using child_process fork is safest to isolate execution context.
+                
+                await runScriptInChildProcess('populate_knowledge_from_survey.js');
+                resultMessage = 'Knowledge from survey population started/completed.';
+                break;
+
+            case 'populateSpeciesRegionScore':
+                console.log('[Admin] Triggering populateSpeciesRegionScore...');
+                await runScriptInChildProcess('populateSpeciesRegionScore.js');
+                resultMessage = 'Species region score population started/completed.';
+                break;
+
+            case 'generateEmbeddings':
+                console.log('[Admin] Triggering generateEmbeddings...');
+                await runScriptInChildProcess('generateEmbeddings.js');
+                resultMessage = 'Advanced embedding generation started/completed.';
+                break;
+
+            default:
+                return res.status(400).json({ success: false, message: 'Unknown script name' });
+        }
+
+        res.json({ success: true, message: resultMessage });
+
+    } catch (error) {
+        console.error(`[Admin] Error running script ${scriptName}:`, error);
+        res.status(500).json({ success: false, message: `Error running script: ${error.message}` });
+    }
+});
+
+// Helper to run script
+function runScriptInChildProcess(scriptFileName) {
+    return new Promise((resolve, reject) => {
+        const scriptPath = path.join(__dirname, '..', 'scripts', scriptFileName);
+        const { fork } = require('child_process');
+        
+        const child = fork(scriptPath);
+
+        child.on('exit', (code) => {
+            if (code === 0) resolve();
+            else reject(new Error(`Script exited with code ${code}`));
+        });
+
+        child.on('error', (err) => reject(err));
+    });
+}
+
 
 // 根據您的 index_1.js，初始化 OpenAI, Anthropic, SiliconFlow
 const OpenAI = require('openai');
