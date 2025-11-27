@@ -44,8 +44,29 @@ const cleanupOrphanedPlaceholders = async () => {
   }
 };
 
+const cleanupOldChatLogs = async () => {
+  try {
+    // 刪除超過 24 小時的聊天記錄，保持資料庫輕量化
+    // 這確保了使用者的對話記錄不會無限期保存，僅保留當次會話的短期記憶
+    const sql = `
+      DELETE FROM chat_logs
+      WHERE created_at < NOW() - INTERVAL '24 hours'
+    `;
+    const result = await db.query(sql);
+    console.log(`[Cleanup] Cleaned up old chat logs. Rows affected: ${result.rowCount}`);
+  } catch (err) {
+    // 容錯處理：如果 chat_logs 表不存在（可能是尚未遷移的新環境），則忽略錯誤
+    if (err.code === '42P01') { // undefined_table
+      console.log('[Cleanup] chat_logs table does not exist yet, skipping cleanup.');
+    } else {
+      console.error('[Cleanup] Error cleaning up old chat logs:', err);
+    }
+  }
+};
+
 module.exports = {
     cleanupUnusedProjectAreas,
     cleanupUnusedSpecies,
     cleanupOrphanedPlaceholders,
+    cleanupOldChatLogs,
 };

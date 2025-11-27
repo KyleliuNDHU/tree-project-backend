@@ -6,7 +6,8 @@ const fs = require('fs');
 const { 
     cleanupUnusedProjectAreas, 
     cleanupUnusedSpecies, 
-    cleanupOrphanedPlaceholders 
+    cleanupOrphanedPlaceholders,
+    cleanupOldChatLogs // 引入新的清理函式
 } = require('../utils/cleanup');
 
 // 載入台灣縣市 GeoJSON 資料
@@ -180,6 +181,7 @@ router.post('/cleanup', async (req, res) => {
         await cleanupOrphanedPlaceholders();
         await cleanupUnusedSpecies();
         await cleanupUnusedProjectAreas();
+        await cleanupOldChatLogs(); // 執行聊天記錄清理
         
         console.log('[API] Manual cleanup process finished successfully.');
         res.json({

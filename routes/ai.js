@@ -102,6 +102,30 @@ router.post('/chat', aiLimiter, async (req, res) => {
             passages.map((p, i) => `--- 知識片段 ${i + 1} ---\n標題: ${p.original_source_title || 'N/A'}\n內容摘要: ${(p.text_content || p.summary_cn || '[內容摘要不可用]').substring(0, 300)}...\n(知識庫內部ID: ${p.id}, 相關度: ${p.score.toFixed(3)})\n`).join('');
         }
     
+        // --- 獲取歷史對話上下文 (Context) ---
+        // 僅獲取該用戶在最近 30 分鐘內的最近 15 筆對話，以保持上下文連貫但不過期
+        let chatHistory = [];
+        if (userId) {
+            const historyQuery = `
+                SELECT message, response 
+                FROM chat_logs 
+                WHERE user_id = $1 
+                AND created_at > NOW() - INTERVAL '30 minutes'
+                ORDER BY created_at DESC 
+                LIMIT 15
+            `;
+            try {
+                const { rows } = await db.query(historyQuery, [userId]);
+                // 資料庫撈出來是倒序 (最新的在最前)，要反轉回正序 (舊 -> 新) 給 AI
+                chatHistory = rows.reverse().map(row => ([
+                    { role: 'user', content: row.message },
+                    { role: 'assistant', content: row.response }
+                ])).flat();
+            } catch (err) {
+                console.warn('獲取歷史對話失敗:', err.message);
+            }
+        }
+
         let aiResponse = '';
         let modelUsed = model_preference;
         let sourceInfo = '';
@@ -110,9 +134,22 @@ router.post('/chat', aiLimiter, async (req, res) => {
         const systemMessage = `你是一位專業的樹木永續發展與碳匯專家。\n可用資料上下文：${fullContextForAI}\n請根據用戶的問題提供專業的建議和分析，並在需要時引用(知識庫內部ID)標註。`;
 
         try {
+            // 構建完整的訊息串列
+            const messages = [
+                { role: "system", content: systemMessage },
+                ...chatHistory, // 插入歷史對話
+                { role: "user", content: message }
+            ];
+
             if (model_preference.startsWith('gemini-')) {
-                // [FIX] No longer need to remove '-latest' as we use stable model names
-                aiResponse = await generateGeminiChatResponse(message, systemMessage, [], model_preference);
+                // Gemini 處理邏輯微調 (Gemini SDK 可能有不同的 history 格式，這裡先維持原樣，視需要調整 generateGeminiChatResponse)
+                // 注意：generateGeminiChatResponse 目前介面可能只接受單一 message，若要支援 history 需修改該 service
+                // 暫時將 history 拼接到 systemMessage 或 message 中作為折衷，或者假設 generateGeminiChatResponse 已支援
+                // 這裡示範將 history 拼接到 user message (簡單解法)
+                const historyText = chatHistory.map(m => `${m.role === 'user' ? 'User' : 'Assistant'}: ${m.content}`).join('\n');
+                const messageWithHistory = historyText ? `Previous conversation:\n${historyText}\n\nCurrent question:\n${message}` : message;
+                
+                aiResponse = await generateGeminiChatResponse(messageWithHistory, systemMessage, [], model_preference);
                 sourceInfo = ` (由 ${model_preference} 回答)`;
             } else if (model_preference.startsWith('claude-')) {
                 if (!anthropic) throw new Error("Claude服務未配置");
@@ -120,7 +157,7 @@ router.post('/chat', aiLimiter, async (req, res) => {
                     model: model_preference,
                     max_tokens: 2048, 
                     system: systemMessage, 
-                    messages: [{ role: 'user', content: message }],
+                    messages: messages.filter(m => m.role !== 'system'), // Claude SDK 的 messages 不含 system
                 });
                 aiResponse = claudeResponse.content[0].text;
                 sourceInfo = ` (由 ${model_preference.split('@')[0]} 回答)`;
@@ -128,14 +165,14 @@ router.post('/chat', aiLimiter, async (req, res) => {
                  if (!siliconFlowLlm) throw new Error("SiliconFlow 服務未配置");
                  const completion = await siliconFlowLlm.chat.completions.create({
                     model: model_preference,
-                    messages: [{ role: "system", content: systemMessage }, { role: "user", content: message }],
+                    messages: messages,
                  });
                  aiResponse = completion.choices[0].message.content;
                  sourceInfo = ` (由 ${model_preference} via SiliconFlow 回答)`;
             } else { // Default to OpenAI
                 const completion = await openai.chat.completions.create({
-                    model: model_preference, // e.g., 'gpt-5', 'gpt-5-mini'
-                    messages: [{ role: "system", content: systemMessage }, { role: "user", content: message }],
+                    model: model_preference, 
+                    messages: messages,
                 });
                 aiResponse = completion.choices[0].message.content;
                 sourceInfo = ` (由 ${model_preference} 回答)`;
