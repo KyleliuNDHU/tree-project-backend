@@ -315,7 +315,14 @@ async function generateAIReportPDF(reportDataWithAI) {
                 doc.font(fontPath);
             } else {
                 console.error('中文字型檔案未找到:', fontPath);
-                // 可以選擇回退到預設字型或拋出錯誤
+                // 嘗試使用 static 目錄下的 Regular 字體作為備案
+                const fallbackFontPath = path.join(__dirname, '..', 'Noto_Sans_TC', 'static', 'NotoSansTC-Regular.ttf');
+                if (fs.existsSync(fallbackFontPath)) {
+                    doc.font(fallbackFontPath);
+                    console.log('已切換至備用字型:', fallbackFontPath);
+                } else {
+                    console.error('備用中文字型檔案也未找到:', fallbackFontPath);
+                }
             }
         } catch (fontError) {
             console.error('載入中文字型錯誤:', fontError);
