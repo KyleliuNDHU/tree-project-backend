@@ -13,8 +13,8 @@ const DELAY_MS = 1000; // 批次間隔時間
 function isValidData(text) {
   if (!text) return false;
   const lower = text.toLowerCase();
-  // 過濾明顯的測試資料
-  if (lower.includes('test') || lower.includes('測試') || lower.includes('123') || text.length < 2) {
+  // 過濾明顯的測試資料 (僅保留 test/測試 關鍵字)
+  if (lower.includes('test') || lower.includes('測試')) {
     return false;
   }
   return true;
@@ -204,12 +204,21 @@ async function generateEmbeddings() {
                 updated_at
                 ) 
                 VALUES ($1, $2, $3, $4, $5, $6, $7, CURRENT_TIMESTAMP)
-            `; 
+                ON CONFLICT (source_type, internal_source_record_id) 
+                DO UPDATE SET 
+                  text_content = EXCLUDED.text_content,
+                  summary_cn = EXCLUDED.summary_cn, 
+                  embedding = EXCLUDED.embedding, 
+                  original_source_title = EXCLUDED.original_source_title,
+                  updated_at = CURRENT_TIMESTAMP
+            `; // Using PG specific ON CONFLICT syntax instead of MySQL ON DUPLICATE KEY UPDATE
+            // FIX: We need to make the internal_source_record_id UNIQUE for each chunk.
+            // Format: "tree_id#chunk_index" e.g. "1#0", "1#1".
             
             const values = [
                 'INTERNAL_DB_TREE_CARBON', 
                 'tree_carbon_data', 
-                tree.id.toString(), 
+                `${tree.id}#${totalEmbeddingsGenerated}`, // Make record_id unique per chunk
                 fragment.text_content, 
                 fragment.text_content, 
                 vectorBuffer,
