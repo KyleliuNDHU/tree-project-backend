@@ -158,7 +158,7 @@ async function getSimilarPassages(queryText, topN = 5, similarityThreshold = 0.5
             FROM tree_knowledge_embeddings_v2
             WHERE id IN (${topIds.join(',')})
         `;
-
+        
         const { rows: details } = await db.query(contentSql);
 
         // 合併分數與詳細內容

@@ -63,6 +63,16 @@ router.post('/run-script', adminAuth, async (req, res) => {
                 resultMessage = 'Advanced embedding generation started/completed.';
                 break;
 
+            case 'generate_species_knowledge':
+                console.log('[Admin] Triggering generate_species_knowledge...');
+                // Note: This script uses Gemini API and might take a long time.
+                // Running in background to prevent timeout.
+                runScriptInChildProcess('generate_species_knowledge.js')
+                    .then(() => console.log('[Admin] generate_species_knowledge completed.'))
+                    .catch(err => console.error('[Admin] generate_species_knowledge failed:', err));
+                resultMessage = 'Species knowledge generation started in background (this may take a while).';
+                break;
+
             default:
                 return res.status(400).json({ success: false, message: 'Unknown script name' });
         }
