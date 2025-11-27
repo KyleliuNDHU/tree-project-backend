@@ -350,19 +350,28 @@ async function generateAIReportPDF(reportDataWithAI) {
         doc.on('error', reject);
 
         // 設置中文字型
-        const fontPath = path.join(__dirname, '..', 'Noto_Sans_TC', 'NotoSansTC-VariableFont_wght.ttf');
+        // 路徑解析: 從 controllers 目錄往上一層 (backend) -> Noto_Sans_TC -> static -> NotoSansTC-Regular.ttf
+        // 注意：VariableFont 在某些 PDFKit 版本可能支援度不佳，優先使用靜態 Regular 字體
+        const fontPath = path.join(__dirname, '..', 'Noto_Sans_TC', 'static', 'NotoSansTC-Regular.ttf');
+        const fallbackFontPath = path.join(__dirname, '..', 'Noto_Sans_TC', 'NotoSansTC-VariableFont_wght.ttf');
+
         try {
             if (fs.existsSync(fontPath)) {
                 doc.font(fontPath);
+                console.log('使用中文字型:', fontPath);
+            } else if (fs.existsSync(fallbackFontPath)) {
+                doc.font(fallbackFontPath);
+                console.log('使用備用中文字型 (Variable):', fallbackFontPath);
             } else {
-                console.error('中文字型檔案未找到:', fontPath);
-                // 嘗試使用 static 目錄下的 Regular 字體作為備案
-                const fallbackFontPath = path.join(__dirname, '..', 'Noto_Sans_TC', 'static', 'NotoSansTC-Regular.ttf');
-                if (fs.existsSync(fallbackFontPath)) {
-                    doc.font(fallbackFontPath);
-                    console.log('已切換至備用字型:', fallbackFontPath);
-                } else {
-                    console.error('備用中文字型檔案也未找到:', fallbackFontPath);
+                console.error('中文字型檔案未找到! PDF 中文可能會變亂碼。搜尋路徑:', fontPath);
+                // 嘗試列出 Noto_Sans_TC 目錄內容以供除錯
+                const dirPath = path.join(__dirname, '..', 'Noto_Sans_TC');
+                if (fs.existsSync(dirPath)) {
+                    console.log('Noto_Sans_TC 目錄內容:', fs.readdirSync(dirPath));
+                    const staticPath = path.join(dirPath, 'static');
+                    if(fs.existsSync(staticPath)) {
+                         console.log('Noto_Sans_TC/static 目錄內容:', fs.readdirSync(staticPath));
+                    }
                 }
             }
         } catch (fontError) {
