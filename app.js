@@ -10,7 +10,22 @@ const {
     cleanupOrphanedPlaceholders 
 } = require('./utils/cleanup');
 
+const { execSync } = require('child_process');
+
 const app = express();
+
+// [CRITICAL FIX] 強制在應用程式啟動時執行資料庫遷移
+// 因為 Render 的 Start Command 可能未正確觸發
+try {
+    console.log('[Startup] Forcing database migration...');
+    const output = execSync('node scripts/migrate.js', { encoding: 'utf-8' });
+    console.log('[Startup] Migration output:\n', output);
+} catch (e) {
+    console.error('[Startup] Migration failed:', e.message);
+    console.error('[Startup] Migration details:', e.stdout || e.stderr);
+    // 選擇性：如果遷移失敗，是否要讓伺服器崩潰？
+    // process.exit(1); 
+}
 
 // [DEBUG] Print package.json content to verify start script update
 try {
