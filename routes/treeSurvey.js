@@ -7,6 +7,7 @@ const xlsx = require('xlsx');
 const path = require('path');
 const fs = require('fs');
 const { cleanupUnusedSpecies, cleanupUnusedProjectAreas } = require('../utils/cleanup');
+const treeSurveyBatchController = require('../controllers/treeSurveyBatchController');
 
 // --- Multer 設定 (用於檔案上傳) ---
 const storage = multer.diskStorage({
@@ -498,3 +499,6 @@ router.get('/template', (req, res) => {
 
 
 module.exports = router;
+
+// --- Batch Import Route (v2) ---
+router.post('/batch_import', treeSurveyBatchController.batchImportTrees);
