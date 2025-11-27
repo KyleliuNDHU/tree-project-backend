@@ -21,54 +21,54 @@ async function processTreeSurveyData() {
 
         for (const row of rows) {
             let textContent = `關於樹木調查記錄 ID ${row.id} 的詳細資料：\n`;
-            textContent += `此樹位於專案區位 \"${row.專案區位 || '未知區位'}\"（專案代碼: ${row.專案代碼 || 'N/A'}，專案名稱: ${row.專案名稱 || '未知專案'}）。\n`;
-            textContent += `系統樹木編號為 \"${row.系統樹木 || '無'}\"，專案樹木編號是 \"${row.專案樹木 || '無'}\"。\n`;
-            textContent += `樹種為 \"${row.樹種名稱 || '未知樹種'}\" (樹種編號: ${row.樹種編號 || 'N/A'})。\n`;
-            textContent += `地理座標 X=${row.X坐標 || 'N/A'}, Y=${row.Y坐標 || 'N/A'}。\n`;
-            textContent += `健康狀況評估為 \"${row.狀況 || '未記錄'}\"。`;
-            if (row.註記 && row.註記.toLowerCase() !== '無' && row.註記.trim() !== '') textContent += ` 重要註記: \"${row.註記}\"。`;
+            textContent += `此樹位於專案區位 \"${row.project_location || '未知區位'}\"（專案代碼: ${row.project_code || 'N/A'}，專案名稱: ${row.project_name || '未知專案'}）。\n`;
+            textContent += `系統樹木編號為 \"${row.system_tree_id || '無'}\"，專案樹木編號是 \"${row.project_tree_id || '無'}\"。\n`;
+            textContent += `樹種為 \"${row.species_name || '未知樹種'}\" (樹種編號: ${row.species_id || 'N/A'})。\n`;
+            textContent += `地理座標 X=${row.x_coord || 'N/A'}, Y=${row.y_coord || 'N/A'}。\n`;
+            textContent += `健康狀況評估為 \"${row.status || '未記錄'}\"。`;
+            if (row.notes && row.notes.toLowerCase() !== '無' && row.notes.trim() !== '') textContent += ` 重要註記: \"${row.notes}\"。`;
             textContent += `\n`; // 換行
-            if (row.樹木備註 && row.樹木備註.toLowerCase() !== '無' && row.樹木備註.trim() !== '') textContent += `樹木本身備註: \"${row.樹木備註}\"。\n`;
-            textContent += `主要測量數據：樹高約 ${row['樹高（公尺）'] || 0} 公尺，胸高直徑 (DBH) 約 ${row['胸徑（公分）'] || 0} 公分。\n`;
-            if (row.調查備註 && row.調查備註.toLowerCase() !== '無' && row.調查備註.trim() !== '') textContent += `調查時的額外備註: \"${row.調查備註}\"。\n`;
+            if (row.tree_notes && row.tree_notes.toLowerCase() !== '無' && row.tree_notes.trim() !== '') textContent += `樹木本身備註: \"${row.tree_notes}\"。\n`;
+            textContent += `主要測量數據：樹高約 ${row.tree_height_m || 0} 公尺，胸高直徑 (DBH) 約 ${row.dbh_cm || 0} 公分。\n`;
+            if (row.survey_notes && row.survey_notes.toLowerCase() !== '無' && row.survey_notes.trim() !== '') textContent += `調查時的額外備註: \"${row.survey_notes}\"。\n`;
             
             let surveyTimeText = '調查時間未明確記錄。';
             try {
-                if (row.調查時間) {
-                     const surveyDate = new Date(row.調查時間);
+                if (row.survey_time) {
+                     const surveyDate = new Date(row.survey_time);
                      if (!isNaN(surveyDate.getTime()) && surveyDate.getFullYear() > 1900) { // 增加年份檢查
                         surveyTimeText = `此記錄的調查時間為 ${surveyDate.getFullYear()}年${surveyDate.getMonth() + 1}月${surveyDate.getDate()}日。`;
                      } else {
-                        surveyTimeText = `調查時間原始記錄為 \"${row.調查時間}\" (格式無法直接轉換或日期無效)。`;
+                        surveyTimeText = `調查時間原始記錄為 \"${row.survey_time}\" (格式無法直接轉換或日期無效)。`;
                      }
                 }
             } catch (e) {
-                 surveyTimeText = `調查時間解析時發生錯誤 (原始記錄: \"${row.調查時間}\")。`;
+                 surveyTimeText = `調查時間解析時發生錯誤 (原始記錄: \"${row.survey_time}\")。`;
             }
             textContent += surveyTimeText + "\n";
-            textContent += `估算的碳匯效益：此樹木的碳儲存量約為 ${row.碳儲存量 || 0} 公斤，推估的年碳吸存量為 ${row.推估年碳吸存量 || 0} 公斤/年。\n`;
+            textContent += `估算的碳匯效益：此樹木的碳儲存量約為 ${row.carbon_storage || 0} 公斤，推估的年碳吸存量為 ${row.carbon_sequestration_per_year || 0} 公斤/年。\n`;
 
             const keywordsArray = [
                 `樹木ID:${row.id}`,
-                row.專案區位,
-                row.專案名稱,
-                row.樹種名稱,
-                row.系統樹木 ? `系統樹木:${row.系統樹木}` : null,
-                row.專案樹木 ? `專案樹木:${row.專案樹木}` : null,
-                row.狀況,
+                row.project_location,
+                row.project_name,
+                row.species_name,
+                row.system_tree_id ? `系統樹木:${row.system_tree_id}` : null,
+                row.project_tree_id ? `專案樹木:${row.project_tree_id}` : null,
+                row.status,
                 "樹木調查數據"
             ].filter(k => k && k.toString().trim() !== '' && k.toString().toLowerCase() !== '無');
 
             const knowledgeEntry = {
                 text_content: textContent,
-                summary_cn: `樹木ID ${row.id} (${row.樹種名稱 || '未知'}) 於 \"${row.專案區位 || '未知'}\" 的詳細調查記錄。樹高 ${row['樹高（公尺）'] || 0}m, 胸徑 ${row['胸徑（公分）'] || 0}cm。`,
+                summary_cn: `樹木ID ${row.id} (${row.species_name || '未知'}) 於 \"${row.project_location || '未知'}\" 的詳細調查記錄。樹高 ${row.tree_height_m || 0}m, 胸徑 ${row.dbh_cm || 0}cm。`,
                 // embedding: null, // Embedding generated later if needed
                 source_type: 'INTERNAL_DB_TREE_SURVEY',
                 internal_source_table_name: 'tree_survey',
                 internal_source_record_id: row.id.toString(),
-                original_source_title: `樹木調查記錄 - ID ${row.id} (${row.專案名稱 || 'N/A'} - ${row.樹種名稱 || 'N/A'})`,
+                original_source_title: `樹木調查記錄 - ID ${row.id} (${row.project_name || 'N/A'} - ${row.species_name || 'N/A'})`,
                 original_source_author: '系統數據轉換',
-                original_source_publication_year: (row.調查時間 && !isNaN(new Date(row.調查時間).getFullYear()) && new Date(row.調查時間).getFullYear() > 1900) ? new Date(row.調查時間).getFullYear().toString() : null,
+                original_source_publication_year: (row.survey_time && !isNaN(new Date(row.survey_time).getFullYear()) && new Date(row.survey_time).getFullYear() > 1900) ? new Date(row.survey_time).getFullYear().toString() : null,
                 keywords: keywordsArray.join(','),
                 confidence_score: 5, 
                 last_verified_at: new Date().toISOString().slice(0, 19).replace('T', ' ')
