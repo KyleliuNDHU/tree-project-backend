@@ -137,7 +137,22 @@ async function processTreeCarbonData() {
         const speciesData = result.rows;
         console.log(`從 tree_carbon_data 讀取到 ${speciesData.length} 條樹種記錄。`);
 
-        for (const species of speciesData) {
+        // 防崩潰優化：逐一處理並強制休息
+        for (let i = 0; i < speciesData.length; i++) {
+            const species = speciesData[i];
+            console.log(`\n[${i + 1}/${speciesData.length}] 開始處理樹種: ${species.common_name_zh}...`);
+            
+            // 1. 強制冷卻：每處理完一個樹種，休息 5 秒，讓 GC 回收記憶體
+            if (i > 0) {
+                 console.log('冷卻中 (Cooling down for 5s)...');
+                 await new Promise(resolve => setTimeout(resolve, 5000));
+            }
+            
+            // 2. 記憶體管理：手動觸發 GC
+            if (global.gc) {
+                try { global.gc(); } catch (e) { console.log("GC unavailable"); }
+            }
+
             let prompt = `請你扮演一位資深的林業科學家和編輯。根據以下提供的關於某一樹種的結構化數據，請撰寫一段全面而詳細的介紹文本 (約 400-600 字)。
 這段文本將被用於一個知識庫，以輔助 AI 聊天機器人回答相關問題。請確保文本內容科學、準確、流暢，並將提供的數據點自然地融入到描述中，並進行適當的關聯性思考和擴展。
 
@@ -186,7 +201,7 @@ async function processTreeCarbonData() {
 請以專業且易於理解的方式組織這些信息，使其成為一段連貫的描述。如果某些數據為空或不適用，請在生成文本時自然地跳過或稍作說明，並嘗試從您的知識庫中補充相關的通用知識以使描述更完整。`;
 
             console.log(`為樹種 ${species.common_name_zh} (ID: ${species.id}) 生成描述文本 (by Qwen3)...`);
-            const detailedText = await generateDetailedTextWithLLM(prompt, "qwen");
+            let detailedText = await generateDetailedTextWithLLM(prompt, "qwen");
 
             if (!detailedText || detailedText.trim() === '') {
                 console.error(`未能為樹種 ${species.common_name_zh} 生成長描述文本。跳過此樹種。`);
@@ -194,7 +209,10 @@ async function processTreeCarbonData() {
             }
             
             console.log(`為樹種 ${species.common_name_zh} 的長文本進行分塊 (by gpt-4.1-mini)...`);
-            const textChunks = await chunkTextWithLLM(detailedText, "gpt-4.1-mini");
+            let textChunks = await chunkTextWithLLM(detailedText, "gpt-4.1-mini");
+            
+            // 釋放原始長文本記憶體
+            detailedText = null;
 
             // 在處理該樹種的新片段之前，先刪除所有舊的相關片段
             console.log(`正在刪除樹種 ${species.common_name_zh} (原始ID: ${species.id}) 的舊知識庫片段...`);
@@ -205,15 +223,20 @@ async function processTreeCarbonData() {
             console.log(`樹種 ${species.common_name_zh} (原始ID: ${species.id}) 的舊片段已刪除 ${deleteResult.rowCount || 0} 條。`);
 
             let validChunksProcessed = 0;
-            for (let i = 0; i < textChunks.length; i++) {
-                const chunk = textChunks[i];
+            for (let j = 0; j < textChunks.length; j++) {
+                const chunk = textChunks[j];
                 if (chunk.length < 30) { 
-                    console.log(`片段 ${i+1} (樹種ID ${species.id}) 內容過短 ('${chunk}')，跳過。`);
+                    console.log(`片段 ${j+1} (樹種ID ${species.id}) 內容過短 ('${chunk}')，跳過。`);
                     continue;
                 }
 
-                console.log(`為樹種 ${species.common_name_zh} 的片段 ${i+1} 生成 Embedding...`);
-                const embeddingVector = await getEmbedding(chunk.substring(0, 8191)); 
+                console.log(`為樹種 ${species.common_name_zh} 的片段 ${j+1} 生成 Embedding...`);
+                let embeddingVector = await getEmbedding(chunk.substring(0, 8191)); 
+                
+                if (!embeddingVector) {
+                    console.warn('Embedding generation failed, skipping chunk.');
+                    continue;
+                }
 
                 const knowledgeEntry = {
                     text_content: chunk,
@@ -222,21 +245,24 @@ async function processTreeCarbonData() {
                     source_type: 'INTERNAL_DB_TREE_CARBON',
                     internal_source_table_name: 'tree_carbon_data',
                     internal_source_record_id: species.id.toString(), 
-                    original_source_title: `樹種詳解: ${species.common_name_zh} - 片段 ${i + 1}/${textChunks.length}`,
+                    original_source_title: `樹種詳解: ${species.common_name_zh} - 片段 ${j + 1}/${textChunks.length}`,
                     original_source_author: 'AI模型綜合生成 (Qwen3 + GPT4.1-mini)',
                     original_source_publication_year: new Date().getFullYear().toString(),
-                    keywords: `${species.common_name_zh},${species.scientific_name || ''},碳匯,樹種特性,片段${i+1}`.split(',').filter(k => k).join(','),
+                    keywords: `${species.common_name_zh},${species.scientific_name || ''},碳匯,樹種特性,片段${j+1}`.split(',').filter(k => k).join(','),
                     confidence_score: 4, 
                     last_verified_at: new Date().toISOString().slice(0, 19).replace('T', ' ')
                 };
+                
+                // 釋放 Embedding 記憶體
+                embeddingVector = null;
                                 
                 // 因為前面已經刪除了該樹種的所有舊片段，這裡總是執行插入
-                console.log(`插入樹種 ${species.common_name_zh} 的知識庫片段 ${i + 1} (Title: ${knowledgeEntry.original_source_title})`);
+                console.log(`插入樹種 ${species.common_name_zh} 的知識庫片段 ${j + 1} (Title: ${knowledgeEntry.original_source_title})`);
                 
                 // FIX: Make internal_source_record_id UNIQUE per chunk to satisfy unique constraint
                 // The unique constraint is (source_type, internal_source_record_id)
                 // Original ID "1" is used for multiple chunks, causing violation on 2nd chunk.
-                const uniqueChunkId = `${species.id}_chunk_${i + 1}`;
+                const uniqueChunkId = `${species.id}_chunk_${j + 1}`;
 
                 const insertQuery = `
                     INSERT INTO tree_knowledge_embeddings_v2 
@@ -261,8 +287,12 @@ async function processTreeCarbonData() {
                     knowledgeEntry.last_verified_at
                 ]);
                 validChunksProcessed++;
-                console.log(`已處理樹種 ${species.common_name_zh} 的片段 ${i + 1}`);
+                console.log(`已處理樹種 ${species.common_name_zh} 的片段 ${j + 1}`);
             }
+            
+            // 釋放片段陣列記憶體
+            textChunks = null;
+            
             console.log(`已完成處理樹種: ${species.common_name_zh}，共生成和處理 ${validChunksProcessed} 個有效片段。`);
         }
         console.log('所有 tree_carbon_data 記錄處理完成。');
