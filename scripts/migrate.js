@@ -108,6 +108,7 @@ async function migrate() {
     console.log('Resetting the primary key sequence for tree_survey...');
     await client.query(`SELECT setval(pg_get_serial_sequence('tree_survey', 'id'), COALESCE(MAX(id), 1), true) FROM tree_survey;`);
 const populateKnowledge = require('./populate_knowledge'); // Import the knowledge population script
+const generateEmbeddings = require('./generateEmbeddings'); // Import the advanced embedding generation script
 
 // ... (existing code)
 
@@ -117,10 +118,14 @@ const populateKnowledge = require('./populate_knowledge'); // Import the knowled
     // Note: This is a potentially long-running operation, so we run it here but with awareness
     // The populate script has internal checks to skip if already populated.
     try {
-        console.log('Checking/Populating knowledge base...');
+        console.log('Checking/Populating basic knowledge base...');
         await populateKnowledge(); 
+        
+        console.log('Checking/Generating advanced knowledge embeddings from DB...');
+        // Only run this if you are sure it won't timeout, or if you have optimized generateEmbeddings to be incremental
+        await generateEmbeddings();
     } catch (kErr) {
-        console.error('Warning: Knowledge population failed, but continuing migration:', kErr);
+        console.error('Warning: Knowledge population/generation failed, but continuing migration:', kErr);
     }
 
     console.log('Database migration completed successfully!');
