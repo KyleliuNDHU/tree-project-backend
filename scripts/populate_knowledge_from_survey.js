@@ -151,7 +151,7 @@ async function processTreeSurveyData() {
 
 // 只有在直接執行腳本時才調用函數
 if (require.main === module) {
-    processTreeSurveyData();
+processTreeSurveyData(); 
 }
 
 // 導出函數供其他模組使用 (如 API admin endpoint)

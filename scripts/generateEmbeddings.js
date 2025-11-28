@@ -186,7 +186,7 @@ async function generateEmbeddings() {
                 // 比對內容是否變更 (移除頭尾空白後比對)
                 if (existingRecord.text_content.trim() === fragment.text_content.trim()) {
                     // console.log(`  [Skip] 內容未變更: ${fragment.original_source_title}`);
-                    continue;
+                continue;
                 } else {
                     console.log(`  [Update] 內容已變更，重新生成: ${fragment.original_source_title}`);
                     // 如果有變更，我們繼續往下執行，生成新的 Embedding 並 Update

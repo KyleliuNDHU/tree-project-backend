@@ -229,7 +229,7 @@ async function processTreeCarbonData() {
             
             console.log(`為樹種 ${species.common_name_zh} 的長文本進行分塊 (by gpt-4.1-mini)...`);
             let textChunks = await chunkTextWithLLM(detailedText, "gpt-4.1-mini");
-            
+
             // 釋放原始長文本記憶體
             detailedText = null;
 
@@ -253,7 +253,7 @@ async function processTreeCarbonData() {
                 }
 
                 const uniqueChunkId = `${species.id}_chunk_${j + 1}`;
-                
+
                 fragmentsToInsert.push({
                     text_content: chunk,
                     summary_cn: chunk.substring(0, 100) + (chunk.length > 100 ? '...' : ''),
@@ -268,7 +268,7 @@ async function processTreeCarbonData() {
                     confidence_score: 4, 
                     last_verified_at: new Date().toISOString().slice(0, 19).replace('T', ' ')
                 });
-                
+                                
                 // 釋放 Embedding 記憶體
                 embeddingVector = null;
                 validChunksCount++;
@@ -286,7 +286,7 @@ async function processTreeCarbonData() {
             const client = await db.pool.connect();
             try {
                 await client.query('BEGIN');
-
+                
                 // 1. 刪除舊資料
                 console.log(`正在刪除樹種 ${species.common_name_zh} (原始ID: ${species.id}) 的舊知識庫片段...`);
                 const deleteResult = await client.query(
@@ -298,14 +298,14 @@ async function processTreeCarbonData() {
                 // 2. 插入新資料
                 for (let idx = 0; idx < fragmentsToInsert.length; idx++) {
                     const entry = fragmentsToInsert[idx];
-                    const insertQuery = `
-                        INSERT INTO tree_knowledge_embeddings_v2 
-                        (text_content, summary_cn, embedding, source_type, internal_source_table_name, 
-                         internal_source_record_id, original_source_title, original_source_author, 
-                         original_source_publication_year, keywords, confidence_score, last_verified_at)
-                        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
-                    `;
-                    
+                const insertQuery = `
+                    INSERT INTO tree_knowledge_embeddings_v2 
+                    (text_content, summary_cn, embedding, source_type, internal_source_table_name, 
+                     internal_source_record_id, original_source_title, original_source_author, 
+                     original_source_publication_year, keywords, confidence_score, last_verified_at)
+                    VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
+                `;
+                
                     await client.query(insertQuery, [
                         entry.text_content,
                         entry.summary_cn,
@@ -319,7 +319,7 @@ async function processTreeCarbonData() {
                         entry.keywords,
                         entry.confidence_score,
                         entry.last_verified_at
-                    ]);
+                ]);
                     console.log(`已寫入片段 ${idx + 1}/${fragmentsToInsert.length}`);
                 }
 
