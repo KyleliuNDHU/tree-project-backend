@@ -107,37 +107,25 @@ async function migrate() {
     // [FIX] Reset the primary key sequence for tree_survey table
     console.log('Resetting the primary key sequence for tree_survey...');
     await client.query(`SELECT setval(pg_get_serial_sequence('tree_survey', 'id'), COALESCE(MAX(id), 1), true) FROM tree_survey;`);
-const populateKnowledge = require('./populate_knowledge'); // Import the knowledge population script
-const generateEmbeddings = require('./generateEmbeddings'); // Import the advanced embedding generation script
-const populateScores = require('./populateSpeciesRegionScore'); // Import the region score population script
-const enrichSynonyms = require('./enrich_species_synonyms'); // [New] Import the species synonym enrichment script
 
-// ... (existing code)
+    // [2025.11 優化] 移除不再需要的 RAG 相關腳本
+    // 現在使用 Text-to-SQL 架構，不需要 embedding 和知識庫
+    // 以下腳本已停用：
+    // - populate_knowledge (RAG 知識庫)
+    // - generateEmbeddings (向量嵌入)
+    // - enrich_species_synonyms (AI 同義詞擴充)
+    
+    // 只保留 species_region_score，因為這是統計數據，對報表有用
+    const populateScores = require('./populateSpeciesRegionScore');
 
     console.log('Sequence reset successfully.');
 
-    // [New] Populate knowledge base if needed
-    // Note: This is a potentially long-running operation, so we run it here but with awareness
-    // The populate script has internal checks to skip if already populated.
     try {
-        console.log('Checking/Populating basic knowledge base...');
-        await populateKnowledge(); 
-        
-        console.log('Checking/Generating advanced knowledge embeddings from DB...');
-        // Only run this if you are sure it won't timeout, or if you have optimized generateEmbeddings to be incremental
-        await generateEmbeddings();
-
         console.log('Calculating/Populating species region scores...');
         await populateScores();
-
-        console.log('Enriching species synonyms (AI)...');
-        // Note: enrichSynonyms uses LLM and might be slow/costly. 
-        // It has internal duplication checks, so it's safe to run, but maybe better to run manually/async.
-        // For now, we await it to ensure initial setup is complete.
-        await enrichSynonyms();
-
+        console.log('Species region scores populated successfully.');
     } catch (kErr) {
-        console.error('Warning: Knowledge population/generation failed, but continuing migration:', kErr);
+        console.error('Warning: Species region score population failed, but continuing:', kErr.message);
     }
 
     console.log('Database migration completed successfully!');
