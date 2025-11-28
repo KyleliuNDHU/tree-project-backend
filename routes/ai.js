@@ -52,16 +52,20 @@ router.post('/chat_old_rag_version', aiLimiter, async (req, res) => {
         let { message, projectAreas, userId, model_preference = 'gemini-2.5-flash' } = req.body;
 
         // --- PRODUCTION MODEL ENFORCEMENT ---
+        // 允許的模型清單 (2025.11 更新):
+        // - OpenAI: gpt-4.1-nano, gpt-4.1-mini, gpt-4.1, gpt-5-mini
+        // - Google: gemini-2.5-flash
+        // - SiliconFlow: deepseek-ai/DeepSeek-V3, Qwen/Qwen3-VL-32B-Instruct
         if (process.env.NODE_ENV === 'production') {
             const allowedProdModels = [
-                'deepseek-ai/DeepSeek-V3',
-                'Qwen/Qwen3-VL-32B-Instruct',
-                'gpt-5-mini'
+                'gpt-4.1-nano', 'gpt-4.1-mini', 'gpt-4.1', 'gpt-5-mini',
+                'gemini-2.5-flash',
+                'deepseek-ai/DeepSeek-V3', 'Qwen/Qwen3-VL-32B-Instruct'
             ];
             
             if (!allowedProdModels.includes(model_preference)) {
-                console.log(`[PROD-GUARD] Forbidden model '${model_preference}' requested. Overriding with fallback 'gpt-5-mini'.`);
-                model_preference = 'gpt-5-mini'; // Override to the safe fallback
+                console.log(`[PROD-GUARD] Forbidden model '${model_preference}' requested. Overriding with fallback 'gpt-4.1-nano'.`);
+                model_preference = 'gpt-4.1-nano'; // Override to the safe fallback
             }
         }
         // --- END ENFORCEMENT ---
@@ -231,7 +235,7 @@ router.post('/chat_old_rag_version', aiLimiter, async (req, res) => {
 
 router.post('/chat', aiLimiter, async (req, res) => {
     try {
-        let { message, userId, model_preference = 'gpt-4o-mini' } = req.body;
+        let { message, userId, model_preference = 'gpt-4.1-nano' } = req.body;
 
         if (!message || typeof message !== 'string' || message.trim() === '') {
             return res.status(400).json({ success: false, error: '請提供有效的訊息內容' });
@@ -241,15 +245,17 @@ router.post('/chat', aiLimiter, async (req, res) => {
 
         // --- PRODUCTION MODEL ENFORCEMENT ---
         // 允許的模型清單 (2025.11 更新):
-        // - OpenAI: gpt-4o-mini (便宜快速), gpt-4o (高品質), gpt-4.1-mini (微調版)
+        // - OpenAI: gpt-4.1-nano (最便宜), gpt-4.1-mini, gpt-5-mini (最新)
+        // - Google: gemini-2.5-flash (免費額度高)
         // - SiliconFlow: deepseek-ai/DeepSeek-V3, Qwen/Qwen3-235B-A22B
         if (process.env.NODE_ENV === 'production') {
             const allowedProdModels = [
-                'gpt-4o-mini', 'gpt-4o', 'gpt-4.1-mini', 'gpt-4.1',
+                'gpt-4.1-nano', 'gpt-4.1-mini', 'gpt-4.1', 'gpt-5-mini',
+                'gemini-2.5-flash',
                 'deepseek-ai/DeepSeek-V3', 'Qwen/Qwen3-235B-A22B'
             ];
             if (!allowedProdModels.includes(model_preference)) {
-                model_preference = 'gpt-4o-mini';
+                model_preference = 'gpt-4.1-nano';
             }
         }
 
@@ -272,7 +278,7 @@ router.post('/chat', aiLimiter, async (req, res) => {
             let generatedSQL = '';
             try {
                 const sqlCompletion = await openai.chat.completions.create({
-                    model: 'gpt-4o-mini', // 用小模型生成 SQL 即可 (便宜且足夠聰明)
+                    model: 'gpt-4.1-nano', // 用最小模型生成 SQL (最便宜且足夠)
                     messages: [{ role: 'user', content: sqlPrompt }],
                     temperature: 0.1, // 低溫度確保穩定輸出
                     max_tokens: 500,
@@ -307,18 +313,37 @@ router.post('/chat', aiLimiter, async (req, res) => {
                         queryResults, 
                         queryResult.rowCount
                     );
+                    const explainSystemPrompt = '你是一位專業的樹木與碳匯專家助理。請用繁體中文回答。';
                     
                     try {
-                        const explanationCompletion = await openai.chat.completions.create({
-                            model: model_preference,
-                            messages: [
-                                { role: 'system', content: '你是一位專業的樹木與碳匯專家助理。請用繁體中文回答。' },
-                                { role: 'user', content: explanationPrompt }
-                            ],
-                            temperature: 0.7,
-                            max_tokens: 1500,
-                        });
-                        aiResponse = explanationCompletion.choices[0].message.content;
+                        // 根據模型類型選擇對應的 API
+                        if (model_preference.startsWith('gemini-')) {
+                            aiResponse = await generateGeminiChatResponse(explanationPrompt, explainSystemPrompt, [], model_preference);
+                        } else if (model_preference.startsWith('Qwen/') || model_preference.startsWith('deepseek-ai/')) {
+                            if (!siliconFlowLlm) throw new Error('SiliconFlow 服務未配置');
+                            const completion = await siliconFlowLlm.chat.completions.create({
+                                model: model_preference,
+                                messages: [
+                                    { role: 'system', content: explainSystemPrompt },
+                                    { role: 'user', content: explanationPrompt }
+                                ],
+                                temperature: 0.7,
+                                max_tokens: 1500,
+                            });
+                            aiResponse = completion.choices[0].message.content;
+                        } else {
+                            // OpenAI 模型
+                            const completion = await openai.chat.completions.create({
+                                model: model_preference,
+                                messages: [
+                                    { role: 'system', content: explainSystemPrompt },
+                                    { role: 'user', content: explanationPrompt }
+                                ],
+                                temperature: 0.7,
+                                max_tokens: 1500,
+                            });
+                            aiResponse = completion.choices[0].message.content;
+                        }
                     } catch (explainErr) {
                         console.error('[Chat V2] 結果解釋失敗:', explainErr.message);
                         // 直接回傳原始結果
@@ -343,16 +368,34 @@ router.post('/chat', aiLimiter, async (req, res) => {
 請告知他們可以使用更具體的查詢方式，例如指定樹木編號或專案名稱。`;
 
             try {
-                const completion = await openai.chat.completions.create({
-                    model: model_preference,
-                    messages: [
-                        { role: 'system', content: systemPrompt },
-                        { role: 'user', content: message }
-                    ],
-                    temperature: 0.7,
-                    max_tokens: 1500,
-                });
-                aiResponse = completion.choices[0].message.content;
+                // 根據模型類型選擇對應的 API
+                if (model_preference.startsWith('gemini-')) {
+                    aiResponse = await generateGeminiChatResponse(message, systemPrompt, [], model_preference);
+                } else if (model_preference.startsWith('Qwen/') || model_preference.startsWith('deepseek-ai/')) {
+                    if (!siliconFlowLlm) throw new Error('SiliconFlow 服務未配置');
+                    const completion = await siliconFlowLlm.chat.completions.create({
+                        model: model_preference,
+                        messages: [
+                            { role: 'system', content: systemPrompt },
+                            { role: 'user', content: message }
+                        ],
+                        temperature: 0.7,
+                        max_tokens: 1500,
+                    });
+                    aiResponse = completion.choices[0].message.content;
+                } else {
+                    // OpenAI 模型
+                    const completion = await openai.chat.completions.create({
+                        model: model_preference,
+                        messages: [
+                            { role: 'system', content: systemPrompt },
+                            { role: 'user', content: message }
+                        ],
+                        temperature: 0.7,
+                        max_tokens: 1500,
+                    });
+                    aiResponse = completion.choices[0].message.content;
+                }
             } catch (llmError) {
                 console.error('[Chat V2] LLM 回答失敗:', llmError.message);
                 aiResponse = '抱歉，處理您的問題時發生錯誤，請稍後再試。';
