@@ -243,7 +243,7 @@ const MAX_MESSAGE_LENGTH = 500;
 // Excel 匯出設定
 const EXCEL_EXPORT_THRESHOLD = 5;  // 超過 5 筆自動生成 Excel
 const EXPORT_DIR = path.join(__dirname, '..', 'exports');
-const EXPORT_URL_PREFIX = '/api/ai/download/';  // 下載路由前綴
+const EXPORT_URL_PREFIX = '/api/download/';  // 下載路由前綴（對應 router.get('/download/:filename')）
 
 // 取得完整的下載 URL（包含 domain）
 function getFullDownloadUrl(fileName) {
