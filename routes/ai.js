@@ -9,6 +9,9 @@ const aiReportController = require('../controllers/aiReportController');
 const openaiController = require('../controllers/openaiController');
 const format = require('pg-format');
 
+// [NEW] 引入 SQL Query Service
+const sqlQueryService = require('../services/sqlQueryService');
+
 // 根據您的 index_1.js，初始化 OpenAI, Anthropic, SiliconFlow
 const OpenAI = require('openai');
 const Anthropic = require('@anthropic-ai/sdk');
@@ -40,8 +43,11 @@ const aiLimiter = rateLimit({
 });
 
 
-// Chat API
-router.post('/chat', aiLimiter, async (req, res) => {
+// ============================================
+// [舊版] Chat API - RAG 版本
+// 保留供日後需要時使用
+// ============================================
+router.post('/chat_old_rag_version', aiLimiter, async (req, res) => {
     try {
         let { message, projectAreas, userId, model_preference = 'gemini-2.5-flash' } = req.body;
 
@@ -203,6 +209,176 @@ router.post('/chat', aiLimiter, async (req, res) => {
         console.error('AI 聊天 API 發生未預期錯誤:', error);
         res.status(500).json({ success: false, error: '處理 AI 聊天時發生未預期錯誤' });
   }
+});
+
+
+// ============================================
+// [NEW] Chat V2 - Text-to-SQL + 直接 LLM 混合架構
+// ============================================
+// 
+// 這是新版的聊天 API，採用以下策略：
+// 1. 意圖分類：判斷使用者是「查資料」還是「問知識」
+// 2. 查資料：使用 Text-to-SQL，直接從資料庫取得精確結果
+// 3. 問知識：直接讓 LLM 回答（不經過 RAG）
+//
+// 優點：
+// - 省去 RAG 的 Embedding API 費用
+// - 查詢速度更快
+// - 資料查詢結果更精確
+//
+// 此路由現在是主要的 /chat 端點
+// ============================================
+
+router.post('/chat', aiLimiter, async (req, res) => {
+    try {
+        let { message, userId, model_preference = 'gpt-4.1-mini' } = req.body;
+
+        if (!message || typeof message !== 'string' || message.trim() === '') {
+            return res.status(400).json({ success: false, error: '請提供有效的訊息內容' });
+        }
+
+        console.log(`[Chat V2] 收到查詢: "${message.substring(0, 50)}..."`);
+
+        // --- PRODUCTION MODEL ENFORCEMENT ---
+        if (process.env.NODE_ENV === 'production') {
+            const allowedProdModels = ['gpt-4.1-mini', 'gpt-4.1', 'deepseek-ai/DeepSeek-V3'];
+            if (!allowedProdModels.includes(model_preference)) {
+                model_preference = 'gpt-4.1-mini';
+            }
+        }
+
+        let aiResponse = '';
+        let queryMode = 'knowledge'; // 'data' or 'knowledge'
+        let executedSQL = null;
+        let queryResults = null;
+
+        // Step 1: 意圖分類 - 判斷是否需要查詢資料庫
+        const shouldQuery = sqlQueryService.shouldQueryDatabase(message);
+        console.log(`[Chat V2] 意圖分類結果: ${shouldQuery ? '查資料' : '問知識'}`);
+
+        if (shouldQuery) {
+            queryMode = 'data';
+            
+            // Step 2a: 讓 LLM 生成 SQL
+            console.log('[Chat V2] 正在生成 SQL...');
+            const sqlPrompt = sqlQueryService.buildSQLGenerationPrompt(message);
+            
+            let generatedSQL = '';
+            try {
+                const sqlCompletion = await openai.chat.completions.create({
+                    model: 'gpt-4.1-mini', // 用小模型生成 SQL 即可
+                    messages: [{ role: 'user', content: sqlPrompt }],
+                    temperature: 0.1, // 低溫度確保穩定輸出
+                    max_tokens: 500,
+                });
+                generatedSQL = sqlCompletion.choices[0].message.content.trim();
+            } catch (llmErr) {
+                console.error('[Chat V2] SQL 生成失敗:', llmErr.message);
+                // Fallback 到知識問答模式
+                queryMode = 'knowledge';
+            }
+
+            // 檢查 LLM 是否判斷這不是資料查詢
+            if (generatedSQL === 'NOT_A_DATA_QUERY') {
+                console.log('[Chat V2] LLM 判斷此問題不需要查資料庫');
+                queryMode = 'knowledge';
+            }
+
+            if (queryMode === 'data' && generatedSQL) {
+                console.log(`[Chat V2] 生成的 SQL: ${generatedSQL}`);
+                
+                // Step 2b: 安全驗證並執行 SQL
+                const queryResult = await sqlQueryService.executeSecureQuery(generatedSQL);
+                
+                if (queryResult.success) {
+                    executedSQL = queryResult.executedSQL;
+                    queryResults = queryResult.rows;
+                    
+                    // Step 2c: 讓 LLM 解釋結果
+                    const explanationPrompt = sqlQueryService.buildResultExplanationPrompt(
+                        message, 
+                        executedSQL, 
+                        queryResults, 
+                        queryResult.rowCount
+                    );
+                    
+                    try {
+                        const explanationCompletion = await openai.chat.completions.create({
+                            model: model_preference,
+                            messages: [
+                                { role: 'system', content: '你是一位專業的樹木與碳匯專家助理。請用繁體中文回答。' },
+                                { role: 'user', content: explanationPrompt }
+                            ],
+                            temperature: 0.7,
+                            max_tokens: 1500,
+                        });
+                        aiResponse = explanationCompletion.choices[0].message.content;
+                    } catch (explainErr) {
+                        console.error('[Chat V2] 結果解釋失敗:', explainErr.message);
+                        // 直接回傳原始結果
+                        aiResponse = `查詢到 ${queryResult.rowCount} 筆資料：\n${JSON.stringify(queryResults.slice(0, 10), null, 2)}`;
+                    }
+                } else {
+                    console.warn('[Chat V2] SQL 執行失敗:', queryResult.error);
+                    // Fallback 到知識問答
+                    queryMode = 'knowledge';
+                }
+            }
+        }
+
+        // Step 3: 知識問答模式（不使用 RAG）
+        if (queryMode === 'knowledge') {
+            console.log('[Chat V2] 使用知識問答模式（直接 LLM）');
+            
+            const systemPrompt = `你是一位專業的樹木永續發展與碳匯專家。
+你擁有豐富的林業、生態學、碳循環相關知識。
+請用繁體中文回答使用者的問題，提供專業且易懂的解答。
+如果使用者詢問的是特定資料（如特定樹木編號、統計數據），
+請告知他們可以使用更具體的查詢方式，例如指定樹木編號或專案名稱。`;
+
+            try {
+                const completion = await openai.chat.completions.create({
+                    model: model_preference,
+                    messages: [
+                        { role: 'system', content: systemPrompt },
+                        { role: 'user', content: message }
+                    ],
+                    temperature: 0.7,
+                    max_tokens: 1500,
+                });
+                aiResponse = completion.choices[0].message.content;
+            } catch (llmError) {
+                console.error('[Chat V2] LLM 回答失敗:', llmError.message);
+                aiResponse = '抱歉，處理您的問題時發生錯誤，請稍後再試。';
+            }
+        }
+
+        // Step 4: 儲存聊天記錄
+        if (userId) {
+            try {
+                await db.query(
+                    'INSERT INTO chat_logs (user_id, message, response, model_used, project_areas) VALUES ($1, $2, $3, $4, $5)',
+                    [userId, message, aiResponse, model_preference, queryMode === 'data' ? `SQL: ${executedSQL}` : null]
+                );
+            } catch (logErr) {
+                console.warn('[Chat V2] 儲存聊天記錄失敗:', logErr.message);
+            }
+        }
+
+        // Step 5: 回傳結果
+        res.json({
+            success: true,
+            response: aiResponse,
+            queryMode: queryMode,
+            executedSQL: executedSQL, // 方便 debug，正式版可移除
+            resultCount: queryResults ? queryResults.length : null,
+            modelUsed: model_preference
+        });
+
+    } catch (error) {
+        console.error('[Chat V2] 未預期錯誤:', error);
+        res.status(500).json({ success: false, error: '處理請求時發生未預期錯誤' });
+    }
 });
 
 
