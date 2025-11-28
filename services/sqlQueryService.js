@@ -36,7 +36,10 @@ const FORBIDDEN_KEYWORDS = [
     'BENCHMARK', 'SLEEP', 'PG_SLEEP', 'DBLINK',
     // 資訊洩漏相關
     'CURRENT_USER', 'CURRENT_DATABASE', 'SESSION_USER',
-    'LO_IMPORT', 'LO_EXPORT', 'PG_READ_FILE', 'PG_LS_DIR'
+    'LO_IMPORT', 'LO_EXPORT', 'PG_READ_FILE', 'PG_LS_DIR',
+    // 更多系統函數
+    'INET_SERVER_ADDR', 'INET_SERVER_PORT', 'PG_BACKEND_PID',
+    'CURRENT_SETTING', 'PG_CONF_LOAD_TIME', 'PG_POSTMASTER_START_TIME'
 ];
 
 // 禁止的特殊字元序列（用於 SQL 注入攻擊）
@@ -52,6 +55,25 @@ const FORBIDDEN_FUNCTION_PATTERNS = [
     /CONCAT\s*\(/i,         // CONCAT() 可用於構造惡意字串
     /CHR\s*\(/i,            // PostgreSQL 的 CHR()
     /'\s*OR\s*'[^']*'\s*=\s*'/i,  // 經典 OR '1'='1' 注入
+    // 編碼繞過攻擊
+    /E'\\\\x[0-9a-f]/i,     // PostgreSQL 十六進位逃逸字串 E'\x...'
+    /E'\s*\\\\x/i,          // E' \x 變體
+    /U&'\\\\[0-9a-f]/i,     // PostgreSQL Unicode 逃逸字串
+    /E'\\\\[xuU]/i,         // 任何 PostgreSQL 逃逸字串
+    /U&'/i,                 // Unicode 逃逸開始
+    // 永真條件注入（攻擊常用）
+    /\bOR\s+\d+\s*=\s*\d+/i,        // OR 1=1, OR 2=2 等
+    /\bOR\s+'[^']*'\s*=\s*'[^']*'/i, // OR 'a'='a'
+    /\bOR\s+''\s*=\s*''/i,           // OR ''=''
+    /\bWHERE\s+'[^']*'\s*=\s*'[^']*'/i, // WHERE 'a'='a'
+    /\bWHERE\s+''\s*=\s*''/i,           // WHERE ''=''
+    /\b\d+\s+LIKE\s+\d+/i,              // 1 LIKE 1
+    // 字串串接注入
+    /''\s*\|\|\s*'[^']*UNION/i,         // '' || 'UNION...
+    /''\s*\|\|\s*'[^']*SELECT/i,        // '' || 'SELECT...
+    // 字串內包含 SQL 關鍵字（在 || 串接中）
+    /\|\|\s*'[^']*\bUNION\b/i,          // || '...UNION...
+    /\|\|\s*'[^']*\bSELECT\b[^']*\bFROM\b/i, // || '...SELECT...FROM...
 ];
 
 // 回傳筆數限制（針對 512MB RAM 優化）
@@ -138,6 +160,26 @@ function validateSQL(sql) {
         return { safe: false, reason: 'SQL 語句過長' };
     }
 
+    // 0a. 檢查重複字元（防止 DoS）
+    if (/\*{10,}/.test(trimmedSQL)) {
+        return { safe: false, reason: 'SQL 語句包含異常重複字元' };
+    }
+    
+    // 0aa. 檢查過多的 JOIN 或 AND（防止複雜度攻擊）
+    const joinCount = (upperSQL.match(/\bJOIN\b/g) || []).length;
+    const andCount = (upperSQL.match(/\bAND\b/g) || []).length;
+    const onCount = (upperSQL.match(/\bON\s+/g) || []).length;
+    if (joinCount > 10) {
+        return { safe: false, reason: 'SQL 語句包含過多 JOIN' };
+    }
+    if (andCount > 20) {
+        return { safe: false, reason: 'SQL 語句包含過多 AND 條件' };
+    }
+    // 檢查重複 ON（異常 JOIN 攻擊）
+    if (onCount > joinCount + 2) {
+        return { safe: false, reason: 'SQL 語句包含異常 ON 子句' };
+    }
+
     // 0b. 檢查引號是否平衡（防止 unterminated string 錯誤）
     const singleQuotes = (trimmedSQL.match(/'/g) || []).length;
     const doubleQuotes = (trimmedSQL.match(/"/g) || []).length;
@@ -148,9 +190,31 @@ function validateSQL(sql) {
         return { safe: false, reason: 'SQL 語句引號不平衡（雙引號）' };
     }
 
-    // 1. 必須以 SELECT 開頭
-    if (!upperSQL.startsWith('SELECT')) {
+    // 1. 必須以 SELECT 或 WITH (CTE) 開頭
+    if (!upperSQL.startsWith('SELECT') && !upperSQL.startsWith('WITH')) {
         return { safe: false, reason: '只允許 SELECT 查詢語句' };
+    }
+
+    // 1b. 如果是 WITH，確保最終是 SELECT（不是 INSERT/UPDATE/DELETE）
+    if (upperSQL.startsWith('WITH')) {
+        // CTE 後面必須有 SELECT
+        if (!/\)\s*SELECT\b/i.test(upperSQL)) {
+            return { safe: false, reason: 'WITH 子句必須搭配 SELECT 使用' };
+        }
+    }
+
+    // 2a-pre. 特殊編碼攻擊檢查（在原始 SQL 上執行，因為需要檢查字串內容）
+    // 這些是編碼繞過攻擊，即使在字串內也是可疑的
+    const encodingPatterns = [
+        /E'\\x[0-9a-f]/i,       // PostgreSQL 十六進位逃逸
+        /U&'/i,                  // PostgreSQL Unicode 逃逸
+        /\|\|\s*'[^']*\bUNION\b/i,  // 字串串接含 UNION
+        /\|\|\s*'[^']*\bSELECT\b[^']*\bFROM\b/i, // 字串串接含 SELECT FROM
+    ];
+    for (const pattern of encodingPatterns) {
+        if (pattern.test(trimmedSQL)) {
+            return { safe: false, reason: '禁止使用可疑的編碼或字串串接模式' };
+        }
     }
 
     // 移除字串常量後再檢查關鍵字（避免誤判字串內容）
@@ -192,6 +256,14 @@ function validateSQL(sql) {
         return { safe: false, reason: '禁止使用 UNION 查詢' };
     }
     
+    // 4aa. 提取 CTE 名稱（WITH name AS）
+    const cteNames = new Set();
+    const ctePattern = /\bWITH\s+([a-zA-Z_][a-zA-Z0-9_]*)\s+AS\s*\(/gi;
+    let cteMatch;
+    while ((cteMatch = ctePattern.exec(sqlWithoutStrings)) !== null) {
+        cteNames.add(cteMatch[1].toLowerCase());
+    }
+    
     // 4b. 提取所有可能的表名
     const usedTables = new Set();
     
@@ -219,8 +291,12 @@ function validateSQL(sql) {
         });
     }
 
-    // 4c. 檢查所有表是否在白名單中
+    // 4c. 檢查所有表是否在白名單中（CTE 名稱除外）
     for (const table of usedTables) {
+        // 跳過 CTE 名稱
+        if (cteNames.has(table)) {
+            continue;
+        }
         if (!ALLOWED_TABLES.includes(table)) {
             return { safe: false, reason: `不允許查詢表格: ${table}` };
         }
