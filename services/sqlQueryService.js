@@ -1,14 +1,11 @@
 /**
- * SQL Query Service - 安全的 Text-to-SQL 服務
+ * SQL Query Service - 安全的 Text-to-SQL 服務 (V2 優化版)
  * 
- * 功能：讓 LLM 根據使用者問題生成 SQL，並安全地執行查詢
- * 
- * 安全機制：
- * 1. 只允許 SELECT 語句
- * 2. 白名單限制可查詢的表格
- * 3. 黑名單禁止危險關鍵字
- * 4. 強制 LIMIT 防止大量資料
- * 5. 完整的錯誤處理
+ * 2025.11 優化重點：
+ * - 更精確的意圖分類
+ * - 更完整的 SQL 生成指引
+ * - 以資料為主、LLM 為輔的回答策略
+ * - 優化的歷史對話處理（節省記憶體）
  * 
  * @module services/sqlQueryService
  */
@@ -43,63 +40,56 @@ const FORBIDDEN_KEYWORDS = [
 const FORBIDDEN_PATTERNS = [
     '--',      // SQL 單行註解
     ';--',     // 語句結束 + 註解
-    '/*',      // 多行註解開始
-    '*/',      // 多行註解結束
 ];
 
-// 最大回傳筆數
+// 回傳筆數限制（針對 512MB RAM 優化）
 const MAX_LIMIT = 100;
 const DEFAULT_LIMIT = 50;
 
+// 歷史對話限制（平衡記憶體和使用體驗）
+const MAX_HISTORY_COUNT = 10;     // 最多載入 10 筆歷史
+const MAX_HISTORY_LENGTH = 100;   // 每筆歷史最多 100 字元
+const HISTORY_WINDOW_MINUTES = 15; // 只載入 15 分鐘內的對話
+
 // ============================================
-// Schema 資訊（給 LLM 參考）
+// Schema 資訊（給 LLM 參考）- 詳細版本
 // ============================================
 
 const SCHEMA_INFO = `
-你可以查詢以下資料表：
+## 資料庫結構
 
-1. tree_survey (樹木調查資料表) - 主要資料表
-   - id: 整數，主鍵
-   - system_tree_id: 文字，系統樹木編號 (如 ST-0001)
-   - project_tree_id: 文字，專案樹木編號
-   - project_location: 文字，專案區位名稱
-   - project_code: 文字，專案代碼
-   - project_name: 文字，專案名稱
-   - species_id: 文字，樹種編號
-   - species_name: 文字，樹種名稱 (如 榕樹、樟樹)
-   - x_coord: 數字，X座標
-   - y_coord: 數字，Y座標
-   - tree_height_m: 數字，樹高（公尺）
-   - dbh_cm: 數字，胸高直徑（公分）
-   - status: 文字，狀況
-   - notes: 文字，備註
-   - carbon_storage: 數字，碳儲存量（公斤）
-   - carbon_sequestration_per_year: 數字，年碳吸存量（公斤/年）
-   - survey_time: 時間戳，調查時間
+### 1. tree_survey (樹木調查主表)
+| 欄位 | 說明 | 範例 |
+|------|------|------|
+| system_tree_id | 系統編號 | ST-0001 |
+| species_name | 樹種名稱 | 榕樹、樟樹 |
+| tree_height_m | 樹高(公尺) | 5.5, 12.3 |
+| dbh_cm | 胸徑(公分) | 25.0, 68.5 |
+| status | 健康狀況 | 良好、普通、需關注 |
+| carbon_storage | 碳儲存量(公斤) | 150.5 |
+| carbon_sequestration_per_year | 年碳吸存量 | 12.3 |
+| project_location | 專案區位 | 台北市大安區 |
+| project_name | 專案名稱 | 大安森林公園碳匯計畫 |
+| notes | 備註 | 需修剪 |
+| survey_time | 調查時間 | 2024-06-15 |
 
-2. tree_species (樹種資料表)
-   - id: 文字，樹種編號
-   - name: 文字，樹種名稱
-   - scientific_name: 文字，學名
+### 2. tree_species (樹種資料表)
+- id, name, scientific_name
 
-3. tree_carbon_data (樹種碳匯資料表)
-   - id: 整數，主鍵
-   - common_name_zh: 文字，中文名
-   - scientific_name: 文字，學名
-   - carbon_absorption_min/max: 數字，年碳吸收範圍
-   - growth_rate: 文字，生長速率
-   - carbon_efficiency: 文字，碳效率評級
+### 3. tree_carbon_data (樹種碳匯參數)
+- common_name_zh, carbon_absorption_min/max, growth_rate, carbon_efficiency
 
-4. project_areas (專案區域表)
-   - id: 整數，主鍵
-   - area_name: 文字，區域名稱
+## 常用查詢模板
+1. 查單筆: SELECT system_tree_id, species_name, tree_height_m, dbh_cm, status, carbon_storage, project_location FROM tree_survey WHERE system_tree_id = 'ST-0001'
+2. 統計總數: SELECT COUNT(*) as total FROM tree_survey
+3. 按樹種統計: SELECT species_name, COUNT(*) as count, ROUND(AVG(dbh_cm)::numeric,1) as avg_dbh FROM tree_survey GROUP BY species_name ORDER BY count DESC
+4. 條件篩選: SELECT system_tree_id, species_name, dbh_cm, tree_height_m, carbon_storage FROM tree_survey WHERE dbh_cm > 50 ORDER BY dbh_cm DESC
+5. 查特定樹種: SELECT system_tree_id, tree_height_m, dbh_cm, carbon_storage, status FROM tree_survey WHERE species_name ILIKE '%榕樹%'
 
 重要提醒：
 - 只能使用 SELECT 語句
-- 必須在查詢結尾加上 LIMIT (最多 ${MAX_LIMIT})
-- 文字比對建議使用 ILIKE 進行模糊搜尋
-- 樹種名稱欄位是 species_name
-- 系統編號欄位是 system_tree_id
+- 必須加 LIMIT (最多 ${MAX_LIMIT})
+- 文字比對用 ILIKE
 `;
 
 // ============================================
@@ -191,40 +181,44 @@ function validateSQL(sql) {
 // ============================================
 
 /**
- * 生成讓 LLM 產生 SQL 的 prompt
+ * 生成讓 LLM 產生 SQL 的 prompt（優化版）
  * @param {string} userQuestion - 使用者問題
+ * @param {Array} chatHistory - 歷史對話
  * @returns {string}
  */
 function buildSQLGenerationPrompt(userQuestion, chatHistory = []) {
-    // 構建歷史對話上下文
+    // 精簡的歷史對話上下文
     let historyContext = '';
     if (chatHistory && chatHistory.length > 0) {
-        historyContext = '\n\n最近的對話紀錄（供參考上下文）：\n';
-        chatHistory.slice(-5).forEach((h, i) => {
-            historyContext += `用戶: ${h.message}\nAI: ${h.response.substring(0, 200)}...\n\n`;
+        historyContext = '\n\n## 最近對話\n';
+        chatHistory.slice(-3).forEach((h) => {
+            const shortResponse = h.response.substring(0, MAX_HISTORY_LENGTH);
+            historyContext += `Q: ${h.message.substring(0, 50)}\nA: ${shortResponse}...\n`;
         });
     }
 
-    return `你是一個專業的 PostgreSQL 資料庫助手。請根據使用者的問題，生成一個安全且正確的 SQL 查詢語句。
+    return `你是專業的 PostgreSQL 資料庫助手。根據使用者問題生成精確的 SQL 查詢。
 
-${SCHEMA_INFO}${historyContext}
+${SCHEMA_INFO}
+${historyContext}
 
-使用者問題：${userQuestion}
+## 使用者問題
+${userQuestion}
 
-重要規則：
-1. 請直接回傳 SQL 語句，不要加任何解釋或 markdown 格式
-2. 如果問題與資料庫查詢無關，請回傳 "NOT_A_DATA_QUERY"
-3. 如果使用者問了多個問題，請只針對【第一個】或【最主要】的問題生成 SQL
-4. 不要使用 UNION，每次只回傳一個查詢
-5. 如果使用者說「給我完整的」或「全部」，可以參考歷史對話中的查詢條件
+## 嚴格規則
+1. 只回傳純 SQL 語句，不要任何解釋或 markdown
+2. 若問題與資料庫無關，只回傳：NOT_A_DATA_QUERY
+3. 一次只生成一個查詢，不用 UNION
+4. 查詢單筆時，回傳完整欄位（system_tree_id, species_name, tree_height_m, dbh_cm, status, carbon_storage, project_location）
+5. 統計查詢要用 COUNT, SUM, AVG 並用 ROUND 取小數點一位
+6. 若使用者說「完整」「全部」，參考歷史對話條件，用 LIMIT 100
+7. 文字比對用 ILIKE
 
-範例輸出格式：
-SELECT species_name, COUNT(*) as count FROM tree_survey GROUP BY species_name ORDER BY count DESC LIMIT 10
-`;
+直接回傳 SQL：`;
 }
 
 /**
- * 生成讓 LLM 解釋查詢結果的 prompt
+ * 生成讓 LLM 解釋查詢結果的 prompt（以資料為主）
  * @param {string} userQuestion - 使用者原始問題
  * @param {string} sql - 執行的 SQL
  * @param {Array} results - 查詢結果
@@ -234,29 +228,46 @@ SELECT species_name, COUNT(*) as count FROM tree_survey GROUP BY species_name OR
  */
 function buildResultExplanationPrompt(userQuestion, sql, results, totalCount, chatHistory = []) {
     // 限制結果大小，避免 token 過多
-    const displayResults = results.slice(0, 20);
-    const hasMore = results.length > 20;
+    const displayResults = results.slice(0, 30);
+    const hasMore = results.length > 30;
 
-    // 構建歷史對話上下文
+    // 精簡歷史
     let historyContext = '';
     if (chatHistory && chatHistory.length > 0) {
-        historyContext = '\n\n最近的對話紀錄：\n';
-        chatHistory.slice(-3).forEach((h) => {
-            historyContext += `用戶: ${h.message}\nAI: ${h.response.substring(0, 150)}...\n`;
+        historyContext = '\n\n【對話脈絡】\n';
+        chatHistory.slice(-2).forEach((h) => {
+            historyContext += `用戶問: ${h.message.substring(0, 40)}...\n`;
         });
     }
 
-    return `使用者問題：${userQuestion}${historyContext}
+    // 根據結果數量調整指示
+    let formatInstruction = '';
+    if (totalCount === 0) {
+        formatInstruction = `【無資料】明確告知「資料庫中沒有找到符合條件的資料」，建議其他查詢條件，不要編造資料。`;
+    } else if (totalCount === 1) {
+        formatInstruction = `【單筆資料】詳細列出所有重要欄位，用自然語言描述如「編號 ST-0001 是一棵榕樹，樹高 X 公尺...」`;
+    } else if (totalCount <= 10) {
+        formatInstruction = `【少量資料】逐筆列出重要資訊，用清單格式，最後做簡短總結。`;
+    } else {
+        formatInstruction = `【大量資料】先說「共查詢到 ${totalCount} 筆」，做統計摘要（最高/最低/平均），列出前 5-10 筆代表性資料。`;
+    }
 
-我從資料庫查詢到以下結果（共 ${totalCount} 筆${hasMore ? '，以下顯示前 20 筆' : ''}）：
+    return `你是樹木碳匯資料庫專業助理。根據【實際查詢結果】回答問題。
 
+## 問題
+${userQuestion}${historyContext}
+
+## 查詢結果（共 ${totalCount} 筆${hasMore ? '，顯示前30筆' : ''}）
 ${JSON.stringify(displayResults, null, 2)}
 
-請用繁體中文，以友善、專業的方式回答使用者的問題。
-如果結果為空，請告知使用者沒有找到相關資料。
-如果有多筆資料，請做適當的摘要或列表呈現。
-請在回答中自然地融入數據，不要只是列出原始 JSON。
-如果使用者的問題與先前對話有關，請參考歷史紀錄來理解上下文。`;
+## ${formatInstruction}
+
+## 核心原則
+1. 【資料優先】數字必須來自查詢結果，絕對不可編造
+2. 【誠實回答】資料不足就說明
+3. 【專業補充】可簡短補充樹種知識，但標明是「一般知識」
+4. 【格式清晰】善用列表、數字
+5. 【繁體中文】全程繁體中文`;
 }
 
 // ============================================
@@ -297,43 +308,107 @@ async function executeSecureQuery(sql) {
 }
 
 /**
- * 判斷使用者問題是否需要查詢資料庫
+ * 判斷使用者問題是否需要查詢資料庫（優化版）
  * @param {string} question - 使用者問題
  * @returns {boolean}
  */
 function shouldQueryDatabase(question) {
-    // 關鍵字判斷（快速路徑，不需要 LLM）
-    const dataKeywords = [
-        '幾棵', '多少', '哪些', '哪一', '列出', '查詢', '搜尋', '找',
-        '統計', '總數', '平均', '最高', '最大', '最小', '超過', '低於',
-        'ST-', 'PT-',  // 樹木編號
-        '胸徑', '樹高', '碳儲存', '碳吸存',
-        '專案', '區域', '區位'
+    // 強資料查詢信號（幾乎一定要查資料庫）
+    const strongDataSignals = [
+        /ST-\d+/i,              // 樹木編號 ST-0001
+        /PT-\d+/i,              // 專案編號
+        /總共.*[幾多]/,          // 總共有幾/多少
+        /有幾[棵顆株]/,          // 有幾棵
+        /多少[棵顆株]/,          // 多少棵
+        /列出.*所有/,            // 列出所有
+        /查詢.*資料/,            // 查詢資料
+        /哪些.*樹/,              // 哪些樹
+        /超過.*公分/,            // 超過 X 公分
+        /大於.*公分/,
+        /低於.*公分/,
+        /小於.*公分/,
+        /胸徑.*\d+/,             // 胸徑 + 數字
+        /樹高.*\d+/,             // 樹高 + 數字
+        /碳[儲存吸存].*\d+/,     // 碳 + 數字
+        /統計/,
+        /平均/,
+        /最[高大低小]/,
+        /排[名序]/,
+        /完整.*筆/,              // 完整 68 筆
+        /全部.*資料/,            // 全部資料
     ];
 
-    const knowledgeKeywords = [
-        '什麼是', '為什麼', '如何', '怎麼', '介紹', '說明', '解釋',
-        '適合', '建議', '好處', '壞處', '特性', '特徵'
+    // 強知識問答信號
+    const strongKnowledgeSignals = [
+        /什麼是/,
+        /為什麼/,
+        /如何.*種植/,
+        /怎麼.*照顧/,
+        /適合.*環境/,
+        /生長.*條件/,
+        /特[性徵]是/,
+        /好處.*壞處/,
+        /優點.*缺點/,
+        /介紹一下/,
+        /說明.*原理/,
     ];
 
-    const lowerQ = question.toLowerCase();
-    
-    // 如果包含資料關鍵字，傾向查資料庫
-    for (const kw of dataKeywords) {
-        if (question.includes(kw)) {
+    // 檢查強資料信號
+    for (const pattern of strongDataSignals) {
+        if (pattern.test(question)) {
             return true;
         }
     }
 
-    // 如果包含知識關鍵字，傾向不查資料庫
-    for (const kw of knowledgeKeywords) {
-        if (question.includes(kw)) {
+    // 檢查強知識信號
+    for (const pattern of strongKnowledgeSignals) {
+        if (pattern.test(question)) {
             return false;
         }
     }
 
-    // 預設不查資料庫（讓 LLM 自然回答）
+    // 弱資料關鍵字
+    const weakDataKeywords = ['幾', '多少', '哪', '找', '查', '搜', '專案', '區域', '區位', '資料'];
+    
+    // 弱知識關鍵字  
+    const weakKnowledgeKeywords = ['嗎', '呢', '適合', '建議', '應該', '可以'];
+
+    let dataScore = 0;
+    let knowledgeScore = 0;
+
+    for (const kw of weakDataKeywords) {
+        if (question.includes(kw)) dataScore++;
+    }
+    
+    for (const kw of weakKnowledgeKeywords) {
+        if (question.includes(kw)) knowledgeScore++;
+    }
+
+    // 資料分數較高則查資料庫
+    if (dataScore > knowledgeScore) return true;
+    if (knowledgeScore > dataScore) return false;
+
+    // 預設：不查資料庫（讓 LLM 回答一般知識）
     return false;
+}
+
+/**
+ * 取得歷史對話查詢 SQL（統一管理參數）
+ * @param {string} userId - 使用者 ID
+ * @returns {{ text: string, values: Array }}
+ */
+function getHistoryQuerySQL(userId) {
+    return {
+        text: `
+            SELECT message, response 
+            FROM chat_logs 
+            WHERE user_id = $1 
+            AND created_at > NOW() - INTERVAL '${HISTORY_WINDOW_MINUTES} minutes'
+            ORDER BY created_at DESC 
+            LIMIT $2
+        `,
+        values: [userId, MAX_HISTORY_COUNT]
+    };
 }
 
 // ============================================
@@ -346,8 +421,11 @@ module.exports = {
     buildSQLGenerationPrompt,
     buildResultExplanationPrompt,
     shouldQueryDatabase,
+    getHistoryQuerySQL,
     SCHEMA_INFO,
     ALLOWED_TABLES,
     MAX_LIMIT,
-    DEFAULT_LIMIT
+    DEFAULT_LIMIT,
+    MAX_HISTORY_COUNT,
+    HISTORY_WINDOW_MINUTES
 };

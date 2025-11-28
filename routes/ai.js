@@ -263,22 +263,17 @@ router.post('/chat', aiLimiter, async (req, res) => {
         let executedSQL = null;
         let queryResults = null;
 
-        // Step 0: 獲取歷史對話上下文
+        // Step 0: 獲取歷史對話上下文（優化版：使用 sqlQueryService 的配置）
         let chatHistory = [];
         if (userId) {
-            const historyQuery = `
-                SELECT message, response 
-                FROM chat_logs 
-                WHERE user_id = $1 
-                AND created_at > NOW() - INTERVAL '30 minutes'
-                ORDER BY created_at DESC 
-                LIMIT 10
-            `;
             try {
-                const { rows } = await db.query(historyQuery, [userId]);
+                const historyQuery = sqlQueryService.getHistoryQuerySQL(userId);
+                const { rows } = await db.query(historyQuery.text, historyQuery.values);
                 // 反轉回正序 (舊 -> 新)
                 chatHistory = rows.reverse();
-                console.log(`[Chat V2] 載入 ${chatHistory.length} 筆歷史對話`);
+                if (chatHistory.length > 0) {
+                    console.log(`[Chat V2] 載入 ${chatHistory.length} 筆歷史對話 (${sqlQueryService.HISTORY_WINDOW_MINUTES}分鐘內)`);
+                }
             } catch (err) {
                 console.warn('[Chat V2] 獲取歷史對話失敗:', err.message);
             }
