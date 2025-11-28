@@ -81,6 +81,23 @@ const testCases = [
         category: 'LIMIT 過大（應被限制為 100）',
         checkLimit: 100
     },
+    
+    // ========== 新增：字串安全檢查 ==========
+    {
+        input: "SELECT * FROM tree_survey WHERE species_name = '未閉合的字串",
+        shouldPass: false,
+        category: '引號不平衡（單引號）'
+    },
+    {
+        input: 'SELECT * FROM tree_survey WHERE species_name = "未閉合的字串',
+        shouldPass: false,
+        category: '引號不平衡（雙引號）'
+    },
+    {
+        input: "SELECT * FROM tree_survey WHERE species_name = '" + "a".repeat(2000) + "'",
+        shouldPass: false,
+        category: 'SQL 過長（超過 2000 字元）'
+    },
 ];
 
 // 執行測試

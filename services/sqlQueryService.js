@@ -110,6 +110,21 @@ function validateSQL(sql) {
     const trimmedSQL = sql.trim();
     const upperSQL = trimmedSQL.toUpperCase();
 
+    // 0. 檢查 SQL 長度（防止超長 SQL 導致問題）
+    if (trimmedSQL.length > 2000) {
+        return { safe: false, reason: 'SQL 語句過長' };
+    }
+
+    // 0b. 檢查引號是否平衡（防止 unterminated string 錯誤）
+    const singleQuotes = (trimmedSQL.match(/'/g) || []).length;
+    const doubleQuotes = (trimmedSQL.match(/"/g) || []).length;
+    if (singleQuotes % 2 !== 0) {
+        return { safe: false, reason: 'SQL 語句引號不平衡（單引號）' };
+    }
+    if (doubleQuotes % 2 !== 0) {
+        return { safe: false, reason: 'SQL 語句引號不平衡（雙引號）' };
+    }
+
     // 1. 必須以 SELECT 開頭
     if (!upperSQL.startsWith('SELECT')) {
         return { safe: false, reason: '只允許 SELECT 查詢語句' };

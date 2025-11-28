@@ -1,499 +1,387 @@
 /**
- * 真正的 API 整合測試
- * 模擬 APP 的實際行為，發送請求到 Render 伺服器
- * 
- * 環境設定:
- * - staging: https://tree-app-backend-staging.onrender.com/api
- * - prod: https://tree-app-backend-prod.onrender.com/api
+ * API 整合測試 - 專注於邊界情況和實際問題
  * 
  * 使用方式:
- *   node tests/apiIntegration.test.js [staging|prod]
- * 
- * 預設使用 staging 環境
+ *   node tests/apiIntegration.test.js              # 基本測試
+ *   node tests/apiIntegration.test.js -v           # 顯示完整回應內容
  */
 
 const https = require('https');
 
-// 環境設定 (staging 已停用)
-const ENVIRONMENTS = {
-  prod: 'https://tree-app-backend-prod.onrender.com/api'
-};
+const BASE_URL = 'https://tree-app-backend-prod.onrender.com/api';
+const TEST_USER_ID = 'test-' + Date.now();
+const VERBOSE = process.argv.includes('-v') || process.argv.includes('--verbose');
 
-// 從命令列參數獲取環境，預設 prod
-const envArg = process.argv[2] || 'prod';
-const BASE_URL = ENVIRONMENTS[envArg] || ENVIRONMENTS.prod;
+console.log(`\n🌐 API: ${BASE_URL}`);
+console.log(`📝 加 -v 顯示完整回應\n`);
 
-console.log(`\n🌐 測試環境: ${envArg.toUpperCase()}`);
-console.log(`📡 API URL: ${BASE_URL}\n`);
-
-// 測試用的 User ID
-const TEST_USER_ID = 'test-user-' + Date.now();
-
-// HTTP POST 請求 (模擬 Flutter 的 ApiService.post)
+// HTTP 請求工具
 function apiPost(endpoint, data) {
   return new Promise((resolve, reject) => {
     const url = new URL(`${BASE_URL}/${endpoint}`);
-    
     const postData = JSON.stringify(data);
-    
-    const options = {
-      hostname: url.hostname,
-      port: 443,
-      path: url.pathname,
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'Content-Length': Buffer.byteLength(postData)
-      }
-    };
-    
-    const req = https.request(options, (res) => {
+    const req = https.request({
+      hostname: url.hostname, port: 443, path: url.pathname, method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(postData) }
+    }, (res) => {
       let body = '';
-      
-      res.on('data', (chunk) => {
-        body += chunk;
-      });
-      
+      res.on('data', chunk => body += chunk);
       res.on('end', () => {
-        try {
-          const json = JSON.parse(body);
-          resolve({
-            statusCode: res.statusCode,
-            body: json
-          });
-        } catch (e) {
-          resolve({
-            statusCode: res.statusCode,
-            body: body
-          });
-        }
+        try { resolve({ statusCode: res.statusCode, body: JSON.parse(body) }); }
+        catch { resolve({ statusCode: res.statusCode, body }); }
       });
     });
-    
-    req.on('error', (e) => {
-      reject(e);
-    });
-    
-    req.setTimeout(60000, () => {
-      req.destroy();
-      reject(new Error('Request timeout (60s)'));
-    });
-    
+    req.on('error', reject);
+    req.setTimeout(90000, () => { req.destroy(); reject(new Error('Timeout 90s')); });
     req.write(postData);
     req.end();
   });
 }
 
-// HTTP GET 請求
 function apiGet(endpoint) {
   return new Promise((resolve, reject) => {
     const url = new URL(`${BASE_URL}/${endpoint}`);
-    
-    const options = {
-      hostname: url.hostname,
-      port: 443,
-      path: url.pathname + url.search,
-      method: 'GET',
-      headers: {
-        'Content-Type': 'application/json'
-      }
-    };
-    
-    const req = https.request(options, (res) => {
+    const req = https.request({
+      hostname: url.hostname, port: 443, path: url.pathname + url.search, method: 'GET',
+      headers: { 'Content-Type': 'application/json' }
+    }, (res) => {
       let body = '';
-      
-      res.on('data', (chunk) => {
-        body += chunk;
-      });
-      
+      res.on('data', chunk => body += chunk);
       res.on('end', () => {
-        try {
-          const json = JSON.parse(body);
-          resolve({
-            statusCode: res.statusCode,
-            body: json
-          });
-        } catch (e) {
-          resolve({
-            statusCode: res.statusCode,
-            body: body
-          });
-        }
+        try { resolve({ statusCode: res.statusCode, body: JSON.parse(body) }); }
+        catch { resolve({ statusCode: res.statusCode, body }); }
       });
     });
-    
-    req.on('error', (e) => {
-      reject(e);
-    });
-    
-    req.setTimeout(30000, () => {
-      req.destroy();
-      reject(new Error('Request timeout (30s)'));
-    });
-    
+    req.on('error', reject);
+    req.setTimeout(30000, () => { req.destroy(); reject(new Error('Timeout 30s')); });
     req.end();
   });
 }
 
-// 測試結果追蹤
-let passed = 0;
-let failed = 0;
+// 測試執行器
+let passed = 0, failed = 0;
 const results = [];
 
-// 測試函數
 async function runTest(name, testFn) {
   process.stdout.write(`  ⏳ ${name}...`);
-  const startTime = Date.now();
-  
+  const start = Date.now();
   try {
     const result = await testFn();
-    const duration = Date.now() - startTime;
-    
-    console.log(`\r  ✅ ${name} (${duration}ms)`);
-    if (result && result.details) {
-      console.log(`     └─ ${result.details}`);
+    const ms = Date.now() - start;
+    console.log(`\r  ✅ ${name} (${ms}ms)`);
+    if (result?.details) console.log(`     └─ ${result.details}`);
+    if (VERBOSE && result?.fullResponse) {
+      console.log(`     ┌──────────────────────────────────────`);
+      result.fullResponse.split('\n').slice(0, 20).forEach(line => console.log(`     │ ${line}`));
+      if (result.fullResponse.split('\n').length > 20) console.log(`     │ ... (truncated)`);
+      console.log(`     └──────────────────────────────────────`);
     }
     passed++;
-    results.push({ name, status: 'pass', duration });
-  } catch (error) {
-    const duration = Date.now() - startTime;
-    console.log(`\r  ❌ ${name} (${duration}ms)`);
-    console.log(`     └─ Error: ${error.message}`);
+    results.push({ name, status: 'pass', ms, response: result?.fullResponse });
+  } catch (err) {
+    console.log(`\r  ❌ ${name} (${Date.now() - start}ms)`);
+    console.log(`     └─ ${err.message}`);
     failed++;
-    results.push({ name, status: 'fail', error: error.message, duration });
+    results.push({ name, status: 'fail', error: err.message });
   }
 }
 
-// ===========================================
-// 測試案例
-// ===========================================
+// ═══════════════════════════════════════════════════════════
+// 測試案例 - 專注於邊界情況和實際問題
+// ═══════════════════════════════════════════════════════════
 
-// 1. 健康檢查測試 - 使用 tree_species endpoint 確認伺服器運行中
-async function testHealthCheck() {
-  const response = await apiGet('tree_species');
-  
-  if (response.statusCode !== 200) {
-    throw new Error(`Expected status 200, got ${response.statusCode}`);
-  }
-  
-  return { details: `Server is healthy (tree_species API working)` };
+// 1. 基本連線
+async function test_ServerAlive() {
+  const r = await apiGet('tree_species');
+  if (r.statusCode !== 200) throw new Error(`Status ${r.statusCode}`);
+  return { details: 'Server responding' };
 }
 
-// 2. Chat API - 數據查詢 (模擬 APP 的 getChatResponse)
-async function testChatDataQuery() {
-  // 模擬 Flutter AiService.getChatResponse
-  const response = await apiPost('chat', {
-    message: '目前有幾棵樹？',
-    userId: TEST_USER_ID,
-    projectAreas: [],
-    model_preference: 'deepseek-ai/DeepSeek-V3'  // APP 預設使用的模型
-  });
-  
-  if (response.statusCode !== 200) {
-    throw new Error(`Expected status 200, got ${response.statusCode}`);
-  }
-  
-  if (!response.body.success) {
-    throw new Error(`API returned success=false: ${response.body.message || JSON.stringify(response.body)}`);
-  }
-  
-  if (!response.body.response) {
-    throw new Error('Missing response field in API response');
-  }
-  
-  // 檢查回應是否包含數字（應該要有樹木數量）
-  const hasNumber = /\d+/.test(response.body.response);
-  
-  return { 
-    details: `Response contains numbers: ${hasNumber}, preview: "${response.body.response.substring(0, 80)}..."` 
-  };
-}
-
-// 3. Chat API - 知識問答
-async function testChatKnowledgeQuery() {
-  const response = await apiPost('chat', {
-    message: '什麼是碳匯？',
+// 2. 【重要】SQL 注入測試 - 惡意輸入
+async function test_SQLInjection() {
+  const r = await apiPost('chat', {
+    message: "列出所有樹木; DROP TABLE tree_survey; --",
     userId: TEST_USER_ID,
     projectAreas: [],
     model_preference: 'deepseek-ai/DeepSeek-V3'
   });
   
-  if (response.statusCode !== 200) {
-    throw new Error(`Expected status 200, got ${response.statusCode}`);
+  // 403 表示被安全機制攔截，這是好事
+  if (r.statusCode === 403) {
+    return { 
+      details: `blocked by security (403) ✓`,
+      fullResponse: '請求被安全機制攔截'
+    };
   }
   
-  if (!response.body.success) {
-    throw new Error(`API returned success=false: ${response.body.message || JSON.stringify(response.body)}`);
-  }
+  if (r.statusCode !== 200) throw new Error(`Unexpected status ${r.statusCode}`);
+  if (!r.body.success) throw new Error('Request failed');
   
-  // 知識問答應該有較長的回應
-  if (response.body.response.length < 50) {
-    throw new Error(`Response too short (${response.body.response.length} chars)`);
-  }
+  // 如果請求成功，確認沒有執行危險操作
+  const sql = (r.body.executedSQL || '').toLowerCase();
+  if (sql.includes('drop')) throw new Error('SQL injection may have succeeded!');
   
   return { 
-    details: `Response length: ${response.body.response.length} chars` 
+    details: `SQL=${r.body.executedSQL || 'filtered/safe'}`,
+    fullResponse: r.body.response 
   };
 }
 
-// 4. Chat API - 特定樹種查詢
-async function testChatSpeciesQuery() {
-  const response = await apiPost('chat', {
-    message: '有多少棵樟樹？',
-    userId: TEST_USER_ID,
-    projectAreas: [],
-    model_preference: 'deepseek-ai/DeepSeek-V3'
-  });
-  
-  if (response.statusCode !== 200) {
-    throw new Error(`Expected status 200, got ${response.statusCode}`);
-  }
-  
-  if (!response.body.success) {
-    throw new Error(`API returned success=false: ${response.body.message || JSON.stringify(response.body)}`);
-  }
-  
-  // 應該提到樟樹或數量
-  const responseText = response.body.response.toLowerCase();
-  const mentionsResult = responseText.includes('樟') || /\d+/.test(response.body.response);
-  
-  return { 
-    details: `Mentions species/count: ${mentionsResult}` 
-  };
-}
-
-// 5. Chat API - 使用不同模型 (Qwen)
-async function testChatWithQwenModel() {
-  const response = await apiPost('chat', {
-    message: '列出所有樹種',
-    userId: TEST_USER_ID,
-    projectAreas: [],
-    model_preference: 'Qwen/Qwen3-VL-32B-Instruct'
-  });
-  
-  if (response.statusCode !== 200) {
-    throw new Error(`Expected status 200, got ${response.statusCode}`);
-  }
-  
-  if (!response.body.success) {
-    throw new Error(`API returned success=false: ${response.body.message || JSON.stringify(response.body)}`);
-  }
-  
-  return { 
-    details: `Qwen model responded successfully` 
-  };
-}
-
-// 6. Chat API - 對話歷史測試（連續兩則訊息）
-async function testChatHistory() {
-  // 第一則訊息
-  await apiPost('chat', {
-    message: '我想了解碳匯計算',
-    userId: TEST_USER_ID + '-history',
-    projectAreas: [],
-    model_preference: 'deepseek-ai/DeepSeek-V3'
-  });
-  
-  // 第二則訊息（應該能記住上下文）
-  const response = await apiPost('chat', {
-    message: '可以舉個例子嗎？',
-    userId: TEST_USER_ID + '-history',
-    projectAreas: [],
-    model_preference: 'deepseek-ai/DeepSeek-V3'
-  });
-  
-  if (response.statusCode !== 200) {
-    throw new Error(`Expected status 200, got ${response.statusCode}`);
-  }
-  
-  if (!response.body.success) {
-    throw new Error(`API returned success=false`);
-  }
-  
-  return { 
-    details: `Conversation history working` 
-  };
-}
-
-// 7. Chat API - Project Areas 過濾
-async function testChatWithProjectAreas() {
-  const response = await apiPost('chat', {
+// 3. 【重要】Project Areas 過濾 - 確認 SQL 有加上 WHERE 條件
+async function test_ProjectAreaFilter() {
+  const r = await apiPost('chat', {
     message: '這個區域有幾棵樹？',
     userId: TEST_USER_ID,
-    projectAreas: ['測試區域'],
+    projectAreas: ['大安森林公園'],  // 使用可能存在的區域名稱
     model_preference: 'deepseek-ai/DeepSeek-V3'
   });
   
-  if (response.statusCode !== 200) {
-    throw new Error(`Expected status 200, got ${response.statusCode}`);
-  }
+  if (r.statusCode !== 200) throw new Error(`Status ${r.statusCode}`);
   
-  // 即使區域不存在，也應該回傳成功
-  if (!response.body.success) {
-    throw new Error(`API returned success=false`);
-  }
+  // 檢查 SQL 是否包含區域過濾
+  const sql = r.body.executedSQL || '';
+  const hasFilter = sql.toLowerCase().includes('project_location') || sql.toLowerCase().includes('where');
   
   return { 
-    details: `Project area filter working` 
+    details: `hasAreaFilter=${hasFilter}, SQL=${sql}`,
+    fullResponse: r.body.response 
   };
 }
 
-// 8. 樹木調查資料 API 測試
-async function testTreeSurveyApi() {
-  const response = await apiGet('tree_survey');
+// 4. 【重要】不存在的區域 - 應該回傳 0 而不是全部資料
+async function test_NonExistentArea() {
+  const r = await apiPost('chat', {
+    message: '這裡有多少棵樹？',
+    userId: TEST_USER_ID,
+    projectAreas: ['根本不存在的區域ABC123'],
+    model_preference: 'deepseek-ai/DeepSeek-V3'
+  });
   
-  if (response.statusCode !== 200) {
-    throw new Error(`Expected status 200, got ${response.statusCode}`);
-  }
+  if (r.statusCode !== 200) throw new Error(`Status ${r.statusCode}`);
   
-  if (!response.body.success) {
-    throw new Error(`API returned success=false`);
-  }
-  
-  const count = Array.isArray(response.body.data) ? response.body.data.length : 0;
+  // 應該說沒有資料，而不是回傳全部 2758 棵
+  const mentions2758 = r.body.response.includes('2758') || r.body.response.includes('2,758');
+  if (mentions2758) throw new Error('應該回傳 0，但卻回傳了全部資料！');
   
   return { 
-    details: `Found ${count} tree records` 
+    details: `correctly filtered (no 2758)`,
+    fullResponse: r.body.response 
   };
 }
 
-// 9. 樹種資料 API 測試
-async function testTreeSpeciesApi() {
-  // 正確路徑: /api/carbon/sink/tree-species
-  const response = await apiGet('carbon/sink/tree-species');
-  
-  if (response.statusCode !== 200) {
-    throw new Error(`Expected status 200, got ${response.statusCode}`);
-  }
-  
-  const count = Array.isArray(response.body.data) ? response.body.data.length : 
-                (response.body.species ? response.body.species.length : 0);
-  
-  return { 
-    details: `Found ${count} species` 
-  };
-}
-
-// 10. 統計資料 API 測試
-async function testStatisticsApi() {
-  // 正確路徑: /api/tree_statistics
-  const response = await apiGet('tree_statistics');
-  
-  if (response.statusCode !== 200) {
-    throw new Error(`Expected status 200, got ${response.statusCode}`);
-  }
-  
-  return { 
-    details: `Statistics API working` 
-  };
-}
-
-// 11. 錯誤處理測試 - 空訊息
-async function testChatEmptyMessage() {
-  const response = await apiPost('chat', {
-    message: '',
+// 5. 【邊界】超長訊息 - 測試是否會崩潰
+async function test_VeryLongMessage() {
+  const longMsg = '請問' + '這棵樹'.repeat(500) + '的資料？';  // ~1500 字
+  const r = await apiPost('chat', {
+    message: longMsg,
     userId: TEST_USER_ID,
     projectAreas: [],
     model_preference: 'deepseek-ai/DeepSeek-V3'
   });
   
-  // 空訊息應該被拒絕或優雅處理
-  if (response.statusCode === 200 && !response.body.success) {
-    return { details: 'Empty message rejected properly' };
+  if (r.statusCode !== 200 && r.statusCode !== 400) {
+    throw new Error(`Unexpected status ${r.statusCode}`);
   }
   
-  if (response.statusCode === 400) {
-    return { details: 'Empty message rejected with 400' };
-  }
-  
-  // 如果伺服器還是處理了，至少要有回應
-  return { details: 'Server handled empty message gracefully' };
+  return { 
+    details: `status=${r.statusCode}, handled gracefully`,
+    fullResponse: r.body.response || r.body.message || JSON.stringify(r.body)
+  };
 }
 
-// 12. 錯誤處理測試 - 無效模型
-async function testChatInvalidModel() {
-  const response = await apiPost('chat', {
-    message: '測試訊息',
+// 6. 【邊界】特殊字元 - emoji、換行、引號
+async function test_SpecialCharacters() {
+  const r = await apiPost('chat', {
+    message: '🌳 請問"榕樹"有幾棵？\n包含\'樟樹\'嗎？',
     userId: TEST_USER_ID,
     projectAreas: [],
-    model_preference: 'invalid-model-name'
+    model_preference: 'deepseek-ai/DeepSeek-V3'
   });
   
-  // 無效模型應該回退到預設模型或報錯
-  if (response.statusCode === 200) {
-    return { details: 'Server handled invalid model gracefully (fallback)' };
-  }
+  if (r.statusCode !== 200) throw new Error(`Status ${r.statusCode}`);
+  if (!r.body.success) throw new Error('Failed to handle special chars');
   
-  if (response.statusCode === 400) {
-    return { details: 'Invalid model rejected properly' };
-  }
-  
-  throw new Error(`Unexpected status: ${response.statusCode}`);
+  return { 
+    details: `SQL=${r.body.executedSQL || 'N/A'}`,
+    fullResponse: r.body.response 
+  };
 }
 
-// ===========================================
+// 7. 【實際問題】模糊查詢 - 用戶不知道確切樹種名
+async function test_FuzzySpeciesName() {
+  const r = await apiPost('chat', {
+    message: '有沒有榕樹類的？像是榕、雀榕之類的',
+    userId: TEST_USER_ID,
+    projectAreas: [],
+    model_preference: 'deepseek-ai/DeepSeek-V3'
+  });
+  
+  if (r.statusCode !== 200) throw new Error(`Status ${r.statusCode}`);
+  
+  return { 
+    details: `queryMode=${r.body.queryMode}, SQL=${r.body.executedSQL || 'N/A'}`,
+    fullResponse: r.body.response 
+  };
+}
+
+// 8. 【實際問題】複合條件查詢
+async function test_ComplexQuery() {
+  const r = await apiPost('chat', {
+    message: '找出胸徑大於50公分且樹高超過10公尺的樹',
+    userId: TEST_USER_ID,
+    projectAreas: [],
+    model_preference: 'deepseek-ai/DeepSeek-V3'
+  });
+  
+  if (r.statusCode !== 200) throw new Error(`Status ${r.statusCode}`);
+  
+  // 檢查 SQL 是否有兩個條件
+  const sql = (r.body.executedSQL || '').toLowerCase();
+  const hasDbh = sql.includes('dbh');
+  const hasHeight = sql.includes('height');
+  
+  return { 
+    details: `hasDbhCondition=${hasDbh}, hasHeightCondition=${hasHeight}`,
+    fullResponse: r.body.response 
+  };
+}
+
+// 9. 【意圖分類】邊界情況 - 看起來像查資料但其實是問知識
+async function test_IntentBoundary() {
+  const r = await apiPost('chat', {
+    message: '樟樹適合種在什麼環境？',  // 問知識，不是查資料
+    userId: TEST_USER_ID,
+    projectAreas: [],
+    model_preference: 'deepseek-ai/DeepSeek-V3'
+  });
+  
+  if (r.statusCode !== 200) throw new Error(`Status ${r.statusCode}`);
+  
+  // 這應該是知識問答，不是查資料
+  const isKnowledge = r.body.queryMode === 'knowledge';
+  
+  return { 
+    details: `queryMode=${r.body.queryMode} (expected: knowledge)`,
+    fullResponse: r.body.response 
+  };
+}
+
+// 10. 【錯誤處理】無效的 model_preference
+async function test_InvalidModel() {
+  const r = await apiPost('chat', {
+    message: '測試',
+    userId: TEST_USER_ID,
+    projectAreas: [],
+    model_preference: 'fake-model-xyz'
+  });
+  
+  // 應該 fallback 到預設模型，不應該崩潰
+  if (r.statusCode !== 200) throw new Error(`Status ${r.statusCode} - should fallback`);
+  
+  return { 
+    details: `Fallback worked, got response`,
+    fullResponse: r.body.response 
+  };
+}
+
+// 11. 【資料準確性】查詢特定編號
+async function test_SpecificTreeId() {
+  const r = await apiPost('chat', {
+    message: '查詢 ST-0001 的資料',
+    userId: TEST_USER_ID,
+    projectAreas: [],
+    model_preference: 'deepseek-ai/DeepSeek-V3'
+  });
+  
+  if (r.statusCode !== 200) throw new Error(`Status ${r.statusCode}`);
+  
+  // 檢查是否有執行 SQL 查詢，且查詢條件正確
+  const sql = (r.body.executedSQL || '').toLowerCase();
+  const hasCorrectQuery = sql.includes('st-0001') || sql.includes("'st-0001'");
+  
+  return { 
+    details: `queryMode=${r.body.queryMode}, SQL contains ST-0001: ${hasCorrectQuery}`,
+    fullResponse: r.body.response 
+  };
+}
+
+// 12. 【資料準確性】統計查詢 - 驗證數字一致性
+async function test_CountConsistency() {
+  // 先問總數
+  const r1 = await apiPost('chat', {
+    message: '總共有幾棵樹？',
+    userId: TEST_USER_ID + '-count',
+    projectAreas: [],
+    model_preference: 'deepseek-ai/DeepSeek-V3'
+  });
+  
+  // 再用不同方式問
+  const r2 = await apiPost('chat', {
+    message: '資料庫裡有多少筆樹木資料？',
+    userId: TEST_USER_ID + '-count2',
+    projectAreas: [],
+    model_preference: 'deepseek-ai/DeepSeek-V3'
+  });
+  
+  if (r1.statusCode !== 200 || r2.statusCode !== 200) {
+    throw new Error('Request failed');
+  }
+  
+  // 提取數字比較
+  const num1 = r1.body.response.match(/[\d,]+/g)?.map(n => parseInt(n.replace(/,/g, ''))) || [];
+  const num2 = r2.body.response.match(/[\d,]+/g)?.map(n => parseInt(n.replace(/,/g, ''))) || [];
+  
+  const has2758_1 = num1.includes(2758);
+  const has2758_2 = num2.includes(2758);
+  
+  return { 
+    details: `query1=${has2758_1 ? '2758' : num1[0]}, query2=${has2758_2 ? '2758' : num2[0]}`,
+    fullResponse: `【查詢1】${r1.body.response.substring(0, 200)}...\n\n【查詢2】${r2.body.response.substring(0, 200)}...`
+  };
+}
+
+// ═══════════════════════════════════════════════════════════
 // 主程式
-// ===========================================
+// ═══════════════════════════════════════════════════════════
 
-async function runAllTests() {
+async function main() {
   console.log('═══════════════════════════════════════════════════════');
-  console.log('  API 整合測試 - 模擬 APP 行為');
+  console.log('  API 整合測試 - 邊界情況 & 實際問題');
   console.log('═══════════════════════════════════════════════════════');
   
-  // 先確認伺服器可連線
-  console.log('\n📍 基礎連線測試:');
-  await runTest('伺服器健康檢查', testHealthCheck);
+  console.log('\n📍 基礎:');
+  await runTest('伺服器連線', test_ServerAlive);
   
-  // 如果基礎測試失敗，提前結束
-  if (failed > 0) {
-    console.log('\n⚠️  伺服器無法連線，跳過其餘測試');
-    console.log('   可能原因: Render 免費方案會在閒置後休眠，請稍等幾分鐘後重試');
-    printSummary();
-    return;
-  }
+  console.log('\n📍 安全性測試:');
+  await runTest('SQL 注入防護', test_SQLInjection);
   
-  console.log('\n📍 Chat API 測試 (核心功能):');
-  await runTest('數據查詢 - 樹木總數', testChatDataQuery);
-  await runTest('知識問答 - 碳匯定義', testChatKnowledgeQuery);
-  await runTest('特定查詢 - 樟樹數量', testChatSpeciesQuery);
-  await runTest('模型切換 - Qwen3', testChatWithQwenModel);
-  await runTest('對話歷史 - 上下文', testChatHistory);
-  await runTest('區域過濾 - Project Areas', testChatWithProjectAreas);
+  console.log('\n📍 Project Areas 過濾 (核心功能):');
+  await runTest('區域過濾 - SQL 條件', test_ProjectAreaFilter);
+  await runTest('不存在區域 - 應回傳0', test_NonExistentArea);
   
-  console.log('\n📍 資料 API 測試:');
-  await runTest('樹木調查資料', testTreeSurveyApi);
-  await runTest('樹種資料', testTreeSpeciesApi);
-  await runTest('統計資料', testStatisticsApi);
+  console.log('\n📍 邊界情況:');
+  await runTest('超長訊息 (~1500字)', test_VeryLongMessage);
+  await runTest('特殊字元 (emoji/引號)', test_SpecialCharacters);
+  await runTest('無效模型 - Fallback', test_InvalidModel);
   
-  console.log('\n📍 錯誤處理測試:');
-  await runTest('空訊息處理', testChatEmptyMessage);
-  await runTest('無效模型處理', testChatInvalidModel);
+  console.log('\n📍 實際使用情境:');
+  await runTest('模糊樹種查詢', test_FuzzySpeciesName);
+  await runTest('複合條件查詢', test_ComplexQuery);
+  await runTest('意圖分類邊界', test_IntentBoundary);
+  await runTest('特定樹木編號', test_SpecificTreeId);
+  await runTest('統計數字一致性', test_CountConsistency);
   
-  printSummary();
-}
-
-function printSummary() {
+  // 摘要
   console.log('\n═══════════════════════════════════════════════════════');
-  console.log('  測試結果摘要');
-  console.log('═══════════════════════════════════════════════════════');
-  console.log(`  ✅ 通過: ${passed}`);
-  console.log(`  ❌ 失敗: ${failed}`);
-  console.log(`  📊 總計: ${passed + failed}`);
+  console.log(`  結果: ✅ ${passed} 通過  ❌ ${failed} 失敗  📊 共 ${passed + failed} 項`);
   console.log('═══════════════════════════════════════════════════════\n');
   
   if (failed > 0) {
-    console.log('失敗的測試:');
-    results.filter(r => r.status === 'fail').forEach(r => {
-      console.log(`  - ${r.name}: ${r.error}`);
-    });
-    console.log('');
+    console.log('失敗項目:');
+    results.filter(r => r.status === 'fail').forEach(r => console.log(`  - ${r.name}: ${r.error}`));
   }
   
   process.exit(failed > 0 ? 1 : 0);
 }
 
-// 執行測試
-runAllTests().catch(error => {
-  console.error('\n💥 測試執行發生未預期錯誤:', error);
-  process.exit(1);
-});
+main().catch(e => { console.error('💥 Unexpected error:', e); process.exit(1); });

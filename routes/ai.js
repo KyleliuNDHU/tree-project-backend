@@ -233,12 +233,21 @@ router.post('/chat_old_rag_version', aiLimiter, async (req, res) => {
 // 此路由現在是主要的 /chat 端點
 // ============================================
 
+// 訊息長度限制（避免 LLM token 超限和記憶體問題）
+const MAX_MESSAGE_LENGTH = 500;
+
 router.post('/chat', aiLimiter, async (req, res) => {
     try {
         let { message, userId, projectAreas, model_preference = 'gpt-4.1-nano' } = req.body;
 
         if (!message || typeof message !== 'string' || message.trim() === '') {
             return res.status(400).json({ success: false, error: '請提供有效的訊息內容' });
+        }
+
+        // 訊息長度限制
+        if (message.length > MAX_MESSAGE_LENGTH) {
+            console.log(`[Chat V2] 訊息過長 (${message.length} 字)，已截斷`);
+            message = message.substring(0, MAX_MESSAGE_LENGTH) + '...(訊息已截斷)';
         }
 
         console.log(`[Chat V2] 收到查詢: "${message.substring(0, 50)}..."`);
