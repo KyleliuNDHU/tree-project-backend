@@ -153,31 +153,34 @@ function validateSQL(sql) {
         return { safe: false, reason: '只允許 SELECT 查詢語句' };
     }
 
-    // 2a. 檢查黑名單關鍵字（使用 word boundary）
+    // 移除字串常量後再檢查關鍵字（避免誤判字串內容）
+    // 例如 LIKE '%drop%' 不應該觸發 DROP 關鍵字檢查
+    const sqlWithoutStrings = trimmedSQL.replace(/'[^']*'/g, '\'\'').replace(/"[^"]*"/g, '""');
+
+    // 2a. 檢查黑名單關鍵字（使用 word boundary，在移除字串後的 SQL 中檢查）
     for (const keyword of FORBIDDEN_KEYWORDS) {
         const regex = new RegExp(`\\b${keyword}\\b`, 'i');
-        if (regex.test(trimmedSQL)) {
+        if (regex.test(sqlWithoutStrings)) {
             return { safe: false, reason: `禁止使用 ${keyword} 關鍵字` };
         }
     }
 
-    // 2b. 檢查危險的特殊字元序列（SQL 注入常用）
+    // 2b. 檢查危險的特殊字元序列（SQL 注入常用）- 在移除字串後檢查
     for (const pattern of FORBIDDEN_PATTERNS) {
-        if (trimmedSQL.includes(pattern)) {
+        if (sqlWithoutStrings.includes(pattern)) {
             return { safe: false, reason: `禁止使用 SQL 註解或注入字元: ${pattern}` };
         }
     }
 
-    // 2c. 檢查危險的函數/模式（正則檢查）
+    // 2c. 檢查危險的函數/模式（正則檢查）- 在移除字串後檢查
     for (const pattern of FORBIDDEN_FUNCTION_PATTERNS) {
-        if (pattern.test(trimmedSQL)) {
+        if (pattern.test(sqlWithoutStrings)) {
             return { safe: false, reason: `禁止使用可疑的 SQL 函數或模式` };
         }
     }
 
     // 3. 檢查是否包含多個語句（分號分隔）
-    // 移除字串內的分號後檢查
-    const sqlWithoutStrings = trimmedSQL.replace(/'[^']*'/g, '').replace(/"[^"]*"/g, '');
+    // 使用已經移除字串的版本
     if (sqlWithoutStrings.includes(';') && !sqlWithoutStrings.trim().endsWith(';')) {
         return { safe: false, reason: '禁止執行多個 SQL 語句' };
     }

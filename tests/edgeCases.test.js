@@ -266,3 +266,72 @@ module.exports = {
     injectionAttempts,
     specialInputs
 };
+
+// ============================================
+// 5. 補充測試：可能漏掉的情況
+// ============================================
+
+console.log('\n📋 5. 補充極端情況檢查\n');
+
+const additionalEdgeCases = [
+    // ----- 正常使用但可能誤判 -----
+    { input: '幫我查一下', fn: 'intent', expected: true, desc: '口語但應查資料' },
+    { input: '看一下資料', fn: 'intent', expected: true, desc: '口語查看' },
+    { input: '我想知道有多少樹', fn: 'intent', expected: true, desc: '想知道+統計' },
+    
+    // ----- SQL 中正常出現的關鍵字 -----
+    { input: "SELECT * FROM tree_survey WHERE species_name = '水黃皮' LIMIT 10", fn: 'sql', shouldPass: true, desc: '樹名含「黃」不應觸發問題' },
+    { input: "SELECT * FROM tree_survey WHERE notes LIKE '%drop%' LIMIT 10", fn: 'sql', shouldPass: true, desc: 'notes 欄位可能含 drop 字串' },
+    { input: "SELECT * FROM tree_survey WHERE species_name = '小葉欖仁' LIMIT 10", fn: 'sql', shouldPass: true, desc: '正常樹名查詢' },
+    
+    // ----- 可能被誤擋的正常 SQL -----
+    { input: "SELECT COUNT(*), species_name FROM tree_survey GROUP BY species_name LIMIT 50", fn: 'sql', shouldPass: true, desc: '正常 GROUP BY' },
+    { input: "SELECT * FROM tree_survey ORDER BY carbon_storage DESC LIMIT 10", fn: 'sql', shouldPass: true, desc: '正常 ORDER BY' },
+    { input: "SELECT DISTINCT species_name FROM tree_survey LIMIT 100", fn: 'sql', shouldPass: true, desc: '正常 DISTINCT' },
+    { input: "SELECT * FROM tree_survey WHERE dbh_cm BETWEEN 10 AND 50 LIMIT 100", fn: 'sql', shouldPass: true, desc: '正常 BETWEEN' },
+    { input: "SELECT * FROM tree_survey WHERE species_name IN ('榕樹', '樟樹') LIMIT 50", fn: 'sql', shouldPass: true, desc: '正常 IN 子句' },
+    
+    // ----- CONCAT 在正常查詢中 -----
+    { input: "SELECT system_tree_id || '-' || species_name as label FROM tree_survey LIMIT 10", fn: 'sql', shouldPass: true, desc: '用 || 連接字串（正常）' },
+    
+    // ----- 子查詢（應該允許） -----
+    { input: "SELECT * FROM tree_survey WHERE dbh_cm > (SELECT AVG(dbh_cm) FROM tree_survey) LIMIT 50", fn: 'sql', shouldPass: true, desc: '子查詢（正常）' },
+];
+
+let addPassed = 0, addFailed = 0;
+
+additionalEdgeCases.forEach((tc, i) => {
+    try {
+        if (tc.fn === 'intent') {
+            const result = shouldQueryDatabase(tc.input);
+            const pass = result === tc.expected;
+            if (pass) {
+                addPassed++;
+                console.log(`  ✅ [意圖] "${tc.input}" → ${result} (${tc.desc})`);
+            } else {
+                addFailed++;
+                console.log(`  ❌ [意圖] "${tc.input}" → 期望 ${tc.expected}, 得到 ${result} (${tc.desc})`);
+            }
+        } else if (tc.fn === 'sql') {
+            const result = validateSQL(tc.input);
+            const pass = result.safe === tc.shouldPass;
+            if (pass) {
+                addPassed++;
+                console.log(`  ✅ [SQL] ${tc.shouldPass ? '允許' : '阻擋'}: ${tc.desc}`);
+            } else {
+                addFailed++;
+                console.log(`  ❌ [SQL] 期望${tc.shouldPass ? '允許' : '阻擋'}, 實際${result.safe ? '允許' : '阻擋'}: ${tc.desc}`);
+                if (result.reason) console.log(`     原因: ${result.reason}`);
+            }
+        }
+    } catch (err) {
+        addFailed++;
+        console.log(`  💥 錯誤: ${err.message}`);
+    }
+});
+
+console.log(`\n  結果: ${addPassed}/${additionalEdgeCases.length} 通過`);
+
+if (addFailed > 0) {
+    console.log('\n  ⚠️  有正常情況被誤判！需要修正');
+}
