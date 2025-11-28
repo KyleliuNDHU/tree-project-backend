@@ -336,9 +336,10 @@ async function executeSecureQuery(sql) {
 /**
  * 判斷使用者問題是否需要查詢資料庫（優化版）
  * @param {string} question - 使用者問題
+ * @param {Array} chatHistory - 歷史對話（可選）
  * @returns {boolean}
  */
-function shouldQueryDatabase(question) {
+function shouldQueryDatabase(question, chatHistory = []) {
     // 強資料查詢信號（幾乎一定要查資料庫）
     const strongDataSignals = [
         /ST-\d+/i,              // 樹木編號 ST-0001
@@ -362,7 +363,23 @@ function shouldQueryDatabase(question) {
         /排[名序]/,
         /完整.*筆/,              // 完整 68 筆
         /全部.*資料/,            // 全部資料
+        /[港區位].*資料/,        // X港/區位 + 資料
+        /資料.*[港區位]/,        // 資料 + X港/區位
     ];
+
+    // 【新增】跟隨上下文的資料查詢信號
+    // 例如：「還有台北港的」「再來是興達港的」「高雄港呢」
+    const contextFollowupPatterns = [
+        /^還有/,                // 還有...
+        /^再來/,                // 再來...
+        /^接下來/,              // 接下來...
+        /^那/,                  // 那...
+        /的呢[？?]?$/,          // ...的呢？
+        /呢[？?]?$/,            // ...呢？
+    ];
+    
+    // 港口/區位名稱列表
+    const locationKeywords = ['港', '區位', '專案', '計畫'];
 
     // 強知識問答信號
     const strongKnowledgeSignals = [
@@ -384,6 +401,23 @@ function shouldQueryDatabase(question) {
         if (pattern.test(question)) {
             return true;
         }
+    }
+    
+    // 【新增】檢查跟隨上下文的查詢
+    // 如果問題包含「還有/再來/那」+ 地點名稱，且上一輪是資料查詢，則繼續查資料
+    const hasFollowupPattern = contextFollowupPatterns.some(p => p.test(question));
+    const hasLocationKeyword = locationKeywords.some(k => question.includes(k));
+    
+    if (hasFollowupPattern && hasLocationKeyword) {
+        // 這很可能是跟隨上下文的資料查詢
+        console.log('[shouldQueryDatabase] 偵測到跟隨上下文的區位查詢');
+        return true;
+    }
+    
+    // 【新增】如果問題很短（< 15 字）且包含地點關鍵字，很可能是跟隨查詢
+    if (question.length < 15 && hasLocationKeyword) {
+        console.log('[shouldQueryDatabase] 偵測到簡短區位查詢');
+        return true;
     }
 
     // 檢查強知識信號

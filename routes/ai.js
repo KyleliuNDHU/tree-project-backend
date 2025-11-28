@@ -245,6 +245,14 @@ const EXCEL_EXPORT_THRESHOLD = 5;  // 超過 5 筆自動生成 Excel
 const EXPORT_DIR = path.join(__dirname, '..', 'exports');
 const EXPORT_URL_PREFIX = '/api/ai/download/';  // 下載路由前綴
 
+// 取得完整的下載 URL（包含 domain）
+function getFullDownloadUrl(fileName) {
+    // 優先使用環境變數中的 RENDER_EXTERNAL_URL（Render 自動提供）
+    // 或者使用自訂的 BASE_URL
+    const baseUrl = process.env.RENDER_EXTERNAL_URL || process.env.BASE_URL || 'https://tree-project-backend.onrender.com';
+    return `${baseUrl}${EXPORT_URL_PREFIX}${fileName}`;
+}
+
 // 確保匯出目錄存在
 if (!fs.existsSync(EXPORT_DIR)) {
     fs.mkdirSync(EXPORT_DIR, { recursive: true });
@@ -410,7 +418,7 @@ WHERE project_location IN (${areasCondition})
                             }
                             
                             await workbook.xlsx.writeFile(filePath);
-                            downloadLink = `${EXPORT_URL_PREFIX}${fileName}`;
+                            downloadLink = getFullDownloadUrl(fileName);
                             console.log(`[Chat V2] 已生成 Excel: ${fileName} (${queryResult.rowCount} 筆)`);
                         } catch (excelErr) {
                             console.error('[Chat V2] Excel 生成失敗:', excelErr.message);
@@ -426,10 +434,11 @@ WHERE project_location IN (${areasCondition})
                         chatHistory
                     );
                     
-                    // 如果有下載連結，加入提示
+                    // 如果有下載連結，用 Markdown 格式
                     let explainSystemPrompt = '你是一位專業的樹木與碳匯專家助理。請用繁體中文回答。如果使用者提到「剛才」或「上一個」問題，請參考對話歷史。';
-                    if (downloadLink) {
-                        explainSystemPrompt += `\n\n【重要】此次查詢結果共 ${queryResult.rowCount} 筆，資料量較大。請在回答最後加上：\n「📥 完整資料已匯出為 Excel，點此下載：${downloadLink}」`;
+                    const downloadMarkdown = downloadLink ? `[📥 點此下載完整 Excel 檔案](${downloadLink})` : null;
+                    if (downloadMarkdown) {
+                        explainSystemPrompt += `\n\n【重要】此次查詢結果共 ${queryResult.rowCount} 筆，資料量較大。請在回答最後加上下載連結（使用 Markdown 格式）：\n${downloadMarkdown}`;
                     }
                     
                     try {
@@ -462,16 +471,16 @@ WHERE project_location IN (${areasCondition})
                             aiResponse = completion.choices[0].message.content;
                         }
                         
-                        // 備用：如果 LLM 沒有加入下載連結，手動附加
-                        if (downloadLink && !aiResponse.includes(downloadLink)) {
-                            aiResponse += `\n\n📥 完整資料已匯出為 Excel，點此下載：${downloadLink}`;
+                        // 備用：如果 LLM 沒有加入下載連結，手動附加 Markdown 格式
+                        if (downloadMarkdown && !aiResponse.includes(downloadLink)) {
+                            aiResponse += `\n\n${downloadMarkdown}`;
                         }
                     } catch (explainErr) {
                         console.error('[Chat V2] 結果解釋失敗:', explainErr.message);
                         // 直接回傳原始結果
                         aiResponse = `查詢到 ${queryResult.rowCount} 筆資料：\n${JSON.stringify(queryResults.slice(0, 10), null, 2)}`;
-                        if (downloadLink) {
-                            aiResponse += `\n\n📥 完整資料已匯出為 Excel，點此下載：${downloadLink}`;
+                        if (downloadMarkdown) {
+                            aiResponse += `\n\n${downloadMarkdown}`;
                         }
                     }
                 } else {
