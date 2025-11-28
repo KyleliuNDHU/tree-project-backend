@@ -15,9 +15,9 @@ const apiKeys = require('../config/apiKeys');
 const adminAuth = require('../middleware/adminAuth'); // Import auth middleware
 
 // Script runners
-const populateKnowledgeFromSurvey = require('../scripts/populate_knowledge_from_survey');
-const populateSpeciesRegionScore = require('../scripts/populateSpeciesRegionScore');
-const generateEmbeddings = require('../scripts/generateEmbeddings');
+// const populateKnowledgeFromSurvey = require('../scripts/populate_knowledge_from_survey');
+// const populateSpeciesRegionScore = require('../scripts/populateSpeciesRegionScore');
+// const generateEmbeddings = require('../scripts/generateEmbeddings');
 
 // --- Admin Script Execution Endpoint ---
 router.post('/run-script', adminAuth, async (req, res) => {
@@ -287,7 +287,7 @@ router.post('/species-comparison', aiLimiter, openaiController.generateSpeciesCa
 // --- 備份與還原 (使用 pg_dump 和 pg_restore) ---
 
 // 備份資料庫
-router.post('/backup', (req, res) => {
+router.post('/backup', adminAuth, (req, res) => {
     const backupDir = path.join(__dirname, '..', 'backups');
     if (!fs.existsSync(backupDir)) {
         fs.mkdirSync(backupDir, { recursive: true });
@@ -305,10 +305,10 @@ router.post('/backup', (req, res) => {
     const port = dbUrl.port;
 
     // 構建 pg_dump 命令
-    // 注意：在正式環境中，密碼處理需要更安全的方式，例如使用 .pgpass 文件
-    const command = `PGPASSWORD="${password}" pg_dump -h ${host} -p ${port} -U ${user} -d ${dbName} -F c -b -v -f "${backupFile}"`;
+    // 使用環境變數傳遞密碼，避免在命令行中暴露
+    const command = `pg_dump -h ${host} -p ${port} -U ${user} -d ${dbName} -F c -b -v -f "${backupFile}"`;
 
-    exec(command, (error, stdout, stderr) => {
+    exec(command, { env: { ...process.env, PGPASSWORD: password } }, (error, stdout, stderr) => {
         if (error) {
             console.error('PostgreSQL 備份錯誤:', stderr);
             return res.status(500).json({
@@ -326,7 +326,7 @@ router.post('/backup', (req, res) => {
 });
 
 // 還原資料庫
-router.post('/restore', (req, res) => {
+router.post('/restore', adminAuth, (req, res) => {
     const { backupFile } = req.body;
     
     if (!backupFile || !fs.existsSync(backupFile)) {
@@ -344,9 +344,9 @@ router.post('/restore', (req, res) => {
     const port = dbUrl.port;
 
     // 構建 pg_restore 命令
-    const command = `PGPASSWORD="${password}" pg_restore -h ${host} -p ${port} -U ${user} -d ${dbName} --clean --if-exists -v "${backupFile}"`;
+    const command = `pg_restore -h ${host} -p ${port} -U ${user} -d ${dbName} --clean --if-exists -v "${backupFile}"`;
 
-    exec(command, (error, stdout, stderr) => {
+    exec(command, { env: { ...process.env, PGPASSWORD: password } }, (error, stdout, stderr) => {
         if (error) {
             console.error('PostgreSQL 還原錯誤:', stderr);
             return res.status(500).json({
@@ -365,7 +365,7 @@ router.post('/restore', (req, res) => {
 
 // --- API 密鑰管理 ---
 
-router.post('/apikeys', (req, res) => {
+router.post('/apikeys', adminAuth, (req, res) => {
     try {
         const { name, key } = req.body;
         if (!name || !key) {
@@ -384,7 +384,7 @@ router.post('/apikeys', (req, res) => {
     }
 });
 
-router.get('/apikeys', (req, res) => {
+router.get('/apikeys', adminAuth, (req, res) => {
     try {
         res.json({ success: true, data: apiKeys });
     } catch (error) {
@@ -397,7 +397,7 @@ router.get('/apikeys', (req, res) => {
     }
 });
 
-router.delete('/apikeys/:id', (req, res) => {
+router.delete('/apikeys/:id', adminAuth, (req, res) => {
     const { id } = req.params;
     
     try {

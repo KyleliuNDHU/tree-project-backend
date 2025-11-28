@@ -47,7 +47,7 @@ router.get('/', async (req, res) => {
                 MAX(dbh_cm) as max_dbh,
                 MIN(dbh_cm) as min_dbh
             FROM tree_survey
-            ${whereClause.replace('WHERE', 'WHERE tree_height_m > 0 AND dbh_cm > 0 AND ')}
+            WHERE tree_height_m > 0 AND dbh_cm > 0 ${whereClause.replace('WHERE', 'AND ')}
         `;
 
         const carbonQuery = `

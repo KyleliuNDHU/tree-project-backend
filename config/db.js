@@ -5,7 +5,10 @@ const pool = new Pool({
   connectionString: process.env.DATABASE_URL,
   ssl: {
     rejectUnauthorized: false
-  }
+  },
+  max: 10, // 最大連接數
+  idleTimeoutMillis: 30000, // 連接閒置多久後關閉 (30秒)
+  connectionTimeoutMillis: 5000 // 連接超時時間 (5秒)
 });
 
 pool.on('connect', () => {

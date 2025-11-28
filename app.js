@@ -34,6 +34,11 @@ const app = express();
 // 數字 1 表示信任第一個躍點的代理
 app.set('trust proxy', 1);
 
+// 健康檢查端點 (Health Check)
+app.get('/health', (req, res) => {
+    res.status(200).send('OK');
+});
+
 // --- 中介軟體 (Middleware) ---
 app.use(cors({
     origin: '*',

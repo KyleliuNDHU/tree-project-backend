@@ -28,15 +28,18 @@ router.post('/login', loginLimiter, async (req, res) => {
 
     try {
         let roleCheck = '';
+        let queryParams = [account];
+        
         if (loginType === 'admin') {
             // 只允許特定角色登入管理後台
             const allowedAdminRoles = ['系統管理員', '業務管理員', '專案管理員', '調查管理員'];
-            roleCheck = ` AND role IN (${allowedAdminRoles.map(r => `'${r}'`).join(',')})`;
+            roleCheck = ` AND role = ANY($2::text[])`;
+            queryParams.push(allowedAdminRoles);
         }
 
         const query = `SELECT user_id, username, password_hash, display_name, role, associated_projects, is_active FROM users WHERE username = $1 ${roleCheck}`;
         
-        const { rows } = await db.query(query, [account]);
+        const { rows } = await db.query(query, queryParams);
 
         if (rows.length === 0) {
             return res.status(404).json({

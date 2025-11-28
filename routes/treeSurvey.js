@@ -46,8 +46,12 @@ const upload = multer({
 // 取得所有樹木資料 (可選通過 project name 或 area name 過濾)
 router.get('/', async (req, res) => {
     try {
+        // 支援分頁參數
+        const limit = req.query.limit ? parseInt(req.query.limit) : null;
+        const offset = req.query.offset ? parseInt(req.query.offset) : 0;
+
         // 使用 AS 將欄位名稱轉換為前端期望的中文名稱
-        const sql = `
+        let sql = `
             SELECT 
                 id,
                 project_location AS "專案區位",
@@ -71,6 +75,12 @@ router.get('/', async (req, res) => {
             FROM tree_survey 
             ORDER BY id ASC
         `;
+
+        // 如果有提供 limit，則加入分頁
+        if (limit) {
+            sql += ` LIMIT ${limit} OFFSET ${offset}`;
+        }
+
         const { rows } = await db.query(sql);
         // 將回應包裹在標準格式中
         res.json({ success: true, data: rows });
