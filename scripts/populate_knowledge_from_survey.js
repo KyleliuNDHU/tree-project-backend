@@ -156,4 +156,3 @@ if (require.main === module) {
 
 // 導出函數供其他模組使用 (如 API admin endpoint)
 module.exports = processTreeSurveyData; 
-processTreeSurveyData(); 
