@@ -3,23 +3,32 @@ const db = require('../config/database'); // db 現在包含 { query, pool }
 const { getEmbedding } = require('../services/knowledgeEmbeddingService'); // 引入嵌入生成函數
 
 async function processTreeSurveyData() {
-    console.log('開始處理 tree_survey 數據並填充到知識庫 (優化版)...');
+    console.log('開始處理 tree_survey 數據並填充到知識庫 (優化版 - 分批讀取)...');
 
     try {
-        // 使用 db.query 函數，它直接返回結果对象，包含 rows 屬性
-        const result = await db.query('SELECT * FROM tree_survey'); 
-        const rows = result.rows;
+        // [記憶體優化] 先取得總筆數，再分批讀取
+        const countResult = await db.query('SELECT COUNT(*) as total FROM tree_survey');
+        const totalRows = parseInt(countResult.rows[0].total, 10);
+        console.log(`tree_survey 共有 ${totalRows} 條記錄，將分批處理...`);
 
-        if (!rows || typeof rows.length === 'undefined') {
-             console.error('從資料庫讀取數據失敗，未返回有效的 rows 陣列。');
-             console.log('收到的 rows 結構:', rows);
-             // 確保在 finally 中關閉連接池
-             return; 
-        }
+        const BATCH_SIZE = 50; // 每批處理 50 筆，避免 OOM
+        let processedCount = 0;
 
-        console.log(`從 tree_survey 讀取到 ${rows.length} 條記錄。`);
+        for (let offset = 0; offset < totalRows; offset += BATCH_SIZE) {
+            // 分批讀取資料
+            const batchResult = await db.query(
+                'SELECT * FROM tree_survey ORDER BY id LIMIT $1 OFFSET $2',
+                [BATCH_SIZE, offset]
+            );
+            const rows = batchResult.rows;
 
-        for (const row of rows) {
+            if (!rows || rows.length === 0) {
+                break;
+            }
+
+            console.log(`\n[批次 ${Math.floor(offset / BATCH_SIZE) + 1}] 處理第 ${offset + 1} ~ ${offset + rows.length} 筆...`);
+
+            for (const row of rows) {
             let textContent = `關於樹木調查記錄 ID ${row.id} 的詳細資料：\n`;
             textContent += `此樹位於專案區位 \"${row.project_location || '未知區位'}\"（專案代碼: ${row.project_code || 'N/A'}，專案名稱: ${row.project_name || '未知專案'}）。\n`;
             textContent += `系統樹木編號為 \"${row.system_tree_id || '無'}\"，專案樹木編號是 \"${row.project_tree_id || '無'}\"。\n`;
@@ -132,9 +141,20 @@ async function processTreeSurveyData() {
                     knowledgeEntry.keywords, knowledgeEntry.confidence_score, knowledgeEntry.last_verified_at
                 ]);
             }
-            console.log(`已處理 tree_survey ID: ${row.id} - ${row.樹種名稱}`);
+            console.log(`已處理 tree_survey ID: ${row.id} - ${row.species_name || '未知'}`);
+            processedCount++;
         }
-        console.log('所有 tree_survey 記錄處理完成。');
+
+            // [記憶體優化] 批次間冷卻，讓 GC 有時間回收記憶體
+            if (offset + BATCH_SIZE < totalRows) {
+                console.log(`[冷卻] 已處理 ${processedCount}/${totalRows} 筆，休息 1 秒...`);
+                await new Promise(resolve => setTimeout(resolve, 1000));
+                // 嘗試觸發 GC
+                if (global.gc) { try { global.gc(); } catch (e) {} }
+            }
+        }
+        
+        console.log(`所有 tree_survey 記錄處理完成，共處理 ${processedCount} 筆。`);
 
     } catch (error) {
         console.error('處理 tree_survey 數據時發生錯誤:', error);
