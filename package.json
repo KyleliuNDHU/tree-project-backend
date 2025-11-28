@@ -9,7 +9,8 @@
     "test": "node tests/intentClassification.test.js && node tests/sqlValidation.test.js",
     "test:intent": "node tests/intentClassification.test.js",
     "test:sql": "node tests/sqlValidation.test.js",
-    "test:integration": "node tests/chatIntegration.test.js"
+    "test:integration": "node tests/chatIntegration.test.js",
+    "test:api": "node tests/apiIntegration.test.js"
   },
   "keywords": [],
   "author": "",

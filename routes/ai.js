@@ -235,14 +235,21 @@ router.post('/chat_old_rag_version', aiLimiter, async (req, res) => {
 
 router.post('/chat', aiLimiter, async (req, res) => {
     try {
-        let { message, userId, model_preference = 'gpt-4.1-nano' } = req.body;
+        let { message, userId, projectAreas, model_preference = 'gpt-4.1-nano' } = req.body;
 
         if (!message || typeof message !== 'string' || message.trim() === '') {
             return res.status(400).json({ success: false, error: '請提供有效的訊息內容' });
         }
 
         console.log(`[Chat V2] 收到查詢: "${message.substring(0, 50)}..."`);
-
+        
+        // 處理 projectAreas
+        const validProjectAreas = Array.isArray(projectAreas) && projectAreas.length > 0 
+            ? projectAreas.filter(a => a && typeof a === 'string' && a.trim() !== '')
+            : [];
+        if (validProjectAreas.length > 0) {
+            console.log(`[Chat V2] 區域過濾: ${validProjectAreas.join(', ')}`);
+        }
         // --- PRODUCTION MODEL ENFORCEMENT ---
         // 允許的模型清單 (2025.11 更新):
         // - SiliconFlow: deepseek-ai/DeepSeek-V3, Qwen/Qwen3-VL-32B-Instruct (前端 APP 使用)
@@ -288,7 +295,17 @@ router.post('/chat', aiLimiter, async (req, res) => {
             
             // Step 2a: 讓 LLM 生成 SQL
             console.log('[Chat V2] 正在生成 SQL...');
-            const sqlPrompt = sqlQueryService.buildSQLGenerationPrompt(message, chatHistory);
+            
+            // 構建 SQL prompt，包含 projectAreas 過濾資訊
+            let sqlPrompt = sqlQueryService.buildSQLGenerationPrompt(message, chatHistory);
+            
+            // 如果有 projectAreas，加入過濾提示
+            if (validProjectAreas.length > 0) {
+                const areasCondition = validProjectAreas.map(a => `'${a}'`).join(', ');
+                sqlPrompt += `\n\n【重要】使用者已選擇特定區域，SQL 必須加上區域過濾條件：
+WHERE project_location IN (${areasCondition})
+如果查詢已有 WHERE，請用 AND 連接此條件。`;
+            }
             
             let generatedSQL = '';
             try {
@@ -434,7 +451,7 @@ router.post('/chat', aiLimiter, async (req, res) => {
             try {
                 await db.query(
                     'INSERT INTO chat_logs (user_id, message, response, model_used, project_areas) VALUES ($1, $2, $3, $4, $5)',
-                    [userId, message, aiResponse, model_preference, queryMode === 'data' ? `SQL: ${executedSQL}` : null]
+                    [userId, message, aiResponse, model_preference, validProjectAreas.length > 0 ? JSON.stringify(validProjectAreas) : null]
                 );
             } catch (logErr) {
                 console.warn('[Chat V2] 儲存聊天記錄失敗:', logErr.message);
