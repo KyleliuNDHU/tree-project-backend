@@ -8,6 +8,10 @@ const reportController = require('../controllers/reportController');
 const aiReportController = require('../controllers/aiReportController');
 const openaiController = require('../controllers/openaiController');
 const format = require('pg-format');
+const ExcelJS = require('exceljs');
+const path = require('path');
+const fs = require('fs');
+const crypto = require('crypto');
 
 // [NEW] 引入 SQL Query Service
 const sqlQueryService = require('../services/sqlQueryService');
@@ -236,6 +240,34 @@ router.post('/chat_old_rag_version', aiLimiter, async (req, res) => {
 // 訊息長度限制（避免 LLM token 超限和記憶體問題）
 const MAX_MESSAGE_LENGTH = 500;
 
+// Excel 匯出設定
+const EXCEL_EXPORT_THRESHOLD = 20;  // 超過 20 筆自動生成 Excel
+const EXPORT_DIR = path.join(__dirname, '..', 'exports');
+const EXPORT_URL_PREFIX = '/api/ai/download/';  // 下載路由前綴
+
+// 確保匯出目錄存在
+if (!fs.existsSync(EXPORT_DIR)) {
+    fs.mkdirSync(EXPORT_DIR, { recursive: true });
+}
+
+// 定期清理舊的匯出檔案 (1小時以上)
+setInterval(() => {
+    try {
+        const files = fs.readdirSync(EXPORT_DIR);
+        const now = Date.now();
+        files.forEach(file => {
+            const filePath = path.join(EXPORT_DIR, file);
+            const stat = fs.statSync(filePath);
+            if (now - stat.mtimeMs > 60 * 60 * 1000) { // 1 小時
+                fs.unlinkSync(filePath);
+                console.log(`[Export Cleanup] 已刪除過期檔案: ${file}`);
+            }
+        });
+    } catch (err) {
+        console.error('[Export Cleanup] 清理失敗:', err.message);
+    }
+}, 30 * 60 * 1000); // 每 30 分鐘檢查一次
+
 router.post('/chat', aiLimiter, async (req, res) => {
     try {
         let { message, userId, projectAreas, model_preference = 'gpt-4.1-nano' } = req.body;
@@ -347,7 +379,45 @@ WHERE project_location IN (${areasCondition})
                     executedSQL = queryResult.executedSQL;
                     queryResults = queryResult.rows;
                     
-                    // Step 2c: 讓 LLM 解釋結果
+                    // [NEW] Step 2c-1: 如果結果超過閾值，自動生成 Excel 下載連結
+                    let downloadLink = null;
+                    if (queryResult.rowCount >= EXCEL_EXPORT_THRESHOLD) {
+                        try {
+                            const fileId = crypto.randomBytes(8).toString('hex');
+                            const fileName = `查詢結果_${fileId}.xlsx`;
+                            const filePath = path.join(EXPORT_DIR, fileName);
+                            
+                            const workbook = new ExcelJS.Workbook();
+                            const worksheet = workbook.addWorksheet('查詢結果');
+                            
+                            // 動態取得欄位（根據查詢結果）
+                            if (queryResults.length > 0) {
+                                const columns = Object.keys(queryResults[0]).map(key => ({
+                                    header: key,
+                                    key: key,
+                                    width: 15
+                                }));
+                                worksheet.columns = columns;
+                                worksheet.addRows(queryResults);
+                                
+                                // 設定標題列樣式
+                                worksheet.getRow(1).font = { bold: true };
+                                worksheet.getRow(1).fill = {
+                                    type: 'pattern',
+                                    pattern: 'solid',
+                                    fgColor: { argb: 'FFE0E0E0' }
+                                };
+                            }
+                            
+                            await workbook.xlsx.writeFile(filePath);
+                            downloadLink = `${EXPORT_URL_PREFIX}${fileName}`;
+                            console.log(`[Chat V2] 已生成 Excel: ${fileName} (${queryResult.rowCount} 筆)`);
+                        } catch (excelErr) {
+                            console.error('[Chat V2] Excel 生成失敗:', excelErr.message);
+                        }
+                    }
+                    
+                    // Step 2c-2: 讓 LLM 解釋結果
                     const explanationPrompt = sqlQueryService.buildResultExplanationPrompt(
                         message, 
                         executedSQL, 
@@ -355,7 +425,12 @@ WHERE project_location IN (${areasCondition})
                         queryResult.rowCount,
                         chatHistory
                     );
-                    const explainSystemPrompt = '你是一位專業的樹木與碳匯專家助理。請用繁體中文回答。如果使用者提到「剛才」或「上一個」問題，請參考對話歷史。';
+                    
+                    // 如果有下載連結，加入提示
+                    let explainSystemPrompt = '你是一位專業的樹木與碳匯專家助理。請用繁體中文回答。如果使用者提到「剛才」或「上一個」問題，請參考對話歷史。';
+                    if (downloadLink) {
+                        explainSystemPrompt += `\n\n【重要】此次查詢結果共 ${queryResult.rowCount} 筆，資料量較大。請在回答最後加上：\n「📥 完整資料已匯出為 Excel，點此下載：${downloadLink}」`;
+                    }
                     
                     try {
                         // 根據模型類型選擇對應的 API
@@ -386,10 +461,18 @@ WHERE project_location IN (${areasCondition})
                             });
                             aiResponse = completion.choices[0].message.content;
                         }
+                        
+                        // 備用：如果 LLM 沒有加入下載連結，手動附加
+                        if (downloadLink && !aiResponse.includes(downloadLink)) {
+                            aiResponse += `\n\n📥 完整資料已匯出為 Excel，點此下載：${downloadLink}`;
+                        }
                     } catch (explainErr) {
                         console.error('[Chat V2] 結果解釋失敗:', explainErr.message);
                         // 直接回傳原始結果
                         aiResponse = `查詢到 ${queryResult.rowCount} 筆資料：\n${JSON.stringify(queryResults.slice(0, 10), null, 2)}`;
+                        if (downloadLink) {
+                            aiResponse += `\n\n📥 完整資料已匯出為 Excel，點此下載：${downloadLink}`;
+                        }
                     }
                 } else {
                     console.warn('[Chat V2] SQL 執行失敗:', queryResult.error);
@@ -550,6 +633,52 @@ router.post('/sustainability-policy', aiLimiter, openaiController.generateSustai
 router.get('/carbon-education/:topic', aiLimiter, openaiController.generateCarbonEducationContent);
 router.post('/carbon-footprint/advice', aiLimiter, openaiController.generateCarbonFootprintAdvice);
 router.post('/species-comparison', aiLimiter, openaiController.generateSpeciesCarbonComparison);
+
+
+// ============================================
+// [NEW] Excel 下載路由
+// ============================================
+// 
+// 當 Chat V2 查詢結果超過 EXCEL_EXPORT_THRESHOLD 筆時，
+// 會自動生成 Excel 檔案並在回應中附上此下載連結。
+// 檔案會在 1 小時後自動清理。
+// ============================================
+
+router.get('/download/:filename', (req, res) => {
+    const { filename } = req.params;
+    
+    // 安全檢查：只允許 .xlsx 檔案，防止路徑遍歷攻擊
+    if (!filename || !filename.endsWith('.xlsx') || filename.includes('..') || filename.includes('/')) {
+        return res.status(400).json({ success: false, message: '無效的檔案名稱' });
+    }
+    
+    const filePath = path.join(EXPORT_DIR, filename);
+    
+    // 檢查檔案是否存在
+    if (!fs.existsSync(filePath)) {
+        return res.status(404).json({ 
+            success: false, 
+            message: '檔案不存在或已過期，請重新查詢' 
+        });
+    }
+    
+    // 設定下載 headers
+    res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+    res.setHeader('Content-Disposition', `attachment; filename="${encodeURIComponent(filename)}"`);
+    
+    // 串流傳輸檔案
+    const fileStream = fs.createReadStream(filePath);
+    fileStream.pipe(res);
+    
+    fileStream.on('error', (err) => {
+        console.error('[Download] 檔案讀取錯誤:', err.message);
+        if (!res.headersSent) {
+            res.status(500).json({ success: false, message: '檔案讀取失敗' });
+        }
+    });
+    
+    console.log(`[Download] 使用者下載: ${filename}`);
+});
 
 
 module.exports = router;
