@@ -2,17 +2,7 @@ const express = require('express');
 const router = express.Router();
 const db = require('../config/db');
 const bcrypt = require('bcryptjs');
-const rateLimit = require('express-rate-limit');
-
-// 登入嘗試限制
-const loginLimiter = rateLimit({
-    windowMs: 60 * 60 * 1000, // 1 小時
-    max: 10, // 每小時最多 10 次登入嘗試
-    message: {
-        success: false,
-        message: '登入嘗試次數過多，請一小時後再試'
-    }
-});
+const { loginLimiter } = require('../middleware/rateLimiter');
 
 // 使用者管理相關 API
 // 登入路由
