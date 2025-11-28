@@ -28,15 +28,23 @@ const ALLOWED_TABLES = [
     'tree_survey_with_areas'  // View
 ];
 
-// 禁止的 SQL 關鍵字黑名單
+// 禁止的 SQL 關鍵字黑名單（使用 word boundary 檢查）
 const FORBIDDEN_KEYWORDS = [
     'INSERT', 'UPDATE', 'DELETE', 'DROP', 'TRUNCATE', 
     'ALTER', 'CREATE', 'GRANT', 'REVOKE', 'EXECUTE',
-    'EXEC', 'MERGE', 'CALL', 'DO', 'LOCK', 'UNLOCK',
-    'RENAME', 'REPLACE', 'SET ', 'SHOW ', 'DESCRIBE',
-    'EXPLAIN', 'HANDLER', 'LOAD', 'PREPARE', 'DEALLOCATE',
-    '--', '/*', '*/', ';--', 'XP_', 'SP_', 'WAITFOR',
+    'EXEC', 'MERGE', 'CALL', 'LOCK', 'UNLOCK',
+    'RENAME', 'REPLACE', 'DESCRIBE',
+    'HANDLER', 'LOAD', 'PREPARE', 'DEALLOCATE',
+    'XP_CMDSHELL', 'SP_EXECUTESQL', 'WAITFOR',
     'BENCHMARK', 'SLEEP', 'PG_SLEEP', 'DBLINK'
+];
+
+// 禁止的特殊字元序列（用於 SQL 注入攻擊）
+const FORBIDDEN_PATTERNS = [
+    '--',      // SQL 單行註解
+    ';--',     // 語句結束 + 註解
+    '/*',      // 多行註解開始
+    '*/',      // 多行註解結束
 ];
 
 // 最大回傳筆數
@@ -117,12 +125,18 @@ function validateSQL(sql) {
         return { safe: false, reason: '只允許 SELECT 查詢語句' };
     }
 
-    // 2. 檢查黑名單關鍵字
+    // 2a. 檢查黑名單關鍵字（使用 word boundary）
     for (const keyword of FORBIDDEN_KEYWORDS) {
-        // 使用 word boundary 檢查，避免誤判 (如 "DESCRIPTION" 包含 "SET")
         const regex = new RegExp(`\\b${keyword}\\b`, 'i');
         if (regex.test(trimmedSQL)) {
             return { safe: false, reason: `禁止使用 ${keyword} 關鍵字` };
+        }
+    }
+
+    // 2b. 檢查危險的特殊字元序列（SQL 注入常用）
+    for (const pattern of FORBIDDEN_PATTERNS) {
+        if (trimmedSQL.includes(pattern)) {
+            return { safe: false, reason: `禁止使用 SQL 註解或注入字元: ${pattern}` };
         }
     }
 

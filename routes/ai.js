@@ -231,7 +231,7 @@ router.post('/chat_old_rag_version', aiLimiter, async (req, res) => {
 
 router.post('/chat', aiLimiter, async (req, res) => {
     try {
-        let { message, userId, model_preference = 'gpt-4.1-mini' } = req.body;
+        let { message, userId, model_preference = 'gpt-4o-mini' } = req.body;
 
         if (!message || typeof message !== 'string' || message.trim() === '') {
             return res.status(400).json({ success: false, error: '請提供有效的訊息內容' });
@@ -240,10 +240,16 @@ router.post('/chat', aiLimiter, async (req, res) => {
         console.log(`[Chat V2] 收到查詢: "${message.substring(0, 50)}..."`);
 
         // --- PRODUCTION MODEL ENFORCEMENT ---
+        // 允許的模型清單 (2025.11 更新):
+        // - OpenAI: gpt-4o-mini (便宜快速), gpt-4o (高品質), gpt-4.1-mini (微調版)
+        // - SiliconFlow: deepseek-ai/DeepSeek-V3, Qwen/Qwen3-235B-A22B
         if (process.env.NODE_ENV === 'production') {
-            const allowedProdModels = ['gpt-4.1-mini', 'gpt-4.1', 'deepseek-ai/DeepSeek-V3'];
+            const allowedProdModels = [
+                'gpt-4o-mini', 'gpt-4o', 'gpt-4.1-mini', 'gpt-4.1',
+                'deepseek-ai/DeepSeek-V3', 'Qwen/Qwen3-235B-A22B'
+            ];
             if (!allowedProdModels.includes(model_preference)) {
-                model_preference = 'gpt-4.1-mini';
+                model_preference = 'gpt-4o-mini';
             }
         }
 
@@ -266,7 +272,7 @@ router.post('/chat', aiLimiter, async (req, res) => {
             let generatedSQL = '';
             try {
                 const sqlCompletion = await openai.chat.completions.create({
-                    model: 'gpt-4.1-mini', // 用小模型生成 SQL 即可
+                    model: 'gpt-4o-mini', // 用小模型生成 SQL 即可 (便宜且足夠聰明)
                     messages: [{ role: 'user', content: sqlPrompt }],
                     temperature: 0.1, // 低溫度確保穩定輸出
                     max_tokens: 500,
