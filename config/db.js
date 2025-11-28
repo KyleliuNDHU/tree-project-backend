@@ -6,9 +6,7 @@ const pool = new Pool({
   ssl: {
     rejectUnauthorized: false
   },
-  max: 10, // 最大連接數
-  idleTimeoutMillis: 30000, // 連接閒置多久後關閉 (30秒)
-  connectionTimeoutMillis: 5000 // 連接超時時間 (5秒)
+  max: 10 // 最大連接數，避免連線過多
 });
 
 pool.on('connect', () => {
