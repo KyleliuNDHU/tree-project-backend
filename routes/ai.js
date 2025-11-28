@@ -245,17 +245,16 @@ router.post('/chat', aiLimiter, async (req, res) => {
 
         // --- PRODUCTION MODEL ENFORCEMENT ---
         // 允許的模型清單 (2025.11 更新):
-        // - OpenAI: gpt-4.1-nano (最便宜), gpt-4.1-mini, gpt-5-mini (最新)
-        // - Google: gemini-2.5-flash (免費額度高)
-        // - SiliconFlow: deepseek-ai/DeepSeek-V3, Qwen/Qwen3-235B-A22B
+        // - SiliconFlow: deepseek-ai/DeepSeek-V3, Qwen/Qwen3-VL-32B-Instruct (前端 APP 使用)
+        // - OpenAI/Google: 備用
         if (process.env.NODE_ENV === 'production') {
             const allowedProdModels = [
+                'deepseek-ai/DeepSeek-V3', 'Qwen/Qwen3-VL-32B-Instruct',
                 'gpt-4.1-nano', 'gpt-4.1-mini', 'gpt-4.1', 'gpt-5-mini',
-                'gemini-2.5-flash',
-                'deepseek-ai/DeepSeek-V3', 'Qwen/Qwen3-235B-A22B'
+                'gemini-2.5-flash'
             ];
             if (!allowedProdModels.includes(model_preference)) {
-                model_preference = 'gpt-4.1-nano';
+                model_preference = 'deepseek-ai/DeepSeek-V3'; // 預設用 DeepSeek
             }
         }
 
