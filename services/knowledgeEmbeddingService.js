@@ -65,7 +65,7 @@ async function getSimilarPassages(queryText, topN = 5, similarityThreshold = 0.5
         // 優化：分批次讀取與計算，避免 OOM (Out of Memory)。
         // 由於 Render 免費實例只有 512MB RAM，無法一次性加載所有 Embedding。
         
-        const BATCH_SIZE = 500; // 每次讀取 500 筆
+        const BATCH_SIZE = 50; // 降低批次大小以避免 OOM (原為 500)
         let offset = 0;
         let hasMore = true;
         
@@ -131,9 +131,12 @@ async function getSimilarPassages(queryText, topN = 5, similarityThreshold = 0.5
             offset += BATCH_SIZE;
             
             // 簡單的進度日誌，避免刷屏
-            if (offset % 2000 === 0) {
+            if (offset % 1000 === 0) {
                  console.log(`[KnowledgeService] 已處理 ${offset} 筆記錄...`);
             }
+
+            // 關鍵優化：讓出 CPU 時間片，允許 GC (Garbage Collection) 介入回收記憶體
+            await new Promise(resolve => setImmediate(resolve));
         }
 
         // 最終排序並取 Top N
