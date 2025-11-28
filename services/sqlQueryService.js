@@ -301,36 +301,64 @@ ${JSON.stringify(displayResults, null, 2)}
 // ============================================
 
 /**
- * 執行安全的 SQL 查詢
+ * 執行安全的 SQL 查詢（支援自動重試）
  * @param {string} sql - 已驗證的 SQL 語句
- * @returns {Promise<{ success: boolean, rows?: Array, rowCount?: number, error?: string }>}
+ * @param {object} options - 選項
+ * @param {function} options.retryWithLLM - 重試時用 LLM 修正 SQL 的回呼函數
+ * @param {string} options.originalQuestion - 原始問題（用於重試）
+ * @param {number} options.maxRetries - 最大重試次數（預設 1）
+ * @returns {Promise<{ success: boolean, rows?: Array, rowCount?: number, error?: string, retried?: boolean }>}
  */
-async function executeSecureQuery(sql) {
-    try {
-        const validation = validateSQL(sql);
-        if (!validation.safe) {
-            return { success: false, error: validation.reason };
-        }
+async function executeSecureQuery(sql, options = {}) {
+    const { retryWithLLM, originalQuestion, maxRetries = 1 } = options;
+    let lastError = null;
+    let currentSQL = sql;
+    
+    for (let attempt = 0; attempt <= maxRetries; attempt++) {
+        try {
+            const validation = validateSQL(currentSQL);
+            if (!validation.safe) {
+                return { success: false, error: validation.reason };
+            }
 
-        console.log(`[SQLQueryService] 執行查詢: ${validation.sanitizedSQL}`);
-        
-        const result = await db.query(validation.sanitizedSQL);
-        
-        console.log(`[SQLQueryService] 查詢成功，回傳 ${result.rowCount} 筆資料`);
-        
-        return {
-            success: true,
-            rows: result.rows,
-            rowCount: result.rowCount,
-            executedSQL: validation.sanitizedSQL
-        };
-    } catch (error) {
-        console.error('[SQLQueryService] 查詢執行錯誤:', error.message);
-        return { 
-            success: false, 
-            error: `資料庫查詢錯誤: ${error.message}` 
-        };
+            console.log(`[SQLQueryService] 執行查詢${attempt > 0 ? ` (重試 #${attempt})` : ''}: ${validation.sanitizedSQL}`);
+            
+            const result = await db.query(validation.sanitizedSQL);
+            
+            console.log(`[SQLQueryService] 查詢成功，回傳 ${result.rowCount} 筆資料`);
+            
+            return {
+                success: true,
+                rows: result.rows,
+                rowCount: result.rowCount,
+                executedSQL: validation.sanitizedSQL,
+                retried: attempt > 0
+            };
+        } catch (error) {
+            lastError = error;
+            console.error(`[SQLQueryService] 查詢執行錯誤${attempt > 0 ? ` (重試 #${attempt})` : ''}:`, error.message);
+            
+            // 如果還有重試機會，且有提供 LLM 修正函數
+            if (attempt < maxRetries && retryWithLLM && originalQuestion) {
+                console.log(`[SQLQueryService] 嘗試用 LLM 修正 SQL...`);
+                try {
+                    const fixedSQL = await retryWithLLM(originalQuestion, currentSQL, error.message);
+                    if (fixedSQL && fixedSQL !== currentSQL) {
+                        console.log(`[SQLQueryService] LLM 修正後的 SQL: ${fixedSQL}`);
+                        currentSQL = fixedSQL;
+                        continue; // 重試
+                    }
+                } catch (retryError) {
+                    console.error('[SQLQueryService] LLM 修正失敗:', retryError.message);
+                }
+            }
+        }
     }
+    
+    return { 
+        success: false, 
+        error: `資料庫查詢錯誤: ${lastError?.message || '未知錯誤'}` 
+    };
 }
 
 /**

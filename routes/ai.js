@@ -380,8 +380,39 @@ WHERE project_location IN (${areasCondition})
             if (queryMode === 'data' && generatedSQL) {
                 console.log(`[Chat V2] 生成的 SQL: ${generatedSQL}`);
                 
-                // Step 2b: 安全驗證並執行 SQL
-                const queryResult = await sqlQueryService.executeSecureQuery(generatedSQL);
+                // 定義 SQL 修正函數（用於重試）
+                const retryWithLLM = async (question, failedSQL, errorMsg) => {
+                    const fixPrompt = `你之前生成的 SQL 執行失敗了，請修正。
+
+原始問題: ${question}
+失敗的 SQL: ${failedSQL}
+錯誤訊息: ${errorMsg}
+
+請分析錯誤原因並生成正確的 SQL。只輸出修正後的 SQL，不要解釋。
+常見錯誤修正：
+- column "xxx" does not exist → 檢查欄位名稱拼寫
+- syntax error → 檢查 SQL 語法
+- invalid input syntax → 檢查資料類型轉換`;
+                    
+                    const fixCompletion = await openai.chat.completions.create({
+                        model: 'gpt-4.1-nano',
+                        messages: [{ role: 'user', content: fixPrompt }],
+                        temperature: 0.1,
+                        max_tokens: 500,
+                    });
+                    return fixCompletion.choices[0].message.content.trim();
+                };
+                
+                // Step 2b: 安全驗證並執行 SQL（支援自動重試）
+                const queryResult = await sqlQueryService.executeSecureQuery(generatedSQL, {
+                    retryWithLLM,
+                    originalQuestion: message,
+                    maxRetries: 1
+                });
+                
+                if (queryResult.retried) {
+                    console.log(`[Chat V2] SQL 已透過重試修正成功`);
+                }
                 
                 if (queryResult.success) {
                     executedSQL = queryResult.executedSQL;
