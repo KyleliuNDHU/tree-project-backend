@@ -6,7 +6,10 @@
   "scripts": {
     "start": "node app.js",
     "dev": "nodemon app.js",
-    "test": "echo \"Error: no test specified\" && exit 1"
+    "test": "node tests/intentClassification.test.js && node tests/sqlValidation.test.js",
+    "test:intent": "node tests/intentClassification.test.js",
+    "test:sql": "node tests/sqlValidation.test.js",
+    "test:integration": "node tests/chatIntegration.test.js"
   },
   "keywords": [],
   "author": "",
