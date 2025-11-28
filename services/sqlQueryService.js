@@ -59,19 +59,27 @@ const SCHEMA_INFO = `
 ## 資料庫結構
 
 ### 1. tree_survey (樹木調查主表)
-| 欄位 | 說明 | 範例 |
-|------|------|------|
-| system_tree_id | 系統編號 | ST-0001 |
-| species_name | 樹種名稱 | 榕樹、樟樹 |
-| tree_height_m | 樹高(公尺) | 5.5, 12.3 |
-| dbh_cm | 胸徑(公分) | 25.0, 68.5 |
-| status | 健康狀況 | 良好、普通、需關注 |
-| carbon_storage | 碳儲存量(公斤) | 150.5 |
-| carbon_sequestration_per_year | 年碳吸存量 | 12.3 |
-| project_location | 專案區位 | 台北市大安區 |
-| project_name | 專案名稱 | 大安森林公園碳匯計畫 |
-| notes | 備註 | 需修剪 |
-| survey_time | 調查時間 | 2024-06-15 |
+| 欄位 | 類型 | 說明 | 範例值 |
+|------|------|------|--------|
+| id | INTEGER | 主鍵 (自增) | 1, 2, 3 |
+| system_tree_id | TEXT | 系統樹木編號 (純數字字串) | '7', '8', '100' |
+| project_tree_id | TEXT | 專案樹木編號 (純數字字串) | '1', '2', '31' |
+| species_name | TEXT | 樹種名稱 | 欖仁、榕樹、樟樹 |
+| tree_height_m | NUMERIC | 樹高(公尺) | 5.5, 12.3 |
+| dbh_cm | NUMERIC | 胸徑(公分) | 25.0, 68.5 |
+| status | TEXT | 健康狀況 | 正常、良好、需關注 |
+| carbon_storage | NUMERIC | 碳儲存量(公斤) | 150.5 |
+| carbon_sequestration_per_year | NUMERIC | 年碳吸存量 | 12.3 |
+| project_location | TEXT | 專案區位 | 高雄港、花蓮港、台北市 |
+| project_name | TEXT | 專案名稱 | 港區植栽4區 |
+| project_code | TEXT | 專案代碼 | 6, 7 |
+| x_coord | NUMERIC | X 坐標 (經度) | 120.28626 |
+| y_coord | NUMERIC | Y 坐標 (緯度) | 22.617992 |
+| notes | TEXT | 備註 | 無、需修剪 |
+| survey_time | TIMESTAMP | 調查時間 | 2022-11-21 |
+
+⚠️ 重要：system_tree_id 和 project_tree_id 都是【純數字字串】，不是 'ST-0001' 這種格式！
+例如：WHERE system_tree_id = '7' 或 WHERE project_tree_id IN ('1','2','3')
 
 ### 2. tree_species (樹種資料表)
 - id, name, scientific_name
@@ -80,16 +88,19 @@ const SCHEMA_INFO = `
 - common_name_zh, carbon_absorption_min/max, growth_rate, carbon_efficiency
 
 ## 常用查詢模板
-1. 查單筆: SELECT system_tree_id, species_name, tree_height_m, dbh_cm, status, carbon_storage, project_location FROM tree_survey WHERE system_tree_id = 'ST-0001'
-2. 統計總數: SELECT COUNT(*) as total FROM tree_survey
-3. 按樹種統計: SELECT species_name, COUNT(*) as count, ROUND(AVG(dbh_cm)::numeric,1) as avg_dbh FROM tree_survey GROUP BY species_name ORDER BY count DESC
-4. 條件篩選: SELECT system_tree_id, species_name, dbh_cm, tree_height_m, carbon_storage FROM tree_survey WHERE dbh_cm > 50 ORDER BY dbh_cm DESC
-5. 查特定樹種: SELECT system_tree_id, tree_height_m, dbh_cm, carbon_storage, status FROM tree_survey WHERE species_name ILIKE '%榕樹%'
+1. 查單筆: SELECT system_tree_id, species_name, tree_height_m, dbh_cm, status, carbon_storage, project_location FROM tree_survey WHERE system_tree_id = '7'
+2. 查詢編號範圍: SELECT * FROM tree_survey WHERE CAST(project_tree_id AS INTEGER) BETWEEN 1 AND 31 AND project_location ILIKE '%花蓮港%'
+3. 統計總數: SELECT COUNT(*) as total FROM tree_survey
+4. 按樹種統計: SELECT species_name, COUNT(*) as count, ROUND(AVG(dbh_cm)::numeric,1) as avg_dbh FROM tree_survey GROUP BY species_name ORDER BY count DESC
+5. 條件篩選: SELECT system_tree_id, species_name, dbh_cm, tree_height_m, carbon_storage FROM tree_survey WHERE dbh_cm > 50 ORDER BY dbh_cm DESC
+6. 查特定樹種: SELECT system_tree_id, tree_height_m, dbh_cm, carbon_storage, status FROM tree_survey WHERE species_name ILIKE '%榕樹%'
+7. 查特定區位: SELECT * FROM tree_survey WHERE project_location ILIKE '%花蓮港%'
 
 重要提醒：
 - 只能使用 SELECT 語句
 - 必須加 LIMIT (最多 ${MAX_LIMIT})
 - 文字比對用 ILIKE
+- system_tree_id 和 project_tree_id 是純數字字串！
 `;
 
 // ============================================
