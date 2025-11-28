@@ -33,13 +33,25 @@ const FORBIDDEN_KEYWORDS = [
     'RENAME', 'REPLACE', 'DESCRIBE',
     'HANDLER', 'LOAD', 'PREPARE', 'DEALLOCATE',
     'XP_CMDSHELL', 'SP_EXECUTESQL', 'WAITFOR',
-    'BENCHMARK', 'SLEEP', 'PG_SLEEP', 'DBLINK'
+    'BENCHMARK', 'SLEEP', 'PG_SLEEP', 'DBLINK',
+    // 資訊洩漏相關
+    'CURRENT_USER', 'CURRENT_DATABASE', 'SESSION_USER',
+    'LO_IMPORT', 'LO_EXPORT', 'PG_READ_FILE', 'PG_LS_DIR'
 ];
 
 // 禁止的特殊字元序列（用於 SQL 注入攻擊）
 const FORBIDDEN_PATTERNS = [
     '--',      // SQL 單行註解
     ';--',     // 語句結束 + 註解
+];
+
+// 禁止的函數/模式（正則）
+const FORBIDDEN_FUNCTION_PATTERNS = [
+    /CHAR\s*\(/i,           // CHAR() 函數（用於繞過字串檢查）
+    /0x[0-9a-f]+/i,         // 十六進位字串（用於編碼攻擊）
+    /CONCAT\s*\(/i,         // CONCAT() 可用於構造惡意字串
+    /CHR\s*\(/i,            // PostgreSQL 的 CHR()
+    /'\s*OR\s*'[^']*'\s*=\s*'/i,  // 經典 OR '1'='1' 注入
 ];
 
 // 回傳筆數限制（針對 512MB RAM 優化）
@@ -153,6 +165,13 @@ function validateSQL(sql) {
     for (const pattern of FORBIDDEN_PATTERNS) {
         if (trimmedSQL.includes(pattern)) {
             return { safe: false, reason: `禁止使用 SQL 註解或注入字元: ${pattern}` };
+        }
+    }
+
+    // 2c. 檢查危險的函數/模式（正則檢查）
+    for (const pattern of FORBIDDEN_FUNCTION_PATTERNS) {
+        if (pattern.test(trimmedSQL)) {
+            return { safe: false, reason: `禁止使用可疑的 SQL 函數或模式` };
         }
     }
 
@@ -368,6 +387,17 @@ async function executeSecureQuery(sql, options = {}) {
  * @returns {boolean}
  */
 function shouldQueryDatabase(question, chatHistory = []) {
+    // 健壯性檢查：處理非字串輸入
+    if (!question || typeof question !== 'string') {
+        return false;
+    }
+    
+    // 去除前後空白
+    const cleanQuestion = question.trim();
+    if (cleanQuestion.length === 0) {
+        return false;
+    }
+    
     // 強資料查詢信號（幾乎一定要查資料庫）
     const strongDataSignals = [
         /ST-\d+/i,              // 樹木編號 ST-0001
@@ -396,6 +426,11 @@ function shouldQueryDatabase(question, chatHistory = []) {
         /資料.*[港區位]/,        // 資料 + X港/區位
         /給我.*樹/,              // 給我...樹
         /找.*樹/,                // 找...樹
+        // 新增：口語化查詢
+        /有沒有.*樹/,            // 有沒有大樹
+        /樹[多少]不[多少]/,      // 樹多不多
+        /除了.*還有/,            // 除了X還有什麼
+        /資料庫.*[有裡的]/,      // 資料庫裡的
     ];
 
     // 【新增】跟隨上下文的資料查詢信號
