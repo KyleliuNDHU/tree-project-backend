@@ -241,7 +241,7 @@ router.post('/chat_old_rag_version', aiLimiter, async (req, res) => {
 const MAX_MESSAGE_LENGTH = 500;
 
 // Excel 匯出設定
-const EXCEL_EXPORT_THRESHOLD = 20;  // 超過 20 筆自動生成 Excel
+const EXCEL_EXPORT_THRESHOLD = 5;  // 超過 5 筆自動生成 Excel
 const EXPORT_DIR = path.join(__dirname, '..', 'exports');
 const EXPORT_URL_PREFIX = '/api/ai/download/';  // 下載路由前綴
 
