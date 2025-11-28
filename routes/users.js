@@ -32,8 +32,9 @@ router.post('/login', loginLimiter, async (req, res) => {
         
         if (loginType === 'admin') {
             // 只允許特定角色登入管理後台
+            // 注意：role 欄位是 user_role enum 類型，需要轉換為 text 進行比較
             const allowedAdminRoles = ['系統管理員', '業務管理員', '專案管理員', '調查管理員'];
-            roleCheck = ` AND role = ANY($2::text[])`;
+            roleCheck = ` AND role::text = ANY($2::text[])`;
             queryParams.push(allowedAdminRoles);
         }
 
