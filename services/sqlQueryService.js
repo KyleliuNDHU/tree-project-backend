@@ -186,14 +186,40 @@ function validateSQL(sql) {
     }
 
     // 4. 檢查表格白名單
-    // 提取 FROM 和 JOIN 後面的表名
-    const tablePattern = /\b(?:FROM|JOIN)\s+([a-zA-Z_][a-zA-Z0-9_]*)/gi;
+    
+    // 4a. 完全禁止 UNION（常用於注入攻擊）
+    if (/\bUNION\b/i.test(sqlWithoutStrings)) {
+        return { safe: false, reason: '禁止使用 UNION 查詢' };
+    }
+    
+    // 4b. 提取所有可能的表名
+    const usedTables = new Set();
+    
+    // 匹配 FROM/JOIN 後的表名（支援 schema.table 格式）
+    // 例如: FROM tree_survey, FROM information_schema.tables, JOIN tree_species
+    const tablePattern = /\b(?:FROM|JOIN)\s+([a-zA-Z_][a-zA-Z0-9_]*(?:\.[a-zA-Z_][a-zA-Z0-9_]*)?)/gi;
     let match;
-    const usedTables = [];
-    while ((match = tablePattern.exec(trimmedSQL)) !== null) {
-        usedTables.push(match[1].toLowerCase());
+    while ((match = tablePattern.exec(sqlWithoutStrings)) !== null) {
+        usedTables.add(match[1].toLowerCase());
+    }
+    
+    // 匹配逗號分隔的表（FROM table1, table2）
+    // 先找到 FROM 子句
+    const fromClauseMatch = sqlWithoutStrings.match(/\bFROM\s+([^;]+?)(?:\s+WHERE|\s+ORDER|\s+GROUP|\s+LIMIT|\s+HAVING|\s*$)/i);
+    if (fromClauseMatch) {
+        const fromClause = fromClauseMatch[1];
+        // 分割逗號，但要排除 JOIN 部分
+        const parts = fromClause.split(/\s+JOIN\s+/i)[0].split(',');
+        parts.forEach(part => {
+            // 取第一個單詞作為表名
+            const tableMatch = part.trim().match(/^([a-zA-Z_][a-zA-Z0-9_]*(?:\.[a-zA-Z_][a-zA-Z0-9_]*)?)/);
+            if (tableMatch) {
+                usedTables.add(tableMatch[1].toLowerCase());
+            }
+        });
     }
 
+    // 4c. 檢查所有表是否在白名單中
     for (const table of usedTables) {
         if (!ALLOWED_TABLES.includes(table)) {
             return { safe: false, reason: `不允許查詢表格: ${table}` };
