@@ -195,15 +195,28 @@ function validateSQL(sql) {
  * @param {string} userQuestion - 使用者問題
  * @returns {string}
  */
-function buildSQLGenerationPrompt(userQuestion) {
+function buildSQLGenerationPrompt(userQuestion, chatHistory = []) {
+    // 構建歷史對話上下文
+    let historyContext = '';
+    if (chatHistory && chatHistory.length > 0) {
+        historyContext = '\n\n最近的對話紀錄（供參考上下文）：\n';
+        chatHistory.slice(-5).forEach((h, i) => {
+            historyContext += `用戶: ${h.message}\nAI: ${h.response.substring(0, 200)}...\n\n`;
+        });
+    }
+
     return `你是一個專業的 PostgreSQL 資料庫助手。請根據使用者的問題，生成一個安全且正確的 SQL 查詢語句。
 
-${SCHEMA_INFO}
+${SCHEMA_INFO}${historyContext}
 
 使用者問題：${userQuestion}
 
-請直接回傳 SQL 語句，不要加任何解釋或 markdown 格式。
-如果問題與資料庫查詢無關，請回傳 "NOT_A_DATA_QUERY"。
+重要規則：
+1. 請直接回傳 SQL 語句，不要加任何解釋或 markdown 格式
+2. 如果問題與資料庫查詢無關，請回傳 "NOT_A_DATA_QUERY"
+3. 如果使用者問了多個問題，請只針對【第一個】或【最主要】的問題生成 SQL
+4. 不要使用 UNION，每次只回傳一個查詢
+5. 如果使用者說「給我完整的」或「全部」，可以參考歷史對話中的查詢條件
 
 範例輸出格式：
 SELECT species_name, COUNT(*) as count FROM tree_survey GROUP BY species_name ORDER BY count DESC LIMIT 10
@@ -216,14 +229,24 @@ SELECT species_name, COUNT(*) as count FROM tree_survey GROUP BY species_name OR
  * @param {string} sql - 執行的 SQL
  * @param {Array} results - 查詢結果
  * @param {number} totalCount - 結果總數
+ * @param {Array} chatHistory - 歷史對話
  * @returns {string}
  */
-function buildResultExplanationPrompt(userQuestion, sql, results, totalCount) {
+function buildResultExplanationPrompt(userQuestion, sql, results, totalCount, chatHistory = []) {
     // 限制結果大小，避免 token 過多
     const displayResults = results.slice(0, 20);
     const hasMore = results.length > 20;
 
-    return `使用者問題：${userQuestion}
+    // 構建歷史對話上下文
+    let historyContext = '';
+    if (chatHistory && chatHistory.length > 0) {
+        historyContext = '\n\n最近的對話紀錄：\n';
+        chatHistory.slice(-3).forEach((h) => {
+            historyContext += `用戶: ${h.message}\nAI: ${h.response.substring(0, 150)}...\n`;
+        });
+    }
+
+    return `使用者問題：${userQuestion}${historyContext}
 
 我從資料庫查詢到以下結果（共 ${totalCount} 筆${hasMore ? '，以下顯示前 20 筆' : ''}）：
 
@@ -232,7 +255,8 @@ ${JSON.stringify(displayResults, null, 2)}
 請用繁體中文，以友善、專業的方式回答使用者的問題。
 如果結果為空，請告知使用者沒有找到相關資料。
 如果有多筆資料，請做適當的摘要或列表呈現。
-請在回答中自然地融入數據，不要只是列出原始 JSON。`;
+請在回答中自然地融入數據，不要只是列出原始 JSON。
+如果使用者的問題與先前對話有關，請參考歷史紀錄來理解上下文。`;
 }
 
 // ============================================

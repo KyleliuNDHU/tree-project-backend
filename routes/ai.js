@@ -263,6 +263,27 @@ router.post('/chat', aiLimiter, async (req, res) => {
         let executedSQL = null;
         let queryResults = null;
 
+        // Step 0: 獲取歷史對話上下文
+        let chatHistory = [];
+        if (userId) {
+            const historyQuery = `
+                SELECT message, response 
+                FROM chat_logs 
+                WHERE user_id = $1 
+                AND created_at > NOW() - INTERVAL '30 minutes'
+                ORDER BY created_at DESC 
+                LIMIT 10
+            `;
+            try {
+                const { rows } = await db.query(historyQuery, [userId]);
+                // 反轉回正序 (舊 -> 新)
+                chatHistory = rows.reverse();
+                console.log(`[Chat V2] 載入 ${chatHistory.length} 筆歷史對話`);
+            } catch (err) {
+                console.warn('[Chat V2] 獲取歷史對話失敗:', err.message);
+            }
+        }
+
         // Step 1: 意圖分類 - 判斷是否需要查詢資料庫
         const shouldQuery = sqlQueryService.shouldQueryDatabase(message);
         console.log(`[Chat V2] 意圖分類結果: ${shouldQuery ? '查資料' : '問知識'}`);
@@ -272,7 +293,7 @@ router.post('/chat', aiLimiter, async (req, res) => {
             
             // Step 2a: 讓 LLM 生成 SQL
             console.log('[Chat V2] 正在生成 SQL...');
-            const sqlPrompt = sqlQueryService.buildSQLGenerationPrompt(message);
+            const sqlPrompt = sqlQueryService.buildSQLGenerationPrompt(message, chatHistory);
             
             let generatedSQL = '';
             try {
@@ -310,9 +331,10 @@ router.post('/chat', aiLimiter, async (req, res) => {
                         message, 
                         executedSQL, 
                         queryResults, 
-                        queryResult.rowCount
+                        queryResult.rowCount,
+                        chatHistory
                     );
-                    const explainSystemPrompt = '你是一位專業的樹木與碳匯專家助理。請用繁體中文回答。';
+                    const explainSystemPrompt = '你是一位專業的樹木與碳匯專家助理。請用繁體中文回答。如果使用者提到「剛才」或「上一個」問題，請參考對話歷史。';
                     
                     try {
                         // 根據模型類型選擇對應的 API
@@ -366,18 +388,32 @@ router.post('/chat', aiLimiter, async (req, res) => {
 如果使用者詢問的是特定資料（如特定樹木編號、統計數據），
 請告知他們可以使用更具體的查詢方式，例如指定樹木編號或專案名稱。`;
 
+            // 構建包含歷史對話的 messages 陣列
+            const messages = [
+                { role: 'system', content: systemPrompt }
+            ];
+            
+            // 加入歷史對話
+            chatHistory.forEach(h => {
+                messages.push({ role: 'user', content: h.message });
+                messages.push({ role: 'assistant', content: h.response });
+            });
+            
+            // 加入當前問題
+            messages.push({ role: 'user', content: message });
+
             try {
                 // 根據模型類型選擇對應的 API
                 if (model_preference.startsWith('gemini-')) {
-                    aiResponse = await generateGeminiChatResponse(message, systemPrompt, [], model_preference);
+                    // Gemini 需要特殊處理歷史對話
+                    const historyText = chatHistory.map(h => `用戶: ${h.message}\nAI: ${h.response}`).join('\n\n');
+                    const messageWithHistory = historyText ? `${historyText}\n\n用戶: ${message}` : message;
+                    aiResponse = await generateGeminiChatResponse(messageWithHistory, systemPrompt, [], model_preference);
                 } else if (model_preference.startsWith('Qwen/') || model_preference.startsWith('deepseek-ai/')) {
                     if (!siliconFlowLlm) throw new Error('SiliconFlow 服務未配置');
                     const completion = await siliconFlowLlm.chat.completions.create({
                         model: model_preference,
-                        messages: [
-                            { role: 'system', content: systemPrompt },
-                            { role: 'user', content: message }
-                        ],
+                        messages: messages,
                         temperature: 0.7,
                         max_tokens: 1500,
                     });
@@ -386,10 +422,7 @@ router.post('/chat', aiLimiter, async (req, res) => {
                     // OpenAI 模型
                     const completion = await openai.chat.completions.create({
                         model: model_preference,
-                        messages: [
-                            { role: 'system', content: systemPrompt },
-                            { role: 'user', content: message }
-                        ],
+                        messages: messages,
                         temperature: 0.7,
                         max_tokens: 1500,
                     });
