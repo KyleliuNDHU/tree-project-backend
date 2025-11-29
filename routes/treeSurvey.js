@@ -90,6 +90,32 @@ router.get('/', async (req, res) => {
     }
 });
 
+// [優化] 地圖專用精簡 API - 只回傳地圖需要的欄位，減少約 70% 傳輸量
+router.get('/map', async (req, res) => {
+    try {
+        const sql = `
+            SELECT 
+                id,
+                project_location AS "專案區位",
+                project_name AS "專案名稱",
+                species_name AS "樹種名稱",
+                x_coord AS "X坐標",
+                y_coord AS "Y坐標"
+            FROM tree_survey 
+            WHERE x_coord IS NOT NULL 
+              AND y_coord IS NOT NULL 
+              AND x_coord != 0 
+              AND y_coord != 0
+            ORDER BY id ASC
+        `;
+        const { rows } = await db.query(sql);
+        res.json({ success: true, data: rows });
+    } catch (err) {
+        console.error('獲取地圖樹木資料錯誤:', err);
+        res.status(500).json({ success: false, message: '查詢資料庫時發生錯誤' });
+    }
+});
+
 // [V2 NEW] 根據 ID 獲取單筆樹木資料
 router.get('/by_id/:id', async (req, res) => {
     const { id } = req.params;
