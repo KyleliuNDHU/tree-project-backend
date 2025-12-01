@@ -1,8 +1,9 @@
 # 🌳 TreeAI 專案交接文件
 
-> **最後更新**: 2024-12-02  
+> **最後更新**: 2025-12-02  
 > **專案版本**: Frontend v14.0.0 / Backend latest  
-> **狀態**: ✅ 已同步至 GitHub 最新版本
+> **狀態**: ✅ 已同步至 GitHub 最新版本  
+> **聯絡方式**: 411135055@gms.ndhu.edu.tw
 
 ---
 
@@ -79,6 +80,16 @@
 #### 4️⃣ **App Icon 更新** 📱
 - Android 圖標加 padding 防止裁切
 - iOS 圖標維持不變
+
+#### 5️⃣ **VLGEO2 藍牙傳輸** 📡 ⭐ 重要功能
+- **BLE 連接**：Nordic UART Service 實作
+- **CSV 解析**：33 欄位完整解析（GPS、樹高、距離等）
+- **雜訊處理**：兩階段 PacketLogger 雜訊過濾
+- **精度驗證**：與官方 APP 誤差僅 **0.9%**
+- 相關檔案：
+  - `lib/screens/ble_import_page.dart` (914 行)
+  - `lib/services/ble_data_processor.dart` (220 行)
+  - `lib/services/ble_field_validator.dart` (298 行)
 
 ---
 
