@@ -7,7 +7,8 @@ const { apiLimiter, loginLimiter } = require('./middleware/rateLimiter');
 const { 
     cleanupUnusedProjectAreas, 
     cleanupUnusedSpecies, 
-    cleanupOrphanedPlaceholders 
+    cleanupOrphanedPlaceholders,
+    cleanupOldChatLogs
 } = require('./utils/cleanup');
 const migrate = require('./scripts/migrate'); // Import migration script
 
@@ -68,6 +69,7 @@ const locationRoutes = require('./routes/location');
 const managementRoutes = require('./routes/management');
 const carbonDataRoutes = require('./routes/carbon_data'); // 引入新的路由
 const knowledgeRoutes = require('./routes/knowledge'); // 引入知識庫路由
+const speciesIdentificationRoutes = require('./routes/speciesIdentification'); // 樹種辨識路由
 // const testRoutes = require('./routes/test'); // 引入測試路由
 
 apiRouter.use('/', usersRoutes); // 包含 /login
@@ -85,6 +87,7 @@ apiRouter.use('/tree-management', managementRoutes);
 apiRouter.use('/tree-carbon-data', carbonDataRoutes); // 掛載新的路由
 // apiRouter.use('/test', testRoutes); // 掛載測試路由
 apiRouter.use('/knowledge', knowledgeRoutes); // 掛載知識庫路由
+apiRouter.use('/species', speciesIdentificationRoutes); // 掛載樹種辨識路由
 
 
 // 將所有 API 路由應用速率限制並掛載到 /api
@@ -117,6 +120,14 @@ app.listen(PORT, () => {
         await cleanupOrphanedPlaceholders();
         await cleanupUnusedSpecies();
         await cleanupUnusedProjectAreas();
+        await cleanupOldChatLogs(); // 清理超過 24 小時的聊天記錄
         console.log('[Scheduler] Hourly cleanup tasks finished.');
     }, cleanupInterval);
+
+    // 啟動時也執行一次清理（特別是聊天記錄）
+    setTimeout(async () => {
+        console.log('[Startup] Running initial chat logs cleanup...');
+        await cleanupOldChatLogs();
+        console.log('[Startup] Initial cleanup finished.');
+    }, 5000); // 延遲 5 秒執行，讓伺服器先穩定
 });

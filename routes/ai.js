@@ -56,20 +56,24 @@ router.post('/chat_old_rag_version', aiLimiter, async (req, res) => {
         let { message, projectAreas, userId, model_preference = 'gemini-2.5-flash' } = req.body;
 
         // --- PRODUCTION MODEL ENFORCEMENT ---
-        // 允許的模型清單 (2025.11 更新):
-        // - OpenAI: gpt-4.1-nano, gpt-4.1-mini, gpt-4.1, gpt-5-mini
-        // - Google: gemini-2.5-flash
-        // - SiliconFlow: deepseek-ai/DeepSeek-V3, Qwen/Qwen3-VL-32B-Instruct
+        // 允許的模型清單 (2025.12 更新):
+        // - SiliconFlow: DeepSeek-V3, Qwen 系列
+        // - OpenAI: GPT-5 系列
+        // - Google: Gemini 2.5 系列
         if (process.env.NODE_ENV === 'production') {
             const allowedProdModels = [
-                'gpt-4.1-nano', 'gpt-4.1-mini', 'gpt-4.1', 'gpt-5-mini',
-                'gemini-2.5-flash',
-                'deepseek-ai/DeepSeek-V3', 'Qwen/Qwen3-VL-32B-Instruct'
+                // SiliconFlow 免費額度
+                'deepseek-ai/DeepSeek-V3', 'Qwen/Qwen3-235B-A22B-Instruct',
+                'Qwen/Qwen3-32B-Instruct', 'Qwen/QwQ-32B', 'deepseek-ai/DeepSeek-R1-0528',
+                // OpenAI GPT-5 系列 (2025 最新)
+                'gpt-5-nano', 'gpt-5-mini', 'gpt-5.1',
+                // Google Gemini 2.5 系列
+                'gemini-2.5-flash', 'gemini-2.5-pro'
             ];
             
             if (!allowedProdModels.includes(model_preference)) {
-                console.log(`[PROD-GUARD] Forbidden model '${model_preference}' requested. Overriding with fallback 'gpt-4.1-nano'.`);
-                model_preference = 'gpt-4.1-nano'; // Override to the safe fallback
+                console.log(`[PROD-GUARD] Forbidden model '${model_preference}' requested. Overriding with fallback 'deepseek-ai/DeepSeek-V3'.`);
+                model_preference = 'deepseek-ai/DeepSeek-V3'; // Override to the safe fallback
             }
         }
         // --- END ENFORCEMENT ---
@@ -278,10 +282,15 @@ setInterval(() => {
 
 router.post('/chat', aiLimiter, async (req, res) => {
     try {
-        let { message, userId, projectAreas, model_preference = 'gpt-4.1-nano' } = req.body;
+        let { message, userId, projectAreas, model_preference = 'gpt-4.1-nano', sessionId } = req.body;
 
         if (!message || typeof message !== 'string' || message.trim() === '') {
             return res.status(400).json({ success: false, error: '請提供有效的訊息內容' });
+        }
+
+        // 自動生成 sessionId（如果前端沒有提供）
+        if (!sessionId && userId) {
+            sessionId = `${userId}_${new Date().toISOString().split('T')[0].replace(/-/g, '')}`;
         }
 
         // 訊息長度限制
@@ -290,7 +299,7 @@ router.post('/chat', aiLimiter, async (req, res) => {
             message = message.substring(0, MAX_MESSAGE_LENGTH) + '...(訊息已截斷)';
         }
 
-        console.log(`[Chat V2] 收到查詢: "${message.substring(0, 50)}..."`);
+        console.log(`[Chat V2] 收到查詢: "${message.substring(0, 50)}..." (session: ${sessionId || 'N/A'})`);
         
         // 處理 projectAreas
         const validProjectAreas = Array.isArray(projectAreas) && projectAreas.length > 0 
@@ -300,14 +309,21 @@ router.post('/chat', aiLimiter, async (req, res) => {
             console.log(`[Chat V2] 區域過濾: ${validProjectAreas.join(', ')}`);
         }
         // --- PRODUCTION MODEL ENFORCEMENT ---
-        // 允許的模型清單 (2025.11 更新):
-        // - SiliconFlow: deepseek-ai/DeepSeek-V3, Qwen/Qwen3-VL-32B-Instruct (前端 APP 使用)
-        // - OpenAI/Google: 備用
+        // 允許的模型清單 (2025.12 更新):
+        // - SiliconFlow 免費額度: DeepSeek-V3, Qwen3 系列, QwQ 推理模型
+        // - 付費 API: OpenAI GPT-5 系列, Google Gemini 2.5
         if (process.env.NODE_ENV === 'production') {
             const allowedProdModels = [
-                'deepseek-ai/DeepSeek-V3', 'Qwen/Qwen3-VL-32B-Instruct',
-                'gpt-4.1-nano', 'gpt-4.1-mini', 'gpt-4.1', 'gpt-5-mini',
-                'gemini-2.5-flash'
+                // SiliconFlow 免費額度 (推薦優先使用)
+                'deepseek-ai/DeepSeek-V3',
+                'deepseek-ai/DeepSeek-R1-0528',
+                'Qwen/Qwen3-235B-A22B-Instruct',
+                'Qwen/Qwen3-32B-Instruct',
+                'Qwen/QwQ-32B',
+                // OpenAI GPT-5 系列 (2025 最新)
+                'gpt-5-nano', 'gpt-5-mini', 'gpt-5.1',
+                // Google Gemini 2.5 系列
+                'gemini-2.5-flash', 'gemini-2.5-pro',
             ];
             if (!allowedProdModels.includes(model_preference)) {
                 model_preference = 'deepseek-ai/DeepSeek-V3'; // 預設用 DeepSeek
@@ -323,12 +339,12 @@ router.post('/chat', aiLimiter, async (req, res) => {
         let chatHistory = [];
         if (userId) {
             try {
-                const historyQuery = sqlQueryService.getHistoryQuerySQL(userId);
+                const historyQuery = sqlQueryService.getHistoryQuerySQL(userId, sessionId);
                 const { rows } = await db.query(historyQuery.text, historyQuery.values);
                 // 反轉回正序 (舊 -> 新)
                 chatHistory = rows.reverse();
                 if (chatHistory.length > 0) {
-                    console.log(`[Chat V2] 載入 ${chatHistory.length} 筆歷史對話 (${sqlQueryService.HISTORY_WINDOW_MINUTES}分鐘內)`);
+                    console.log(`[Chat V2] 載入 ${chatHistory.length} 筆歷史對話 (session: ${sessionId || 'all'})`);
                 }
             } catch (err) {
                 console.warn('[Chat V2] 獲取歷史對話失敗:', err.message);
@@ -419,38 +435,48 @@ WHERE project_location IN (${areasCondition})
                     queryResults = queryResult.rows;
                     
                     // [NEW] Step 2c-1: 如果結果超過閾值，自動生成 Excel 下載連結
+                    // 使用無限制的匯出查詢來獲取完整資料
                     let downloadLink = null;
                     if (queryResult.rowCount >= EXCEL_EXPORT_THRESHOLD) {
                         try {
-                            const fileId = crypto.randomBytes(8).toString('hex');
-                            const fileName = `查詢結果_${fileId}.xlsx`;
-                            const filePath = path.join(EXPORT_DIR, fileName);
+                            // 使用無限制查詢獲取完整資料用於 Excel 匯出
+                            const exportResult = await sqlQueryService.executeSecureQueryForExport(generatedSQL);
                             
-                            const workbook = new ExcelJS.Workbook();
-                            const worksheet = workbook.addWorksheet('查詢結果');
-                            
-                            // 動態取得欄位（根據查詢結果）
-                            if (queryResults.length > 0) {
-                                const columns = Object.keys(queryResults[0]).map(key => ({
-                                    header: key,
-                                    key: key,
-                                    width: 15
-                                }));
-                                worksheet.columns = columns;
-                                worksheet.addRows(queryResults);
+                            if (exportResult.success) {
+                                const fileId = crypto.randomBytes(8).toString('hex');
+                                const fileName = `查詢結果_${fileId}.xlsx`;
+                                const filePath = path.join(EXPORT_DIR, fileName);
                                 
-                                // 設定標題列樣式
-                                worksheet.getRow(1).font = { bold: true };
-                                worksheet.getRow(1).fill = {
-                                    type: 'pattern',
-                                    pattern: 'solid',
-                                    fgColor: { argb: 'FFE0E0E0' }
-                                };
+                                const workbook = new ExcelJS.Workbook();
+                                const worksheet = workbook.addWorksheet('查詢結果');
+                                
+                                // 使用完整的匯出資料
+                                const exportData = exportResult.rows;
+                                if (exportData.length > 0) {
+                                    const columns = Object.keys(exportData[0]).map(key => ({
+                                        header: key,
+                                        key: key,
+                                        width: 15
+                                    }));
+                                    worksheet.columns = columns;
+                                    worksheet.addRows(exportData);
+                                    
+                                    // 設定標題列樣式
+                                    worksheet.getRow(1).font = { bold: true };
+                                    worksheet.getRow(1).fill = {
+                                        type: 'pattern',
+                                        pattern: 'solid',
+                                        fgColor: { argb: 'FFE0E0E0' }
+                                    };
+                                }
+                                
+                                await workbook.xlsx.writeFile(filePath);
+                                downloadLink = getFullDownloadUrl(fileName);
+                                console.log(`[Chat V2] 已生成 Excel: ${fileName} (${exportResult.rowCount} 筆完整資料)`);
+                            } else {
+                                // 匯出查詢失敗，使用原本的有限結果
+                                console.warn(`[Chat V2] Excel 匯出查詢失敗，使用限制資料: ${exportResult.error}`);
                             }
-                            
-                            await workbook.xlsx.writeFile(filePath);
-                            downloadLink = getFullDownloadUrl(fileName);
-                            console.log(`[Chat V2] 已生成 Excel: ${fileName} (${queryResult.rowCount} 筆)`);
                         } catch (excelErr) {
                             console.error('[Chat V2] Excel 生成失敗:', excelErr.message);
                         }
@@ -578,12 +604,15 @@ WHERE project_location IN (${areasCondition})
             }
         }
 
-        // Step 4: 儲存聊天記錄
+        // Step 4: 儲存聊天記錄（包含 session_id）
         if (userId) {
             try {
                 await db.query(
-                    'INSERT INTO chat_logs (user_id, message, response, model_used, project_areas) VALUES ($1, $2, $3, $4, $5)',
-                    [userId, message, aiResponse, model_preference, validProjectAreas.length > 0 ? JSON.stringify(validProjectAreas) : null]
+                    `INSERT INTO chat_logs (user_id, message, response, model_used, project_areas, session_id) 
+                     VALUES ($1, $2, $3, $4, $5, $6)`,
+                    [userId, message, aiResponse, model_preference, 
+                     validProjectAreas.length > 0 ? JSON.stringify(validProjectAreas) : null,
+                     sessionId || null]
                 );
             } catch (logErr) {
                 console.warn('[Chat V2] 儲存聊天記錄失敗:', logErr.message);
@@ -597,7 +626,8 @@ WHERE project_location IN (${areasCondition})
             queryMode: queryMode,
             executedSQL: executedSQL, // 方便 debug，正式版可移除
             resultCount: queryResults ? queryResults.length : null,
-            modelUsed: model_preference
+            modelUsed: model_preference,
+            sessionId: sessionId // 回傳 sessionId 讓前端可以追蹤
         });
 
     } catch (error) {

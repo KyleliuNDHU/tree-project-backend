@@ -25,6 +25,7 @@ const migrationFiles = [
   '00_normalization_schema.pg.sql', // [Moved] Run AFTER tree_survey is created
   'tree_management_actions.pg.sql',
   'chat_logs.pg.sql', // 新增 chat_logs 表格
+  '02_chat_logs_add_session.pg.sql', // [New] 加入 session_id 欄位支援多會話
   'tree_knowledge_embeddings_v2.pg.sql', // 新增 AI 知識庫表格
   '01_sync_project_id_trigger.sql' // [New] Project ID synchronization trigger
 ];

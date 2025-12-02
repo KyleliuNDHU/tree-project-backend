@@ -104,6 +104,7 @@ exports.batchImportTrees = async (req, res) => {
             const projectTreeId = project_code ? `PT-${nextPrjId++}` : `PT-${Date.now()}`; // Fallback
 
             // 準備 tree_survey 數據
+            // [FIX] 座標對應修正：x_coord = 經度 (lon), y_coord = 緯度 (lat)
             const surveyValues = [
                 project_area || '無',
                 project_code || '無',
@@ -112,8 +113,8 @@ exports.batchImportTrees = async (req, res) => {
                 projectTreeId,
                 tree.species_id || '無',
                 tree.species_name || '無',
-                parseFloat(tree.lat) || 0, // X/Lon? 注意前端傳過來的鍵名
-                parseFloat(tree.lon) || 0, // Y/Lat?
+                parseFloat(tree.lon) || 0, // x_coord = 經度 (Longitude)
+                parseFloat(tree.lat) || 0, // y_coord = 緯度 (Latitude)
                 tree.status || '良好',
                 tree.note || '無',
                 tree.tree_remark || '無',
@@ -141,33 +142,46 @@ exports.batchImportTrees = async (req, res) => {
             insertedIds.push(newTreeId);
 
             // 準備 tree_measurement_raw 數據 (如果 metadata 存在)
+            // [BACKWARD COMPAT] 只有當 raw 表存在時才嘗試寫入，確保舊資料庫不會報錯
             if (tree.metadata) {
                 const meta = tree.metadata;
-                const rawValues = [
-                    newTreeId,
-                    meta.instrument_type || null, // TYPE
-                    meta.snr || null,             // SNR
-                    meta.hd !== undefined ? parseFloat(meta.hd) : null,
-                    meta.sd !== undefined ? parseFloat(meta.sd) : null,
-                    meta.pitch !== undefined ? parseFloat(meta.pitch) : null,
-                    meta.az !== undefined ? parseFloat(meta.az) : null,
-                    meta.ref_height !== undefined ? parseFloat(meta.ref_height) : null,
-                    meta.hdop !== undefined ? parseFloat(meta.hdop) : null,
-                    meta.raw_lat !== undefined ? parseFloat(meta.raw_lat) : null,
-                    meta.raw_lon !== undefined ? parseFloat(meta.raw_lon) : null,
-                    meta.measured_at || tree.survey_time || null,
-                    JSON.stringify(meta) // 完整備份
-                ];
+                
+                // 先檢查 tree_measurement_raw 表是否存在
+                const tableCheck = await client.query(`
+                    SELECT EXISTS (
+                        SELECT FROM information_schema.tables 
+                        WHERE table_name = 'tree_measurement_raw'
+                    );
+                `);
+                
+                if (tableCheck.rows[0].exists) {
+                    // [FIX] 相容前端 BLE 傳來的欄位名稱 (horizontal_distance vs hd)
+                    const rawValues = [
+                        newTreeId,
+                        meta.instrument_type || tree.type || 'VLGEO2', // TYPE (若無則預設 VLGEO2)
+                        meta.snr || meta.device_sn || null,             // SNR
+                        // [FIX] 相容兩種欄位命名 (hd/horizontal_distance, sd/slope_distance, az/azimuth)
+                        meta.hd ?? meta.horizontal_distance ?? null,
+                        meta.sd ?? meta.slope_distance ?? null,
+                        meta.pitch !== undefined ? parseFloat(meta.pitch) : null,
+                        meta.az ?? meta.azimuth ?? null,
+                        meta.ref_height !== undefined ? parseFloat(meta.ref_height) : null,
+                        meta.hdop !== undefined ? parseFloat(meta.hdop) : null,
+                        meta.raw_lat !== undefined ? parseFloat(meta.raw_lat) : null,
+                        meta.raw_lon !== undefined ? parseFloat(meta.raw_lon) : null,
+                        meta.measured_at || tree.survey_time || null,
+                        JSON.stringify(meta) // 完整備份
+                    ];
 
-                // 檢查 raw 表是否存在 (避免在舊庫報錯)
-                // 這裡假設 Phase 1 已經執行，表一定存在
-                const insertRawSql = `
-                    INSERT INTO tree_measurement_raw
-                    (tree_id, instrument_type, device_sn, horizontal_dist, slope_dist, vertical_angle, 
-                    azimuth, ref_height, gps_hdop, raw_lat, raw_lon, measured_at, raw_data_snapshot)
-                    VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
-                `;
-                await client.query(insertRawSql, rawValues);
+                    const insertRawSql = `
+                        INSERT INTO tree_measurement_raw
+                        (tree_id, instrument_type, device_sn, horizontal_dist, slope_dist, vertical_angle, 
+                        azimuth, ref_height, gps_hdop, raw_lat, raw_lon, measured_at, raw_data_snapshot)
+                        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
+                    `;
+                    await client.query(insertRawSql, rawValues);
+                }
+                // 如果表不存在，靜默跳過（metadata 已備份在 survey_notes 或其他地方）
             }
         }
 

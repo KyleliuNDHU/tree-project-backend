@@ -77,8 +77,9 @@ const FORBIDDEN_FUNCTION_PATTERNS = [
 ];
 
 // 回傳筆數限制（針對 512MB RAM 優化）
-const MAX_LIMIT = 100;
+const MAX_LIMIT = 100;          // 一般 API 回應限制
 const DEFAULT_LIMIT = 50;
+const EXPORT_MAX_LIMIT = 10000; // Excel 匯出最大限制（防止記憶體爆掉）
 
 // 歷史對話限制（平衡記憶體和使用體驗）
 const MAX_HISTORY_COUNT = 10;     // 最多載入 10 筆歷史
@@ -92,7 +93,7 @@ const HISTORY_WINDOW_MINUTES = 15; // 只載入 15 分鐘內的對話
 const SCHEMA_INFO = `
 ## 資料庫結構
 
-### 1. tree_survey (樹木調查主表)
+### 1. tree_survey (樹木調查主表) - 主要查詢目標
 | 欄位 | 類型 | 說明 | 範例值 |
 |------|------|------|--------|
 | id | INTEGER | 主鍵 (自增) | 1, 2, 3 |
@@ -104,7 +105,7 @@ const SCHEMA_INFO = `
 | status | TEXT | 健康狀況 | 正常、良好、需關注 |
 | carbon_storage | NUMERIC | 碳儲存量(公斤) | 150.5 |
 | carbon_sequestration_per_year | NUMERIC | 年碳吸存量 | 12.3 |
-| project_location | TEXT | 專案區位 | 高雄港、花蓮港、台北市 |
+| project_location | TEXT | 專案區位 | 高雄港、花蓮港、台北港、興達港、布袋港 |
 | project_name | TEXT | 專案名稱 | 港區植栽4區 |
 | project_code | TEXT | 專案代碼 | 6, 7 |
 | x_coord | NUMERIC | X 坐標 (經度) | 120.28626 |
@@ -112,22 +113,44 @@ const SCHEMA_INFO = `
 | notes | TEXT | 備註 | 無、需修剪 |
 | survey_time | TIMESTAMP | 調查時間 | 2022-11-21 |
 
-⚠️ 重要：system_tree_id 和 project_tree_id 都是【純數字字串】，不是 'ST-0001' 這種格式！
-例如：WHERE system_tree_id = '7' 或 WHERE project_tree_id IN ('1','2','3')
+⚠️ 【關鍵】system_tree_id 和 project_tree_id 都是【純數字字串】！
+- 正確用法: WHERE system_tree_id = '7'
+- 錯誤用法: WHERE system_tree_id = 'ST-0001' ← 這是錯的！
 
 ### 2. tree_species (樹種資料表)
-- id, name, scientific_name
+- id, name (中文名), scientific_name (學名)
 
 ### 3. tree_carbon_data (樹種碳匯參數)
-- common_name_zh, carbon_absorption_min/max, growth_rate, carbon_efficiency
+- common_name_zh (中文名), carbon_absorption_min/max (碳吸收範圍), growth_rate (生長速率), carbon_efficiency (碳效率)
 
-## 常用查詢模板
-1. 查單筆: SELECT system_tree_id, species_name, tree_height_m, dbh_cm, status, carbon_storage, project_location FROM tree_survey WHERE system_tree_id = '7'
-2. 查詢編號範圍: SELECT * FROM tree_survey WHERE CAST(project_tree_id AS INTEGER) BETWEEN 1 AND 31 AND project_location ILIKE '%花蓮港%'
-3. 統計總數: SELECT COUNT(*) as total FROM tree_survey
-4. 按樹種統計: SELECT species_name, COUNT(*) as count, ROUND(AVG(dbh_cm)::numeric,1) as avg_dbh FROM tree_survey GROUP BY species_name ORDER BY count DESC
-5. 條件篩選: SELECT system_tree_id, species_name, dbh_cm, tree_height_m, carbon_storage FROM tree_survey WHERE dbh_cm > 50 ORDER BY dbh_cm DESC
-6. 查特定樹種: SELECT system_tree_id, tree_height_m, dbh_cm, carbon_storage, status FROM tree_survey WHERE species_name ILIKE '%榕樹%'
+## Few-Shot 範例 (Q→SQL)
+
+Q: 高雄港有幾棵樹？
+SQL: SELECT COUNT(*) as total FROM tree_survey WHERE project_location ILIKE '%高雄港%' LIMIT 50
+
+Q: 列出所有榕樹
+SQL: SELECT system_tree_id, species_name, tree_height_m, dbh_cm, carbon_storage, project_location FROM tree_survey WHERE species_name ILIKE '%榕樹%' LIMIT 50
+
+Q: 胸徑最大的前10棵樹
+SQL: SELECT system_tree_id, species_name, dbh_cm, tree_height_m, carbon_storage, project_location FROM tree_survey ORDER BY dbh_cm DESC NULLS LAST LIMIT 10
+
+Q: 花蓮港有哪些樹種？
+SQL: SELECT species_name, COUNT(*) as count FROM tree_survey WHERE project_location ILIKE '%花蓮港%' GROUP BY species_name ORDER BY count DESC LIMIT 50
+
+Q: 編號7的樹
+SQL: SELECT system_tree_id, species_name, tree_height_m, dbh_cm, status, carbon_storage, carbon_sequestration_per_year, project_location, notes FROM tree_survey WHERE system_tree_id = '7' LIMIT 1
+
+Q: 碳儲存量最高的5棵樹是什麼？
+SQL: SELECT system_tree_id, species_name, carbon_storage, carbon_sequestration_per_year, dbh_cm, tree_height_m, project_location FROM tree_survey WHERE carbon_storage IS NOT NULL ORDER BY carbon_storage DESC LIMIT 5
+
+Q: 統計各區位的樹木數量
+SQL: SELECT project_location, COUNT(*) as tree_count, ROUND(AVG(dbh_cm)::numeric, 1) as avg_dbh, ROUND(SUM(carbon_storage)::numeric, 1) as total_carbon FROM tree_survey GROUP BY project_location ORDER BY tree_count DESC LIMIT 50
+
+Q: 找出胸徑超過50公分的大樹
+SQL: SELECT system_tree_id, species_name, dbh_cm, tree_height_m, carbon_storage, project_location FROM tree_survey WHERE dbh_cm > 50 ORDER BY dbh_cm DESC LIMIT 50
+
+Q: 2022年調查的樹木
+SQL: SELECT system_tree_id, species_name, survey_time, project_location FROM tree_survey WHERE EXTRACT(YEAR FROM survey_time) = 2022 LIMIT 50
 7. 查特定區位: SELECT * FROM tree_survey WHERE project_location ILIKE '%花蓮港%'
 
 重要提醒：
@@ -340,31 +363,48 @@ function buildSQLGenerationPrompt(userQuestion, chatHistory = []) {
     // 精簡的歷史對話上下文
     let historyContext = '';
     if (chatHistory && chatHistory.length > 0) {
-        historyContext = '\n\n## 最近對話\n';
+        historyContext = '\n\n## 對話歷史（參考上下文）\n';
         chatHistory.slice(-3).forEach((h) => {
             const shortResponse = h.response.substring(0, MAX_HISTORY_LENGTH);
-            historyContext += `Q: ${h.message.substring(0, 50)}\nA: ${shortResponse}...\n`;
+            historyContext += `用戶: ${h.message.substring(0, 50)}\nAI: ${shortResponse}...\n`;
         });
     }
 
-    return `你是專業的 PostgreSQL 資料庫助手。根據使用者問題生成精確的 SQL 查詢。
+    // 智能預處理：識別用戶提到的編號
+    let treeIdHint = '';
+    const treeIdPatterns = [
+        { regex: /(?:編號|樹木|第)\s*(\d+)\s*(?:號|棵)?/g, field: 'system_tree_id' },
+        { regex: /ST[.-]?(\d+)/gi, field: 'system_tree_id' },
+        { regex: /PT[.-]?(\d+)/gi, field: 'project_tree_id' },
+        { regex: /^(\d+)號?$/g, field: 'system_tree_id' },
+    ];
+    
+    for (const pattern of treeIdPatterns) {
+        const match = pattern.regex.exec(userQuestion);
+        if (match) {
+            treeIdHint = `\n【偵測到樹木編號】用戶可能在查詢 ${pattern.field} = '${match[1]}'，請用此編號進行查詢。`;
+            break;
+        }
+    }
+
+    return `你是專業的 PostgreSQL 資料庫助手。分析用戶問題，生成精確的 SQL 查詢。
 
 ${SCHEMA_INFO}
-${historyContext}
+${historyContext}${treeIdHint}
 
-## 使用者問題
+## 當前問題
 ${userQuestion}
 
-## 嚴格規則
-1. 只回傳純 SQL 語句，不要任何解釋或 markdown
-2. 若問題與資料庫無關，只回傳：NOT_A_DATA_QUERY
-3. 一次只生成一個查詢，不用 UNION
-4. 查詢單筆時，回傳完整欄位（system_tree_id, species_name, tree_height_m, dbh_cm, status, carbon_storage, project_location）
-5. 統計查詢要用 COUNT, SUM, AVG 並用 ROUND 取小數點一位
-6. 若使用者說「完整」「全部」，參考歷史對話條件，用 LIMIT 100
-7. 文字比對用 ILIKE
+## 輸出規則
+1. 只輸出純 SQL 語句，不要任何解釋、Markdown 或程式碼區塊
+2. 若問題與樹木資料庫無關，只輸出：NOT_A_DATA_QUERY
+3. 查詢樹木詳情時，包含重要欄位：system_tree_id, species_name, tree_height_m, dbh_cm, status, carbon_storage, project_location
+4. 統計類查詢用 COUNT, SUM, AVG, ROUND(..., 1)
+5. 文字比對用 ILIKE '%關鍵字%'
+6. 排序時用 NULLS LAST 避免 NULL 值干擾
+7. 結尾一定要有 LIMIT（預設 50，用戶要求「全部」則用 100）
 
-直接回傳 SQL：`;
+直接輸出 SQL（不要任何前綴）：`;
 }
 
 /**
@@ -390,34 +430,67 @@ function buildResultExplanationPrompt(userQuestion, sql, results, totalCount, ch
         });
     }
 
-    // 根據結果數量調整指示
+    // 根據結果數量和類型調整指示
     let formatInstruction = '';
+    
+    // 偵測查詢類型
+    const isCountQuery = results.length === 1 && ('count' in results[0] || 'total' in results[0]);
+    const isGroupQuery = results.length > 1 && results[0] && ('count' in results[0] || 'tree_count' in results[0]);
+    const isSingleTree = totalCount === 1 && results[0] && 'system_tree_id' in results[0];
+    
     if (totalCount === 0) {
-        formatInstruction = `【無資料】明確告知「資料庫中沒有找到符合條件的資料」，建議其他查詢條件，不要編造資料。`;
-    } else if (totalCount === 1) {
-        formatInstruction = `【單筆資料】詳細列出所有重要欄位，用自然語言描述如「編號 ST-0001 是一棵榕樹，樹高 X 公尺...」`;
+        formatInstruction = `【無資料】
+- 明確告知「資料庫中沒有找到符合條件的資料」
+- 分析可能原因（如：區位名稱拼錯、條件太嚴格）
+- 建議替代查詢方式
+- 絕對不要編造資料`;
+    } else if (isCountQuery) {
+        formatInstruction = `【統計結果】
+- 直接回答數量，例如「高雄港共有 XX 棵樹」
+- 可簡短補充相關資訊`;
+    } else if (isGroupQuery) {
+        formatInstruction = `【分組統計】
+- 用表格或清單呈現各分組的統計數據
+- 標出最多/最少的項目
+- 最後做簡短總結`;
+    } else if (isSingleTree) {
+        formatInstruction = `【單筆樹木資料】
+- 用自然語言描述：「編號 ${results[0].system_tree_id} 是一棵${results[0].species_name || '樹木'}」
+- 列出所有重要指標：樹高、胸徑、碳儲存量、健康狀況
+- 可補充該樹種的一般知識`;
     } else if (totalCount <= 10) {
-        formatInstruction = `【少量資料】逐筆列出重要資訊，用清單格式，最後做簡短總結。`;
+        formatInstruction = `【少量資料 ${totalCount} 筆】
+- 用清單格式逐筆列出（編號、樹種、關鍵數值）
+- 最後做簡短總結`;
     } else {
-        formatInstruction = `【大量資料】先說「共查詢到 ${totalCount} 筆」，做統計摘要（最高/最低/平均），列出前 5-10 筆代表性資料。`;
+        formatInstruction = `【大量資料 ${totalCount} 筆】
+- 先說明「共查詢到 ${totalCount} 筆資料」
+- 做統計摘要：最大值/最小值/平均值
+- 列出前 5~10 筆代表性資料
+- 提醒用戶可下載 Excel 查看完整資料`;
     }
 
-    return `你是樹木碳匯資料庫專業助理。根據【實際查詢結果】回答問題。
+    return `你是樹木碳匯資料庫專業助理。嚴格根據【查詢結果】回答。
 
-## 問題
+## 用戶問題
 ${userQuestion}${historyContext}
 
-## 查詢結果（共 ${totalCount} 筆${hasMore ? '，顯示前30筆' : ''}）
+## 資料庫查詢結果（共 ${totalCount} 筆${hasMore ? '，以下顯示前30筆' : ''}）
+\`\`\`json
 ${JSON.stringify(displayResults, null, 2)}
+\`\`\`
 
-## ${formatInstruction}
+## 回答指引
+${formatInstruction}
 
 ## 核心原則
-1. 【資料優先】數字必須來自查詢結果，絕對不可編造
-2. 【誠實回答】資料不足就說明
-3. 【專業補充】可簡短補充樹種知識，但標明是「一般知識」
-4. 【格式清晰】善用列表、數字
-5. 【繁體中文】全程繁體中文`;
+1. 📊【資料為本】所有數字必須來自上方查詢結果，絕對禁止編造
+2. 💡【誠實透明】資料不足就如實說明
+3. 🌳【專業補充】可補充樹種相關知識，但要標明「一般知識」
+4. 📝【格式清晰】善用 Markdown 格式（清單、粗體、表格）
+5. 🇹🇼【繁體中文】全程使用繁體中文
+
+請回答：`;
 }
 
 // ============================================
@@ -486,7 +559,110 @@ async function executeSecureQuery(sql, options = {}) {
 }
 
 /**
- * 判斷使用者問題是否需要查詢資料庫（優化版）
+ * 驗證 SQL 查詢（匯出版 - 使用較高的 LIMIT 上限）
+ * @param {string} sql - 要驗證的 SQL 語句
+ * @returns {{ safe: boolean, sanitizedSQL?: string, reason?: string }}
+ */
+function validateSQLForExport(sql) {
+    // 重用基本驗證邏輯，但修改 LIMIT 處理
+    const trimmedSQL = sql.trim();
+    const upperSQL = trimmedSQL.toUpperCase();
+
+    // 基本安全檢查（與 validateSQL 相同）
+    if (!upperSQL.startsWith('SELECT')) {
+        return { safe: false, reason: '只允許 SELECT 查詢' };
+    }
+
+    for (const pattern of FORBIDDEN_PATTERNS) {
+        if (pattern.test(trimmedSQL)) {
+            return { safe: false, reason: `SQL 包含不允許的操作: ${pattern}` };
+        }
+    }
+
+    // 去除字串常數後檢查表格
+    const sqlWithoutStrings = trimmedSQL.replace(/'[^']*'/g, "''");
+    
+    // 識別 CTE 名稱
+    const cteNames = new Set();
+    const cteRegex = /\bWITH\s+(\w+)\s+AS\s*\(/gi;
+    let match;
+    while ((match = cteRegex.exec(sqlWithoutStrings)) !== null) {
+        cteNames.add(match[1].toLowerCase());
+    }
+    
+    // 提取表名
+    const usedTables = new Set();
+    const fromRegex = /\bFROM\s+([a-zA-Z_][a-zA-Z0-9_]*)/gi;
+    while ((match = fromRegex.exec(sqlWithoutStrings)) !== null) {
+        usedTables.add(match[1].toLowerCase());
+    }
+    const joinRegex = /\bJOIN\s+([a-zA-Z_][a-zA-Z0-9_]*)/gi;
+    while ((match = joinRegex.exec(sqlWithoutStrings)) !== null) {
+        usedTables.add(match[1].toLowerCase());
+    }
+
+    // 檢查表格白名單
+    for (const table of usedTables) {
+        if (cteNames.has(table)) continue;
+        if (!ALLOWED_TABLES.includes(table)) {
+            return { safe: false, reason: `不允許查詢表格: ${table}` };
+        }
+    }
+
+    // 匯出版：使用 EXPORT_MAX_LIMIT（不是 MAX_LIMIT）
+    let sanitizedSQL = trimmedSQL;
+    if (!upperSQL.includes('LIMIT')) {
+        sanitizedSQL = sanitizedSQL.replace(/;*$/, '');
+        sanitizedSQL += ` LIMIT ${EXPORT_MAX_LIMIT}`;
+    } else {
+        const limitMatch = upperSQL.match(/LIMIT\s+(\d+)/);
+        if (limitMatch) {
+            const limitValue = parseInt(limitMatch[1], 10);
+            if (limitValue > EXPORT_MAX_LIMIT) {
+                sanitizedSQL = trimmedSQL.replace(/LIMIT\s+\d+/i, `LIMIT ${EXPORT_MAX_LIMIT}`);
+            }
+        }
+    }
+
+    sanitizedSQL = sanitizedSQL.replace(/;*$/, '');
+    return { safe: true, sanitizedSQL };
+}
+
+/**
+ * 執行安全的 SQL 查詢（匯出專用 - 無一般限制）
+ * @param {string} sql - SQL 語句（會套用匯出專用的 LIMIT）
+ * @returns {Promise<{ success: boolean, rows?: Array, rowCount?: number, error?: string }>}
+ */
+async function executeSecureQueryForExport(sql) {
+    try {
+        const validation = validateSQLForExport(sql);
+        if (!validation.safe) {
+            return { success: false, error: validation.reason };
+        }
+
+        console.log(`[SQLQueryService-Export] 執行匯出查詢: ${validation.sanitizedSQL}`);
+        
+        const result = await db.query(validation.sanitizedSQL);
+        
+        console.log(`[SQLQueryService-Export] 匯出查詢成功，回傳 ${result.rowCount} 筆資料`);
+        
+        return {
+            success: true,
+            rows: result.rows,
+            rowCount: result.rowCount,
+            executedSQL: validation.sanitizedSQL
+        };
+    } catch (error) {
+        console.error('[SQLQueryService-Export] 查詢執行錯誤:', error.message);
+        return { 
+            success: false, 
+            error: `資料庫查詢錯誤: ${error.message}` 
+        };
+    }
+}
+
+/**
+ * 判斷使用者問題是否需要查詢資料庫（V2 增強版）
  * @param {string} question - 使用者問題
  * @param {Array} chatHistory - 歷史對話（可選）
  * @returns {boolean}
@@ -503,121 +679,167 @@ function shouldQueryDatabase(question, chatHistory = []) {
         return false;
     }
     
-    // 強資料查詢信號（幾乎一定要查資料庫）
-    const strongDataSignals = [
-        /ST-\d+/i,              // 樹木編號 ST-0001
-        /PT-\d+/i,              // 專案編號
-        /總共.*[幾多]/,          // 總共有幾/多少
-        /有幾[棵顆株]/,          // 有幾棵
-        /多少[棵顆株]/,          // 多少棵
-        /列出/,                  // 列出（任何內容）
-        /查詢.*資料/,            // 查詢資料
-        /哪些.*樹/,              // 哪些樹
-        /超過.*公分/,            // 超過 X 公分
-        /大於.*公分/,
-        /低於.*公分/,
-        /小於.*公分/,
-        /胸徑.*\d+/,             // 胸徑 + 數字
-        /樹高.*\d+/,             // 樹高 + 數字
-        /碳[儲存吸存]/,          // 碳儲存/碳吸存（查詢相關）
-        /統計/,
-        /平均/,
-        /最[高大低小]/,          // 最高/最大/最低/最小
-        /前\s*\d+/,              // 前10/前 10（TOP N 查詢）
-        /排[名序]/,
-        /完整.*筆/,              // 完整 68 筆
-        /全部.*資料/,            // 全部資料
-        /[港區位].*資料/,        // X港/區位 + 資料
-        /資料.*[港區位]/,        // 資料 + X港/區位
-        /給我.*樹/,              // 給我...樹
-        /找.*樹/,                // 找...樹
-        // 新增：口語化查詢
-        /有沒有.*樹/,            // 有沒有大樹
-        /樹[多少]不[多少]/,      // 樹多不多
-        /除了.*還有/,            // 除了X還有什麼
-        /資料庫.*[有裡的]/,      // 資料庫裡的
+    // ========================================
+    // 1. 絕對資料查詢信號（直接返回 true）
+    // ========================================
+    const absoluteDataSignals = [
+        // 樹木編號相關
+        /編號\s*\d+/i,           // 編號 7, 編號123
+        /第\s*\d+\s*[號棵株]/,   // 第7號, 第7棵
+        /^\d+號?$/,              // 純數字 "7" 或 "7號"
+        /ST[.-]?\d+/i,           // ST-0001, ST0001
+        /PT[.-]?\d+/i,           // PT-001
+        
+        // 數量查詢
+        /[有總共].*[幾多少][棵顆株筆]/,  // 有幾棵, 總共多少筆
+        /[幾多少][棵顆株筆].*樹/,        // 幾棵樹
+        /數量[是有]/,                     // 數量是, 數量有
+        
+        // 列表/搜尋
+        /^列出/,                  // 列出（開頭）
+        /找[出到].*樹/,           // 找出/找到...樹
+        /搜尋/,
+        /查詢.*資料/,
+        /查[看一]下/,             // 查看, 查一下
+        
+        // 條件篩選（含數值）
+        /胸徑.{0,5}\d+/,         // 胸徑 > 50, 胸徑50
+        /樹高.{0,5}\d+/,         // 樹高 > 10, 樹高10
+        /[超大低小於過].*\d+\s*(公分|cm|公尺|m)/i,  // 超過50公分
+        /\d+\s*(公分|cm|公尺|m)[以之]?[上下內]/i,  // 50公分以上
+        
+        // 統計類
+        /^統計/,                 // 統計（開頭）
+        /平均[值是有]/,          // 平均值, 平均是
+        /總[和量計]/,            // 總和, 總量, 總計
+        /最[高大低小矮].{0,3}[的是]/,  // 最高的, 最大是
+        /前\s*\d+\s*[名筆棵]/,   // 前10名, 前5筆
+        /排[名行序]/,            // 排名, 排行
+        
+        // 區位資料查詢
+        /(高雄|花蓮|台北|台中|基隆|興達|布袋|安平|蘇澳)[港].*[有幾多少資料樹]/,
+        /[有幾多少資料樹].*(高雄|花蓮|台北|台中|基隆|興達|布袋|安平|蘇澳)[港]/,
+        
+        // 比較查詢
+        /比較.*和.*的/,          // 比較A和B的
+        /[跟與和].*比/,          // 跟X比
     ];
 
-    // 【新增】跟隨上下文的資料查詢信號
-    // 例如：「還有台北港的」「再來是興達港的」「高雄港呢」
+    for (const pattern of absoluteDataSignals) {
+        if (pattern.test(cleanQuestion)) {
+            console.log(`[shouldQueryDatabase] 絕對資料信號匹配: ${pattern}`);
+            return true;
+        }
+    }
+
+    // ========================================
+    // 2. 絕對知識問答信號（直接返回 false）
+    // ========================================
+    const absoluteKnowledgeSignals = [
+        /^什麼是/,               // 什麼是碳匯
+        /^為什麼/,               // 為什麼要種樹
+        /^如何.*種植/,           // 如何種植
+        /^怎麼.*[種照養護]/,     // 怎麼種/照顧/養護
+        /適合.*[什哪]麼.*環境/,  // 適合什麼環境
+        /生長.*條件/,
+        /特[性徵點]是什麼/,      // 特性是什麼
+        /有什麼.*[好優]處/,      // 有什麼好處/優處
+        /^介紹/,                 // 介紹一下
+        /^說明/,                 // 說明一下
+        /^解釋/,                 // 解釋一下
+        /原理是/,
+        /定義是/,
+        /怎樣才能/,
+        /如何計算/,
+        /公式是/,
+    ];
+
+    for (const pattern of absoluteKnowledgeSignals) {
+        if (pattern.test(cleanQuestion)) {
+            console.log(`[shouldQueryDatabase] 絕對知識信號匹配: ${pattern}`);
+            return false;
+        }
+    }
+
+    // ========================================
+    // 3. 上下文跟隨查詢（短問題 + 地點）
+    // ========================================
     const contextFollowupPatterns = [
         /^還有/,                // 還有...
         /^再來/,                // 再來...
         /^接下來/,              // 接下來...
         /^那/,                  // 那...
+        /^換/,                  // 換...
         /的呢[？?]?$/,          // ...的呢？
         /呢[？?]?$/,            // ...呢？
     ];
     
-    // 港口/區位名稱列表
-    const locationKeywords = ['港', '區位', '專案', '計畫'];
-
-    // 強知識問答信號
-    const strongKnowledgeSignals = [
-        /什麼是/,
-        /為什麼/,
-        /如何.*種植/,
-        /怎麼.*照顧/,
-        /適合.*環境/,
-        /生長.*條件/,
-        /特[性徵]是/,
-        /好處.*壞處/,
-        /優點.*缺點/,
-        /介紹一下/,
-        /說明.*原理/,
+    const locationPatterns = [
+        /[港區位專案計畫]/,
+        /(高雄|花蓮|台北|台中|基隆|興達|布袋|安平|蘇澳)/
     ];
 
-    // 檢查強資料信號
-    for (const pattern of strongDataSignals) {
-        if (pattern.test(question)) {
-            return true;
-        }
-    }
+    const hasFollowup = contextFollowupPatterns.some(p => p.test(cleanQuestion));
+    const hasLocation = locationPatterns.some(p => p.test(cleanQuestion));
     
-    // 【新增】檢查跟隨上下文的查詢
-    // 如果問題包含「還有/再來/那」+ 地點名稱，且上一輪是資料查詢，則繼續查資料
-    const hasFollowupPattern = contextFollowupPatterns.some(p => p.test(question));
-    const hasLocationKeyword = locationKeywords.some(k => question.includes(k));
-    
-    if (hasFollowupPattern && hasLocationKeyword) {
-        // 這很可能是跟隨上下文的資料查詢
-        console.log('[shouldQueryDatabase] 偵測到跟隨上下文的區位查詢');
+    if (hasFollowup && hasLocation) {
+        console.log('[shouldQueryDatabase] 上下文跟隨查詢');
         return true;
     }
     
-    // 【新增】如果問題很短（< 15 字）且包含地點關鍵字，很可能是跟隨查詢
-    if (question.length < 15 && hasLocationKeyword) {
-        console.log('[shouldQueryDatabase] 偵測到簡短區位查詢');
+    // 短問題（< 12 字）且包含地點，很可能是跟隨查詢
+    if (cleanQuestion.length < 12 && hasLocation) {
+        console.log('[shouldQueryDatabase] 簡短地點查詢');
         return true;
     }
 
-    // 檢查強知識信號
-    for (const pattern of strongKnowledgeSignals) {
-        if (pattern.test(question)) {
-            return false;
-        }
-    }
-
-    // 弱資料關鍵字
-    const weakDataKeywords = ['幾', '多少', '哪', '找', '查', '搜', '專案', '區域', '區位', '資料'];
+    // ========================================
+    // 4. 計分制（弱信號綜合判斷）
+    // ========================================
+    const weakDataKeywords = [
+        { word: '幾', score: 2 },
+        { word: '多少', score: 2 },
+        { word: '哪', score: 1.5 },
+        { word: '找', score: 1.5 },
+        { word: '查', score: 1.5 },
+        { word: '搜', score: 1.5 },
+        { word: '專案', score: 1 },
+        { word: '區域', score: 1 },
+        { word: '區位', score: 1 },
+        { word: '資料', score: 1 },
+        { word: '筆', score: 1.5 },
+        { word: '棵', score: 1.5 },
+        { word: '株', score: 1.5 },
+        { word: '樹', score: 0.5 },
+    ];
     
-    // 弱知識關鍵字  
-    const weakKnowledgeKeywords = ['嗎', '呢', '適合', '建議', '應該', '可以'];
+    const weakKnowledgeKeywords = [
+        { word: '嗎', score: 1 },
+        { word: '適合', score: 2 },
+        { word: '建議', score: 2 },
+        { word: '應該', score: 1.5 },
+        { word: '可以', score: 1 },
+        { word: '好不好', score: 1.5 },
+        { word: '會不會', score: 1.5 },
+        { word: '能不能', score: 1 },
+    ];
 
     let dataScore = 0;
     let knowledgeScore = 0;
 
-    for (const kw of weakDataKeywords) {
-        if (question.includes(kw)) dataScore++;
+    for (const { word, score } of weakDataKeywords) {
+        if (cleanQuestion.includes(word)) dataScore += score;
     }
     
-    for (const kw of weakKnowledgeKeywords) {
-        if (question.includes(kw)) knowledgeScore++;
+    for (const { word, score } of weakKnowledgeKeywords) {
+        if (cleanQuestion.includes(word)) knowledgeScore += score;
     }
 
-    // 資料分數較高則查資料庫
-    if (dataScore > knowledgeScore) return true;
-    if (knowledgeScore > dataScore) return false;
+    console.log(`[shouldQueryDatabase] 計分結果: data=${dataScore.toFixed(1)}, knowledge=${knowledgeScore.toFixed(1)}`);
+
+    // 資料分數較高則查資料庫（需明顯高出）
+    if (dataScore >= knowledgeScore + 1) return true;
+    if (knowledgeScore >= dataScore + 1) return false;
 
     // 預設：不查資料庫（讓 LLM 回答一般知識）
     return false;
@@ -626,9 +848,27 @@ function shouldQueryDatabase(question, chatHistory = []) {
 /**
  * 取得歷史對話查詢 SQL（統一管理參數）
  * @param {string} userId - 使用者 ID
+ * @param {string} sessionId - (可選) 對話會話 ID，用於取得特定會話的歷史
  * @returns {{ text: string, values: Array }}
  */
-function getHistoryQuerySQL(userId) {
+function getHistoryQuerySQL(userId, sessionId = null) {
+    // 如果提供了 sessionId，只取該會話的歷史
+    if (sessionId) {
+        return {
+            text: `
+                SELECT message, response 
+                FROM chat_logs 
+                WHERE user_id = $1 
+                AND session_id = $2
+                AND created_at > NOW() - INTERVAL '${HISTORY_WINDOW_MINUTES} minutes'
+                ORDER BY created_at DESC 
+                LIMIT $3
+            `,
+            values: [userId, sessionId, MAX_HISTORY_COUNT]
+        };
+    }
+    
+    // 否則取該用戶最近的所有對話
     return {
         text: `
             SELECT message, response 
@@ -648,7 +888,9 @@ function getHistoryQuerySQL(userId) {
 
 module.exports = {
     validateSQL,
+    validateSQLForExport,
     executeSecureQuery,
+    executeSecureQueryForExport,
     buildSQLGenerationPrompt,
     buildResultExplanationPrompt,
     shouldQueryDatabase,
@@ -657,6 +899,7 @@ module.exports = {
     ALLOWED_TABLES,
     MAX_LIMIT,
     DEFAULT_LIMIT,
+    EXPORT_MAX_LIMIT,
     MAX_HISTORY_COUNT,
     HISTORY_WINDOW_MINUTES
 };
