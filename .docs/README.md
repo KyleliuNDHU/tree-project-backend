@@ -11,17 +11,16 @@
 | **README.md** | 📍 **你現在看的這份** - 導覽所有文件 | 所有人 |
 | **DEVELOPMENT_PLAN.md** | 🎯 **主要規劃文件** - 完整開發計畫 | 開發者、專案負責人 |
 | **ACADEMIC_REFERENCES.md** | 📖 學術論文引用清單（13篇 / 5,350+ citations） | 研究人員、論文撰寫 |
-| **HANDOVER.md** | 🤝 交接文件 - 現有功能說明 | 新加入的學弟妹 |
-| **SYNC_LOG.md** | 📝 Git 同步記錄 | 版本追溯 |
-| **BUGS_ANALYSIS.md** | 🐛 已知問題分析 | 除錯參考 |
+
+> 💡 **舊文件已移至 `docs/history/` 資料夾**
 
 ---
 
 ## 🎯 新手請先看
 
-1. **HANDOVER.md** - 了解目前 APP 有什麼功能
-2. **DEVELOPMENT_PLAN.md** - 了解未來要做什麼
-3. **ACADEMIC_REFERENCES.md** - 如果要寫論文，看這裡
+1. **DEVELOPMENT_PLAN.md** - 了解未來要做什麼
+2. **ACADEMIC_REFERENCES.md** - 如果要寫論文，看這裡
+3. **`docs/BUILD_GUIDE.md`** - 建置與發布指南
 
 ---
 
