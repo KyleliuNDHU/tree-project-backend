@@ -573,9 +573,17 @@ function validateSQLForExport(sql) {
         return { safe: false, reason: '只允許 SELECT 查詢' };
     }
 
+    // 檢查危險的特殊字元序列（FORBIDDEN_PATTERNS 是字串陣列，使用 includes）
     for (const pattern of FORBIDDEN_PATTERNS) {
+        if (trimmedSQL.includes(pattern)) {
+            return { safe: false, reason: `SQL 包含不允許的字元序列: ${pattern}` };
+        }
+    }
+
+    // 檢查危險的函數/模式（FORBIDDEN_FUNCTION_PATTERNS 是正則陣列，使用 test）
+    for (const pattern of FORBIDDEN_FUNCTION_PATTERNS) {
         if (pattern.test(trimmedSQL)) {
-            return { safe: false, reason: `SQL 包含不允許的操作: ${pattern}` };
+            return { safe: false, reason: `SQL 包含不允許的函數或模式` };
         }
     }
 
