@@ -3,6 +3,15 @@ const openai = require('../services/openaiService');
 const path = require('path');
 const fs = require('fs');
 
+// Helper function: 根據模型名稱決定使用 max_tokens 或 max_completion_tokens
+// 新版 OpenAI o1/o3 系列模型需要使用 max_completion_tokens
+function getTokenLimitParams(modelName, tokenLimit) {
+    if (modelName && (modelName.startsWith('o1') || modelName.startsWith('o3'))) {
+        return { max_completion_tokens: tokenLimit };
+    }
+    return { max_tokens: tokenLimit };
+}
+
 // 全局存儲用戶對話歷史
 const conversationHistory = {};
 

@@ -38,7 +38,31 @@ const upload = multer({
  * - organ: 器官類型 (選填) - leaf, flower, fruit, bark, auto
  * - lang: 語言 (選填) - zh, en
  */
-router.post('/identify', upload.single('image'), async (req, res) => {
+router.post('/identify', (req, res, next) => {
+    // Wrap multer with custom error handling
+    upload.single('image')(req, res, (err) => {
+        if (err instanceof multer.MulterError) {
+            // Multer 特定錯誤 (例如檔案過大)
+            if (err.code === 'LIMIT_FILE_SIZE') {
+                return res.status(400).json({
+                    success: false,
+                    error: '圖片大小超過限制（最大 10MB）'
+                });
+            }
+            return res.status(400).json({
+                success: false,
+                error: `上傳錯誤: ${err.message}`
+            });
+        } else if (err) {
+            // fileFilter 拋出的錯誤
+            return res.status(400).json({
+                success: false,
+                error: err.message || '只接受圖片檔案'
+            });
+        }
+        next();
+    });
+}, async (req, res) => {
     try {
         if (!req.file) {
             return res.status(400).json({

@@ -36,6 +36,17 @@ if (process.env.SiliconFlow_API_KEY) {
 }
 
 
+// Helper function: 根據模型名稱決定使用 max_tokens 或 max_completion_tokens
+// 新版 OpenAI o1 系列模型需要使用 max_completion_tokens
+function getTokenLimitParams(modelName, tokenLimit) {
+    // o1, o3 系列模型需要使用 max_completion_tokens
+    if (modelName && (modelName.startsWith('o1') || modelName.startsWith('o3'))) {
+        return { max_completion_tokens: tokenLimit };
+    }
+    // 其他模型使用傳統的 max_tokens
+    return { max_tokens: tokenLimit };
+}
+
 // AI 路由速率限制
 const aiLimiter = rateLimit({
     windowMs: 30 * 60 * 1000, // 30分鐘
@@ -378,7 +389,7 @@ WHERE project_location IN (${areasCondition})
                     model: 'gpt-4.1-nano', // 用最小模型生成 SQL (最便宜且足夠)
                     messages: [{ role: 'user', content: sqlPrompt }],
                     temperature: 0.1, // 低溫度確保穩定輸出
-                    max_tokens: 500,
+                    ...getTokenLimitParams('gpt-4.1-nano', 500),
                 });
                 generatedSQL = sqlCompletion.choices[0].message.content.trim();
             } catch (llmErr) {
@@ -414,7 +425,7 @@ WHERE project_location IN (${areasCondition})
                         model: 'gpt-4.1-nano',
                         messages: [{ role: 'user', content: fixPrompt }],
                         temperature: 0.1,
-                        max_tokens: 500,
+                        ...getTokenLimitParams('gpt-4.1-nano', 500),
                     });
                     return fixCompletion.choices[0].message.content.trim();
                 };
@@ -511,7 +522,7 @@ WHERE project_location IN (${areasCondition})
                                     { role: 'user', content: explanationPrompt }
                                 ],
                                 temperature: 0.7,
-                                max_tokens: 1500,
+                                ...getTokenLimitParams(model_preference, 1500),
                             });
                             aiResponse = completion.choices[0].message.content;
                         } else {
@@ -523,7 +534,7 @@ WHERE project_location IN (${areasCondition})
                                     { role: 'user', content: explanationPrompt }
                                 ],
                                 temperature: 0.7,
-                                max_tokens: 1500,
+                                ...getTokenLimitParams(model_preference, 1500),
                             });
                             aiResponse = completion.choices[0].message.content;
                         }
@@ -585,7 +596,7 @@ WHERE project_location IN (${areasCondition})
                         model: model_preference,
                         messages: messages,
                         temperature: 0.7,
-                        max_tokens: 1500,
+                        ...getTokenLimitParams(model_preference, 1500),
                     });
                     aiResponse = completion.choices[0].message.content;
                 } else {
@@ -594,7 +605,7 @@ WHERE project_location IN (${areasCondition})
                         model: model_preference,
                         messages: messages,
                         temperature: 0.7,
-                        max_tokens: 1500,
+                        ...getTokenLimitParams(model_preference, 1500),
                     });
                     aiResponse = completion.choices[0].message.content;
                 }
@@ -653,7 +664,7 @@ router.post('/ai/direct-chat', aiLimiter, async (req, res) => {
                 { role: "user", content: message }
             ],
             temperature: 0.7,
-            max_tokens: 1000,
+            ...getTokenLimitParams('gpt-4.1', 1000),
         });
 
         const aiResponse = completion.choices[0].message.content;

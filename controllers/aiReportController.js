@@ -5,6 +5,14 @@ const fs = require('fs');
 const path = require('path');
 const format = require('pg-format');
 
+// Helper function: 根據模型名稱決定使用 max_tokens 或 max_completion_tokens
+function getTokenLimitParams(modelName, tokenLimit) {
+    if (modelName && (modelName.startsWith('o1') || modelName.startsWith('o3'))) {
+        return { max_completion_tokens: tokenLimit };
+    }
+    return { max_tokens: tokenLimit };
+}
+
 // Simple in-memory cache
 const reportCache = new Map();
 const CACHE_DURATION = 30 * 60 * 1000; // 30 minutes
@@ -311,7 +319,7 @@ ${formattedDbh}
             model: "gpt-4-turbo", // 確保使用有效的模型名稱
             messages: [{ role: "user", content: prompt }],
             temperature: 0.5,
-            max_tokens: 1500,
+            ...getTokenLimitParams("gpt-4-turbo", 1500),
         });
         console.log('[AI Report] Received response from OpenAI API.');
 
