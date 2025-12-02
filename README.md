@@ -4,13 +4,33 @@
 [![Express](https://img.shields.io/badge/Express-4.x-lightgrey.svg)](https://expressjs.com/)
 [![PostgreSQL](https://img.shields.io/badge/PostgreSQL-14+-blue.svg)](https://www.postgresql.org/)
 [![License](https://img.shields.io/badge/License-ISC-yellow.svg)](LICENSE)
-[![Version](https://img.shields.io/badge/Version-15.0.0-green.svg)](https://github.com/KyleliuNDHU/tree-project-backend)
+[![Version](https://img.shields.io/badge/Version-16.0.1-green.svg)](https://github.com/KyleliuNDHU/tree-project-backend)
 
 > 基於大語言模型的永續發展分析平台 - 後端 API 服務
 
 ---
 
 ## 📦 版本紀錄
+
+### v16.0.1 (2025-12-02) - 錯誤修復 🔧
+
+#### 🔧 修復
+- **OpenAI API 兼容性** - 新增 `getTokenLimitParams()` helper 函數
+  - 支援 o1/o3 系列模型使用 `max_completion_tokens` 參數
+  - 舊版模型 (gpt-4, gpt-4-turbo 等) 仍使用 `max_tokens`（向後兼容）
+- **圖片上傳錯誤處理** - 改進 multer fileFilter 錯誤回應格式
+  - 現在正確返回 JSON 格式錯誤訊息
+  - 支援檔案過大、非圖片等錯誤類型
+
+#### 📋 變更清單
+| 類型 | 檔案 | 說明 |
+|------|------|------|
+| fix | `routes/ai.js` | 新增 helper 函數，修復 OpenAI API 參數兼容性 |
+| fix | `controllers/openaiController.js` | 新增 helper 函數 |
+| fix | `controllers/aiReportController.js` | 新增 helper 函數 |
+| fix | `routes/speciesIdentification.js` | 改進 multer 錯誤處理 |
+
+---
 
 ### v15.0.0 (2025-12-02) - 重大更新 🎉
 
