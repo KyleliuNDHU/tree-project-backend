@@ -6,8 +6,9 @@ const path = require('path');
 const format = require('pg-format');
 
 // Helper function: 根據模型名稱決定使用 max_tokens 或 max_completion_tokens
+// OpenAI o-系列推理模型 (o1, o3, o4) 需要使用 max_completion_tokens
 function getTokenLimitParams(modelName, tokenLimit) {
-    if (modelName && (modelName.startsWith('o1') || modelName.startsWith('o3'))) {
+    if (modelName && (modelName.startsWith('o1') || modelName.startsWith('o3') || modelName.startsWith('o4'))) {
         return { max_completion_tokens: tokenLimit };
     }
     return { max_tokens: tokenLimit };
