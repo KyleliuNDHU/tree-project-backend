@@ -27,7 +27,8 @@ const migrationFiles = [
   'chat_logs.pg.sql', // 新增 chat_logs 表格
   '02_chat_logs_add_session.pg.sql', // [New] 加入 session_id 欄位支援多會話
   'tree_knowledge_embeddings_v2.pg.sql', // 新增 AI 知識庫表格
-  '01_sync_project_id_trigger.sql' // [New] Project ID synchronization trigger
+  '01_sync_project_id_trigger.sql', // [New] Project ID synchronization trigger
+  'pending_tree_measurements.pg.sql' // [New] 待測量樹木資料表 - 兩階段測量工作流程
 ];
 
 // Define the order for view creation

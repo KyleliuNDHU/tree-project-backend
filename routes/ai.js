@@ -630,7 +630,79 @@ WHERE project_location IN (${areasCondition})
             }
         }
 
-        // Step 5: 回傳結果
+        // Step 5: 準備視覺化資料（可選，用於前端圖表）
+        let chartData = null;
+        if (queryMode === 'data' && queryResults && queryResults.length > 0) {
+            // 檢測是否為分組統計查詢（含 COUNT, SUM, AVG 等聚合）
+            const firstRow = queryResults[0];
+            const keys = Object.keys(firstRow);
+            const hasAggregation = keys.some(k => 
+                k.toLowerCase().includes('count') || 
+                k.toLowerCase().includes('sum') || 
+                k.toLowerCase().includes('avg') ||
+                k.toLowerCase().includes('total') ||
+                k.toLowerCase().includes('碳') ||
+                k.toLowerCase().includes('數量')
+            );
+            
+            if (hasAggregation && queryResults.length <= 20) {
+                // 嘗試自動識別標籤欄位和數值欄位
+                const labelKey = keys.find(k => 
+                    k.toLowerCase().includes('name') || 
+                    k.toLowerCase().includes('species') ||
+                    k.toLowerCase().includes('location') ||
+                    k.toLowerCase().includes('project') ||
+                    k.toLowerCase().includes('area') ||
+                    k.toLowerCase().includes('type') ||
+                    k.toLowerCase().includes('樹種') ||
+                    k.toLowerCase().includes('區域') ||
+                    k.toLowerCase().includes('類型')
+                ) || keys[0];
+                
+                const valueKey = keys.find(k => 
+                    k.toLowerCase().includes('count') || 
+                    k.toLowerCase().includes('sum') || 
+                    k.toLowerCase().includes('avg') ||
+                    k.toLowerCase().includes('total') ||
+                    k.toLowerCase().includes('碳') ||
+                    k.toLowerCase().includes('數量')
+                ) || keys[1];
+                
+                if (labelKey && valueKey && labelKey !== valueKey) {
+                    chartData = {
+                        type: queryResults.length <= 6 ? 'pie' : 'bar',
+                        labelKey: labelKey,
+                        valueKey: valueKey,
+                        data: queryResults.map(row => ({
+                            label: String(row[labelKey] || '未知'),
+                            value: parseFloat(row[valueKey]) || 0
+                        })).filter(d => d.value > 0)
+                    };
+                }
+            }
+        }
+
+        // Step 5.1: [NEW] 生成智慧建議（兼容性新增）
+        let suggestions = [];
+        if (queryMode === 'data' && queryResults && queryResults.length > 0) {
+            try {
+                suggestions = generateSmartSuggestions(queryResults, generatedSQL, message);
+            } catch (e) {
+                console.log('[Chat V2] 生成建議失敗:', e.message);
+            }
+        }
+
+        // Step 5.2: [NEW] 異常數據偵測（兼容性新增）
+        let anomalies = [];
+        if (queryMode === 'data' && queryResults && queryResults.length > 0) {
+            try {
+                anomalies = detectDataAnomalies(queryResults);
+            } catch (e) {
+                console.log('[Chat V2] 異常偵測失敗:', e.message);
+            }
+        }
+
+        // Step 6: 回傳結果
         res.json({
             success: true,
             response: aiResponse,
@@ -638,7 +710,10 @@ WHERE project_location IN (${areasCondition})
             executedSQL: executedSQL, // 方便 debug，正式版可移除
             resultCount: queryResults ? queryResults.length : null,
             modelUsed: model_preference,
-            sessionId: sessionId // 回傳 sessionId 讓前端可以追蹤
+            sessionId: sessionId, // 回傳 sessionId 讓前端可以追蹤
+            chartData: chartData, // 可選的視覺化資料
+            suggestions: suggestions.length > 0 ? suggestions : null, // [NEW] 智慧建議
+            anomalies: anomalies.length > 0 ? anomalies : null // [NEW] 異常警示
         });
 
     } catch (error) {
@@ -760,6 +835,179 @@ router.get('/download/:filename', (req, res) => {
     
     console.log(`[Download] 使用者下載: ${filename}`);
 });
+
+
+// ============================================
+// [NEW] 智慧建議生成函數
+// ============================================
+function generateSmartSuggestions(queryResults, sql, userMessage) {
+    const suggestions = [];
+    
+    if (!queryResults || queryResults.length === 0) return suggestions;
+    
+    const keys = Object.keys(queryResults[0]);
+    const lowerSQL = (sql || '').toLowerCase();
+    const lowerMsg = (userMessage || '').toLowerCase();
+    
+    // 1. 根據查詢類型提供建議
+    if (lowerSQL.includes('count') || lowerMsg.includes('數量') || lowerMsg.includes('幾棵')) {
+        suggestions.push({
+            icon: '📊',
+            text: '查看各區域的樹木分布比例',
+            query: '各區域樹木數量佔比是多少？'
+        });
+    }
+    
+    if (lowerSQL.includes('carbon') || lowerMsg.includes('碳') || lowerMsg.includes('co2')) {
+        suggestions.push({
+            icon: '🌿',
+            text: '分析碳吸存效率最高的樹種',
+            query: '哪些樹種的碳吸存量最高？'
+        });
+        suggestions.push({
+            icon: '📈',
+            text: '查看碳儲存趨勢',
+            query: '各區域的總碳儲存量比較'
+        });
+    }
+    
+    if (lowerSQL.includes('species') || lowerMsg.includes('樹種') || lowerMsg.includes('種類')) {
+        suggestions.push({
+            icon: '🌳',
+            text: '查看樹種健康狀況分布',
+            query: '各樹種的平均樹高和胸徑是多少？'
+        });
+    }
+    
+    if (lowerSQL.includes('dbh') || lowerMsg.includes('胸徑') || lowerMsg.includes('dbh')) {
+        suggestions.push({
+            icon: '📏',
+            text: '分析胸徑與碳儲存的關係',
+            query: '胸徑超過50公分的樹木有多少棵？'
+        });
+    }
+    
+    if (lowerSQL.includes('height') || lowerMsg.includes('樹高') || lowerMsg.includes('高度')) {
+        suggestions.push({
+            icon: '🏔️',
+            text: '找出最高的樹木',
+            query: '樹高超過10公尺的樹木有哪些？'
+        });
+    }
+    
+    // 2. 根據結果數量提供建議
+    if (queryResults.length > 50) {
+        suggestions.push({
+            icon: '📋',
+            text: '匯出完整數據到 Excel',
+            query: '匯出這些數據'
+        });
+    }
+    
+    // 3. 根據欄位提供進階分析建議
+    if (keys.some(k => k.toLowerCase().includes('location') || k.toLowerCase().includes('area'))) {
+        suggestions.push({
+            icon: '🗺️',
+            text: '查看地理分布統計',
+            query: '各區域的樹木統計概況'
+        });
+    }
+    
+    // 限制最多 4 個建議
+    return suggestions.slice(0, 4);
+}
+
+// ============================================
+// [NEW] 異常數據偵測函數
+// ============================================
+function detectDataAnomalies(queryResults) {
+    const anomalies = [];
+    
+    if (!queryResults || queryResults.length === 0) return anomalies;
+    
+    const firstRow = queryResults[0];
+    const keys = Object.keys(firstRow);
+    
+    // 統計各欄位的空值數量
+    const nullCounts = {};
+    keys.forEach(key => {
+        nullCounts[key] = queryResults.filter(row => 
+            row[key] === null || row[key] === undefined || row[key] === ''
+        ).length;
+    });
+    
+    // 1. 檢測空值過多的欄位
+    keys.forEach(key => {
+        const nullPercent = (nullCounts[key] / queryResults.length) * 100;
+        if (nullPercent > 20 && nullCounts[key] > 0) {
+            anomalies.push({
+                type: 'null_values',
+                severity: nullPercent > 50 ? 'warning' : 'info',
+                icon: '⚠️',
+                message: `欄位「${key}」有 ${nullCounts[key]} 筆空值 (${nullPercent.toFixed(1)}%)`
+            });
+        }
+    });
+    
+    // 2. 檢測數值欄位的極端值
+    keys.forEach(key => {
+        const numericValues = queryResults
+            .map(row => parseFloat(row[key]))
+            .filter(v => !isNaN(v) && isFinite(v));
+        
+        if (numericValues.length < 3) return;
+        
+        const mean = numericValues.reduce((a, b) => a + b, 0) / numericValues.length;
+        const std = Math.sqrt(
+            numericValues.reduce((sum, v) => sum + Math.pow(v - mean, 2), 0) / numericValues.length
+        );
+        
+        // 檢測超過 3 個標準差的極端值
+        if (std > 0) {
+            const outliers = numericValues.filter(v => Math.abs(v - mean) > 3 * std);
+            if (outliers.length > 0) {
+                anomalies.push({
+                    type: 'outliers',
+                    severity: 'info',
+                    icon: '📊',
+                    message: `欄位「${key}」有 ${outliers.length} 筆極端值 (超過 3 個標準差)`
+                });
+            }
+        }
+        
+        // 檢測負值（對於某些欄位不應該有負值）
+        const negativeKeys = ['carbon', 'height', 'dbh', '碳', '高度', '胸徑', '數量', 'count'];
+        if (negativeKeys.some(nk => key.toLowerCase().includes(nk))) {
+            const negatives = numericValues.filter(v => v < 0);
+            if (negatives.length > 0) {
+                anomalies.push({
+                    type: 'negative_values',
+                    severity: 'warning',
+                    icon: '❌',
+                    message: `欄位「${key}」有 ${negatives.length} 筆負值，可能是資料錯誤`
+                });
+            }
+        }
+    });
+    
+    // 3. 檢測重複資料（如果有 id 欄位）
+    const idKey = keys.find(k => k.toLowerCase() === 'id' || k.toLowerCase().includes('_id'));
+    if (idKey) {
+        const ids = queryResults.map(row => row[idKey]);
+        const uniqueIds = new Set(ids);
+        if (uniqueIds.size < ids.length) {
+            anomalies.push({
+                type: 'duplicates',
+                severity: 'info',
+                icon: '🔄',
+                message: `發現 ${ids.length - uniqueIds.size} 筆重複的 ID`
+            });
+        }
+    }
+    
+    // 限制最多 5 個異常提醒
+    return anomalies.slice(0, 5);
+}
 
 
 module.exports = router;
