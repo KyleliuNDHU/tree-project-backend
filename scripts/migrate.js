@@ -28,7 +28,9 @@ const migrationFiles = [
   '02_chat_logs_add_session.pg.sql', // [New] 加入 session_id 欄位支援多會話
   'tree_knowledge_embeddings_v2.pg.sql', // 新增 AI 知識庫表格
   '01_sync_project_id_trigger.sql', // [New] Project ID synchronization trigger
-  'pending_tree_measurements.pg.sql' // [New] 待測量樹木資料表 - 兩階段測量工作流程
+  'ml_training_data.pg.sql', // ML 訓練數據表
+  'emission_factors.pg.sql', // 排放因子表
+  'z_pending_tree_measurements.pg.sql' // [New] 待測量樹木資料表 - 兩階段測量工作流程 (z_ 確保最後執行)
 ];
 
 // Define the order for view creation
