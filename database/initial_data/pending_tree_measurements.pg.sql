@@ -13,7 +13,7 @@ CREATE TABLE IF NOT EXISTS pending_tree_measurements (
     -- 樹木基本資訊 (來自 VLGEO2)
     tree_id VARCHAR(50),
     tree_name VARCHAR(255),
-    species_id INTEGER REFERENCES tree_species(id),
+    species_id VARCHAR(10) REFERENCES tree_species(id),
     species_name VARCHAR(255),
     
     -- 樹木位置 (計算後的絕對座標)
