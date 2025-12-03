@@ -2,9 +2,9 @@
 DROP TRIGGER IF EXISTS trigger_users_updated_at ON users;
 -- DROP FUNCTION IF EXISTS update_updated_at_column(); -- This is now handled by 00_init_functions.pg.sql
 
--- Drop the table and type if they exist
-DROP TABLE IF EXISTS users;
-DROP TYPE IF EXISTS user_role;
+-- Drop the table and type if they exist (CASCADE to handle FK dependencies)
+DROP TABLE IF EXISTS users CASCADE;
+DROP TYPE IF EXISTS user_role CASCADE;
 
 -- 創建一個自訂的 ENUM 類型來表示使用者角色
 CREATE TYPE user_role AS ENUM ('系統管理員', '業務管理員', '專案管理員', '調查管理員', '一般使用者');
