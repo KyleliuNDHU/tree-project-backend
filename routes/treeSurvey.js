@@ -73,6 +73,7 @@ router.get('/', async (req, res) => {
                 carbon_storage AS "碳儲存量",
                 carbon_sequestration_per_year AS "推估年碳吸存量"
             FROM tree_survey 
+            WHERE (is_placeholder IS NULL OR is_placeholder = false)
             ORDER BY id ASC
         `;
 
@@ -106,6 +107,7 @@ router.get('/map', async (req, res) => {
               AND y_coord IS NOT NULL 
               AND x_coord != 0 
               AND y_coord != 0
+              AND (is_placeholder IS NULL OR is_placeholder = false)
             ORDER BY id ASC
         `;
         const { rows } = await db.query(sql);

@@ -1,16 +1,46 @@
-# 忽略 node.js 專案的依賴項
-/node_modules
+# --- Dependencies ---
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
 
-# 忽略環境變數檔案
+# --- Environment Variables & Secrets ---
 .env
+.env.*
+!.env.example
+*.pem
+*.key
+*.cert
+*.crt
 
-# 忽略作業系統產生的檔案
+# --- Data & Logs ---
+logs/
+*.log
+pids/
+*.pid
+*.seed
+*.pid.lock
+data/apiKeys.json
+
+# --- Database ---
+# 忽略大型 SQL 匯出檔，但保留 initial_data 用於初始化
+*.sql
+!database/initial_data/*.sql
+
+# --- IDE & Editor ---
+.idea/
+.vscode/
+*.swp
+*.swo
 .DS_Store
 Thumbs.db
+*.sublime-project
+*.sublime-workspace
 
-# 忽略日誌檔案
-*.log
+# --- Testing & Coverage ---
+coverage/
+.nyc_output/
 
-# 忽略大型資料庫匯出檔
-*.sql
-!/database/initial_data/*.sql
+# --- Build & Dist ---
+dist/
+build/
