@@ -13,6 +13,7 @@ CREATE TABLE tree_survey (
     project_name VARCHAR(255),
     system_tree_id VARCHAR(50) NOT NULL,
     project_tree_id VARCHAR(50),
+    is_placeholder BOOLEAN DEFAULT false,
     species_id VARCHAR(20),
     species_name VARCHAR(100),
     x_coord DOUBLE PRECISION,
