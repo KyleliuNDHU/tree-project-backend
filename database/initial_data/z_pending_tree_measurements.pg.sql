@@ -53,8 +53,8 @@ CREATE TABLE IF NOT EXISTS pending_tree_measurements (
     measured_at TIMESTAMP WITH TIME ZONE,
     
     -- 創建者資訊
-    created_by INTEGER REFERENCES users(id),
-    measured_by INTEGER REFERENCES users(id)
+    created_by INTEGER REFERENCES users(user_id),
+    measured_by INTEGER REFERENCES users(user_id)
 );
 
 -- 索引優化
