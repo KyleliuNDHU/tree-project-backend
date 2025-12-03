@@ -399,10 +399,12 @@ router.delete('/:id', async (req, res) => {
 // 獲取下一個系統樹木編號
 router.get('/next_system_number', async (req, res) => {
     try {
+        // [FIX v17.1] 排除佔位記錄 (PLACEHOLDER-*) 以確保 ID 序列正確
         const query = `
             SELECT MAX(CAST(regexp_replace(system_tree_id, '[^0-9]', '', 'g') AS INTEGER)) as max_id 
             FROM tree_survey 
-            WHERE system_tree_id ~ '^[A-Za-z]+-[0-9]+$' OR system_tree_id ~ '^[0-9]+$';
+            WHERE (system_tree_id ~ '^ST-[0-9]+$')
+            AND (is_placeholder IS NULL OR is_placeholder = false);
         `;
         const { rows } = await db.query(query);
         const maxId = rows[0].max_id || 0;
@@ -417,10 +419,14 @@ router.get('/next_system_number', async (req, res) => {
 router.get('/next_project_number/:projectCode', async (req, res) => {
     const { projectCode } = req.params;
     try {
+        // [FIX v17.1] 排除佔位記錄 (PT-0) 以確保第一筆實際資料為 PT-1
         const query = `
             SELECT MAX(CAST(regexp_replace(project_tree_id, '[^0-9]', '', 'g') AS INTEGER)) as max_id 
             FROM tree_survey 
-            WHERE project_code = $1 AND (project_tree_id ~ '^[A-Za-z]+-[0-9]+$' OR project_tree_id ~ '^[0-9]+$');
+            WHERE project_code = $1 
+            AND (project_tree_id ~ '^PT-[0-9]+$' OR project_tree_id ~ '^[0-9]+$')
+            AND project_tree_id != 'PT-0'
+            AND (is_placeholder IS NULL OR is_placeholder = false);
         `;
         const { rows } = await db.query(query, [projectCode]);
         const maxId = rows[0].max_id || 0;

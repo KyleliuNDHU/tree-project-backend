@@ -71,10 +71,12 @@ exports.batchImportTrees = async (req, res) => {
         // 這會阻塞其他嘗試獲取 Key 1 鎖的事務，直到當前事務結束
         await client.query('SELECT pg_advisory_xact_lock(1)'); 
 
+        // [FIX v17.1] 排除佔位記錄 (PLACEHOLDER-*) 以確保 ID 序列正確
         const sysIdRes = await client.query(`
             SELECT MAX(CAST(regexp_replace(system_tree_id, '[^0-9]', '', 'g') AS INTEGER)) as max_id 
             FROM tree_survey 
-            WHERE system_tree_id ~ '^[A-Za-z]+-[0-9]+$' OR system_tree_id ~ '^[0-9]+$'
+            WHERE (system_tree_id ~ '^ST-[0-9]+$')
+            AND (is_placeholder IS NULL OR is_placeholder = false)
         `);
         let nextSysId = (sysIdRes.rows[0].max_id || 0) + 1;
 
@@ -82,13 +84,16 @@ exports.batchImportTrees = async (req, res) => {
         // 針對該專案代碼鎖定最大 ID
         // 使用 Advisory Lock (Key 2) + ProjectCode Hash 確保專案內序列原子性
         // 簡單起見，這裡我們複用 Key 1 的鎖定範圍 (因為 System ID 是全局的，鎖了它等於鎖了所有)，所以不需要額外鎖定
+        // [FIX v17.1] 排除佔位記錄 (PT-0) 以確保第一筆實際資料為 PT-1
         let nextPrjId = 1;
         if (project_code) {
             const prjIdRes = await client.query(`
                 SELECT MAX(CAST(regexp_replace(project_tree_id, '[^0-9]', '', 'g') AS INTEGER)) as max_id 
                 FROM tree_survey 
                 WHERE project_code = $1 
-                AND (project_tree_id ~ '^[A-Za-z]+-[0-9]+$' OR project_tree_id ~ '^[0-9]+$')
+                AND (project_tree_id ~ '^PT-[0-9]+$' OR project_tree_id ~ '^[0-9]+$')
+                AND project_tree_id != 'PT-0'
+                AND (is_placeholder IS NULL OR is_placeholder = false)
             `, [project_code]);
             nextPrjId = (prjIdRes.rows[0].max_id || 0) + 1;
         }

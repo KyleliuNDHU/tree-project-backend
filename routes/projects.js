@@ -93,6 +93,12 @@ router.get('/by_code/:code', async (req, res) => {
 });
 
 // 新增專案 (這會創建一個新的專案代碼和一筆預設的樹木記錄來"佔位")
+// 
+// [FIX v17.1] 專案第一筆資料 ID 問題修復
+// 問題：原本佔位記錄使用 project_tree_id='1'，導致實際第一筆資料變成 PT-2
+// 解決方案：使用特殊標記 'PT-0' 或 'PLACEHOLDER' 作為佔位記錄的 project_tree_id
+// 這樣 treeSurveyCreateController.js 查詢 MAX 時會正確返回 null 或 0，第一筆實際資料就是 PT-1
+//
 router.post('/add', async (req, res) => {
     const { name, area } = req.body;
     if (!name || !area) {
@@ -108,19 +114,23 @@ router.post('/add', async (req, res) => {
         const nextCode = (maxCodeRows[0].max_code || 0) + 1;
 
         // [FIX] 2. 產生下一個系統樹木編號以滿足 NOT NULL 約束
-        const { rows: maxSystemIdRows } = await client.query("SELECT MAX(CAST(regexp_replace(system_tree_id, '[^0-9]', '', 'g') AS INTEGER)) as max_id FROM tree_survey");
+        // 佔位記錄使用特殊 ID 格式，避免影響正常 ID 序列
+        const { rows: maxSystemIdRows } = await client.query("SELECT MAX(CAST(regexp_replace(system_tree_id, '[^0-9]', '', 'g') AS INTEGER)) as max_id FROM tree_survey WHERE system_tree_id ~ '^ST-[0-9]+$'");
         const nextSystemId = (maxSystemIdRows[0].max_id || 0) + 1;
-        const systemTreeId = `ST-${nextSystemId}`;
+        // 佔位記錄使用 PLACEHOLDER 前綴，與正常 ST- 格式區分
+        const placeholderSystemId = `PLACEHOLDER-${nextCode}`;
 
 
         // 3. 插入一筆預設的樹木記錄來代表這個新專案
-        // 這是一個簡化作法，確保專案存在於 tree_survey 表中
+        // [FIX v17.1] 使用 'PT-0' 作為佔位記錄的 project_tree_id
+        // 這樣 treeSurveyCreateController.js 的正規表達式 '^[A-Za-z]+-[0-9]+$' 會匹配到 PT-0
+        // 但 MAX 函數會把 0 視為最小值，使得實際第一筆資料成為 PT-1
         const insertQuery = `
-            INSERT INTO tree_survey (project_name, project_code, project_location, species_name, system_tree_id, project_tree_id) 
-            VALUES ($1, $2, $3, '預設樹種', $4, '1')
+            INSERT INTO tree_survey (project_name, project_code, project_location, species_name, system_tree_id, project_tree_id, is_placeholder) 
+            VALUES ($1, $2, $3, '__PLACEHOLDER__', $4, 'PT-0', true)
             RETURNING *
         `;
-        const insertParams = [name, nextCode.toString(), area, systemTreeId];
+        const insertParams = [name, nextCode.toString(), area, placeholderSystemId];
         
         const { rows: newTreeRows } = await client.query(insertQuery, insertParams);
         const placeholderTree = newTreeRows[0];
@@ -131,7 +141,8 @@ router.post('/add', async (req, res) => {
             success: true,
             message: '專案新增成功',
             project: { name, code: nextCode.toString(), area },
-            placeholderTree: placeholderTree
+            placeholderTree: placeholderTree,
+            note: '已使用新的佔位記錄機制 (PT-0)，確保第一筆實際資料為 PT-1'
         });
     } catch (err) {
         await client.query('ROLLBACK');

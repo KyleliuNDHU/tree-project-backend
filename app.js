@@ -72,6 +72,7 @@ const knowledgeRoutes = require('./routes/knowledge'); // 引入知識庫路由
 const speciesIdentificationRoutes = require('./routes/speciesIdentification'); // 樹種辨識路由
 const pendingMeasurementsRoutes = require('./routes/pending_measurements'); // 待測量樹木路由
 const projectBoundariesRoutes = require('./routes/project_boundaries'); // V3 專案邊界路由
+const mlTrainingDataRoutes = require('./routes/ml_training_data'); // V3 ML 訓練數據收集路由
 // const testRoutes = require('./routes/test'); // 引入測試路由
 
 apiRouter.use('/', usersRoutes); // 包含 /login
@@ -92,6 +93,7 @@ apiRouter.use('/knowledge', knowledgeRoutes); // 掛載知識庫路由
 apiRouter.use('/species', speciesIdentificationRoutes); // 掛載樹種辨識路由
 apiRouter.use('/pending-measurements', pendingMeasurementsRoutes); // 掛載待測量樹木路由
 apiRouter.use('/project-boundaries', projectBoundariesRoutes); // 掛載專案邊界路由
+apiRouter.use('/ml-training', mlTrainingDataRoutes); // 掛載 ML 訓練數據路由
 
 
 // 將所有 API 路由應用速率限制並掛載到 /api

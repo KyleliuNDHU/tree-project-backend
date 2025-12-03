@@ -74,22 +74,27 @@ exports.createTreeV2 = async (req, res) => {
         await client.query('SELECT pg_advisory_xact_lock(1)');
 
         // A. System ID
+        // [FIX v17.1] 排除佔位記錄 (PLACEHOLDER-*) 以確保 ID 序列正確
         const sysIdRes = await client.query(`
             SELECT MAX(CAST(regexp_replace(system_tree_id, '[^0-9]', '', 'g') AS INTEGER)) as max_id 
             FROM tree_survey 
-            WHERE system_tree_id ~ '^[A-Za-z]+-[0-9]+$' OR system_tree_id ~ '^[0-9]+$'
+            WHERE (system_tree_id ~ '^ST-[0-9]+$')
+            AND (is_placeholder IS NULL OR is_placeholder = false)
         `);
         let nextSysId = (sysIdRes.rows[0].max_id || 0) + 1;
         const systemTreeId = `ST-${nextSysId}`;
 
         // B. Project ID
+        // [FIX v17.1] 排除佔位記錄 (PT-0) 以確保第一筆實際資料為 PT-1
         let nextPrjId = 1;
         if (project_code) {
             const prjIdRes = await client.query(`
                 SELECT MAX(CAST(regexp_replace(project_tree_id, '[^0-9]', '', 'g') AS INTEGER)) as max_id 
                 FROM tree_survey 
                 WHERE project_code = $1 
-                AND (project_tree_id ~ '^[A-Za-z]+-[0-9]+$' OR project_tree_id ~ '^[0-9]+$')
+                AND (project_tree_id ~ '^PT-[0-9]+$' OR project_tree_id ~ '^[0-9]+$')
+                AND project_tree_id != 'PT-0'
+                AND (is_placeholder IS NULL OR is_placeholder = false)
             `, [project_code]);
             nextPrjId = (prjIdRes.rows[0].max_id || 0) + 1;
         }
