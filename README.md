@@ -4,13 +4,36 @@
 [![Express](https://img.shields.io/badge/Express-4.x-lightgrey.svg)](https://expressjs.com/)
 [![PostgreSQL](https://img.shields.io/badge/PostgreSQL-14+-blue.svg)](https://www.postgresql.org/)
 [![License](https://img.shields.io/badge/License-ISC-yellow.svg)](LICENSE)
-[![Version](https://img.shields.io/badge/Version-18.3.0-green.svg)](https://github.com/KyleliuNDHU/tree-project-backend)
+[![Version](https://img.shields.io/badge/Version-18.3.2-green.svg)](https://github.com/KyleliuNDHU/tree-project-backend)
 
 > 基於大語言模型的永續發展分析平台 - 後端 API 服務
 
 ---
 
 ## 📦 版本紀錄
+
+### v18.3.2 (2025-12-14) - 清理 API 使用改進與前端整合優化 🔄
+
+#### 🔄 API 使用改進
+- **清理 API 前端整合優化** - 前端更好地利用後端清理 API
+  - 前端 V2/V3 頁面新增專案區位/專案名稱/樹種時，退出未提交會自動清理
+  - 使用 `POST /api/project_areas/cleanup` 清理未使用的專案區位和樹種
+  - 使用 `DELETE /api/project_areas/:id` 直接刪除專案區位
+  - 使用 `DELETE /api/projects/:code` 直接刪除專案
+- **清理機制說明**：
+  - 清理 API 會自動清理未使用的專案區位（沒有任何樹木使用的）
+  - 清理 API 會自動清理未使用的樹種（沒有任何樹木使用的，保留 ID='0000'）
+  - 清理 API 會清理孤立的佔位記錄
+  - 清理 API 會清理舊的聊天記錄
+
+#### 📋 相關 API 端點
+| 方法 | 端點 | 說明 | 狀態 |
+|------|------|------|------|
+| POST | `/api/project_areas/cleanup` | 手動觸發清理（專案區位、樹種、佔位記錄、聊天記錄） | 🟢 |
+| DELETE | `/api/project_areas/:id` | 刪除專案區位 | 🟢 |
+| DELETE | `/api/projects/:code` | 刪除專案 | 🟢 |
+
+---
 
 ### v18.3.0 (2025-12-14) - Phase 4 安全性完成與完整回歸測試 🔒✅
 
@@ -550,8 +573,12 @@ POST /api/chat
 | 方法 | 端點 | 說明 | 狀態 |
 |------|------|------|------|
 | GET | `/api/project_areas` | 取得專案區域列表 | 🟢 |
+| POST | `/api/project_areas` | 新增專案區域 | 🟢 |
+| DELETE | `/api/project_areas/:id` | 刪除專案區域 | 🟢 |
+| POST | `/api/project_areas/cleanup` | 手動觸發清理（專案區位、樹種、佔位記錄、聊天記錄） | 🟢 |
 | GET | `/api/project-boundaries` | 取得專案邊界 (GeoJSON) ⭐ NEW | 🟢 |
 | POST | `/api/project-boundaries` | 建立專案邊界 ⭐ NEW | 🟢 |
+| DELETE | `/api/projects/:code` | 刪除專案 | 🟢 |
 | GET | `/health` | 健康檢查端點 | 🟢 |
 
 ---
