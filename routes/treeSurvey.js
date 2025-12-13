@@ -237,9 +237,11 @@ router.get('/by_area/:areaName', async (req, res) => {
 
 // --- Batch Import Route (v2) ---
 router.post('/batch_import', projectAuth, treeSurveyBatchController.batchImportTrees);
+router.post('/batch', projectAuth, treeSurveyBatchController.batchImportTrees); // Alias for consistency
 
 // --- Single Create Route (v2) - For manual input with server-side ID generation ---
 router.post('/create_v2', projectAuth, treeSurveyCreateController.createTreeV2);
+router.post('/v2', projectAuth, treeSurveyCreateController.createTreeV2); // Alias for consistency
 
 // 新增樹木資料
 // 需要專案權限驗證
@@ -306,6 +308,7 @@ router.post('/', projectAuth, async (req, res) => {
 
 // --- Single Update Route (v2) ---
 router.put('/update_v2/:id', projectAuth, treeSurveyUpdateController.updateTreeV2);
+router.put('/v2/:id', projectAuth, treeSurveyUpdateController.updateTreeV2); // Alias for consistency
 
 // 編輯樹木資料
 // 需要專案權限驗證（會自動查詢該樹木的 project_code）
