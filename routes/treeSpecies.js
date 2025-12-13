@@ -104,4 +104,71 @@ router.post('/', async (req, res) => {
 });
 
 
+// Phase 3.3: 新增樹種 (當辨識到未知樹種時)
+router.post('/', async (req, res) => {
+    try {
+        const { name, scientific_name, source } = req.body;
+        
+        if (!name) {
+            return res.status(400).json({ 
+                success: false, 
+                message: '樹種名稱為必填欄位' 
+            });
+        }
+        
+        // 檢查是否已存在
+        const checkQuery = 'SELECT id FROM tree_species WHERE name = $1 OR scientific_name = $2';
+        const checkResult = await db.query(checkQuery, [name, scientific_name || name]);
+        
+        if (checkResult.rows.length > 0) {
+            return res.json({ 
+                success: true, 
+                message: '樹種已存在', 
+                id: checkResult.rows[0].id,
+                exists: true
+            });
+        }
+        
+        // 取得下一個編號
+        const nextNumQuery = `
+            SELECT id FROM tree_species WHERE id ~ '^[0-9]+$'
+            UNION
+            SELECT "樹種編號" as id FROM tree_survey WHERE "樹種編號" ~ '^[0-9]+$'
+        `;
+        const { rows } = await db.query(nextNumQuery);
+        const existingNumbers = new Set(rows.map(row => parseInt(row.id, 10)).filter(num => !isNaN(num)));
+        
+        let nextNumber = 1;
+        while (existingNumbers.has(nextNumber)) {
+            nextNumber++;
+        }
+        const newId = nextNumber.toString().padStart(4, '0');
+        
+        // 插入新樹種
+        const insertQuery = `
+            INSERT INTO tree_species (id, name, scientific_name, source) 
+            VALUES ($1, $2, $3, $4) 
+            RETURNING id, name, scientific_name
+        `;
+        const insertResult = await db.query(insertQuery, [
+            newId, 
+            name, 
+            scientific_name || name,
+            source || 'user_added'
+        ]);
+        
+        res.status(201).json({ 
+            success: true, 
+            message: '樹種新增成功',
+            data: insertResult.rows[0]
+        });
+    } catch (err) {
+        console.error('新增樹種錯誤:', err);
+        res.status(500).json({ 
+            success: false, 
+            message: '新增樹種時發生錯誤' 
+        });
+    }
+});
+
 module.exports = router;

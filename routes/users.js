@@ -5,6 +5,7 @@ const bcrypt = require('bcryptjs');
 const { loginLimiter } = require('../middleware/rateLimiter');
 const { signJwt } = require('../middleware/jwtAuth');
 const AuditLogService = require('../services/auditLogService');
+const { checkAccountLocked, recordLoginFailure, resetLoginAttempts } = require('../middleware/loginAttemptMonitor');
 
 // 使用者管理相關 API
 // 登入路由
@@ -19,6 +20,15 @@ router.post('/login', loginLimiter, async (req, res) => {
     }
 
     try {
+        // Phase 4.4: 檢查帳號是否被鎖定
+        const lockStatus = await checkAccountLocked(account);
+        if (lockStatus.locked) {
+            return res.status(403).json({
+                success: false,
+                message: lockStatus.message
+            });
+        }
+        
         let roleCheck = '';
         let queryParams = [account];
         
@@ -35,6 +45,7 @@ router.post('/login', loginLimiter, async (req, res) => {
         const { rows } = await db.query(query, queryParams);
 
         if (rows.length === 0) {
+            await recordLoginFailure(account, req);
             await AuditLogService.log({
                 action: 'LOGIN_FAILED',
                 username: account,
@@ -66,26 +77,33 @@ router.post('/login', loginLimiter, async (req, res) => {
         const isPasswordValid = await bcrypt.compare(password, user.password_hash);
 
         if (!isPasswordValid) {
+            const { attempts, locked } = await recordLoginFailure(account, req);
             await AuditLogService.log({
                 userId: user.user_id,
                 username: user.username,
                 action: 'LOGIN_FAILED',
-                details: { reason: 'Invalid password', loginType },
+                details: { reason: 'Invalid password', loginType, attempts, locked },
                 req
             });
-            // 實際應用中可以加入登入失敗次數計數邏輯
+            
+            const message = locked 
+                ? '密碼錯誤次數過多，帳號已被鎖定'
+                : `密碼錯誤 (剩餘嘗試次數: ${5 - attempts})`;
+            
             return res.status(401).json({
                 success: false,
-                message: '密碼錯誤'
+                message: message
             });
         }
         
-        // 登入成功，重置登入失敗計數 (如果有的話)
+        // 登入成功，重置登入失敗計數
+        await resetLoginAttempts(account);
+        
         await AuditLogService.log({
             userId: user.user_id,
             username: user.username,
             action: 'LOGIN',
-            details: { loginType },
+            details: { loginType, role: user.role },
             req
         });
 
