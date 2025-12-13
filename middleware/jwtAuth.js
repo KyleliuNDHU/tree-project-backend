@@ -1,4 +1,5 @@
 const jwt = require('jsonwebtoken');
+const db = require('../config/db');
 
 const LEGACY_LOG_INTERVAL_MS = 60 * 60 * 1000;
 
@@ -9,26 +10,63 @@ const legacyLogState = {
     lastLoggedAt: 0,
 };
 
+// Cache for legacy expiry to avoid hitting DB on every request
+let cachedLegacyUntilMs = null;
+let lastCacheUpdate = 0;
+const CACHE_TTL = 60 * 1000; // 1 minute
+
 function getLegacyLogMode() {
     const mode = (process.env.AUTH_LEGACY_LOG_MODE || 'off').toLowerCase();
     return mode === 'summary' ? 'summary' : 'off';
 }
 
-function getLegacyUntilMs() {
-    const raw = process.env.AUTH_LEGACY_UNTIL;
-    if (!raw) return null;
+async function getLegacyUntilMs() {
+    const now = Date.now();
+    // Use cache if valid
+    if (cachedLegacyUntilMs !== null && (now - lastCacheUpdate < CACHE_TTL)) {
+        return cachedLegacyUntilMs;
+    }
 
-    const ms = new Date(raw).getTime();
-    if (!Number.isFinite(ms)) return null;
+    let ms = null;
+
+    // 1. Try DB first
+    try {
+        // Only query if table likely exists (we can't easily check existence cheaply, so just try-catch)
+        const { rows } = await db.query("SELECT value FROM system_settings WHERE key = 'auth_legacy_until'");
+        if (rows.length > 0 && rows[0].value) {
+            const dbMs = new Date(rows[0].value).getTime();
+            if (Number.isFinite(dbMs)) {
+                ms = dbMs;
+            }
+        }
+    } catch (e) {
+        // Table might not exist yet during migration or DB issue
+        // console.warn('Legacy auth DB check skipped:', e.message); 
+    }
+
+    // 2. Fallback to Env if DB didn't return a value
+    if (ms === null) {
+        const raw = process.env.AUTH_LEGACY_UNTIL;
+        if (raw) {
+            const envMs = new Date(raw).getTime();
+            if (Number.isFinite(envMs)) {
+                ms = envMs;
+            }
+        }
+    }
+
+    // Update cache (even if null)
+    cachedLegacyUntilMs = ms;
+    lastCacheUpdate = now;
 
     return ms;
 }
 
-function isLegacyAllowed(nowMs) {
-    const untilMs = getLegacyUntilMs();
-    if (!untilMs) return true;
+async function isLegacyAllowed() {
+    const untilMs = await getLegacyUntilMs();
+    if (!untilMs) return true; // If not set, allow by default (legacy behavior)
 
-    return nowMs < untilMs;
+    return Date.now() < untilMs;
 }
 
 function recordLegacyRequest(req) {
@@ -89,7 +127,7 @@ function shouldSkipAuth(req) {
     return false;
 }
 
-function jwtAuth(req, res, next) {
+async function jwtAuth(req, res, next) {
     if (shouldSkipAuth(req)) return next();
 
     const secret = process.env.JWT_SECRET;
@@ -105,8 +143,7 @@ function jwtAuth(req, res, next) {
         }
     }
 
-    const nowMs = Date.now();
-    if (isLegacyAllowed(nowMs)) {
+    if (await isLegacyAllowed()) {
         recordLegacyRequest(req);
         return next();
     }

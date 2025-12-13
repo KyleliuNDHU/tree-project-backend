@@ -4,6 +4,7 @@ const db = require('../config/db');
 const bcrypt = require('bcryptjs');
 const { loginLimiter } = require('../middleware/rateLimiter');
 const { signJwt } = require('../middleware/jwtAuth');
+const AuditLogService = require('../services/auditLogService');
 
 // 使用者管理相關 API
 // 登入路由
@@ -34,6 +35,12 @@ router.post('/login', loginLimiter, async (req, res) => {
         const { rows } = await db.query(query, queryParams);
 
         if (rows.length === 0) {
+            await AuditLogService.log({
+                action: 'LOGIN_FAILED',
+                username: account,
+                details: { reason: 'User not found or role mismatch', loginType },
+                req
+            });
             return res.status(404).json({
                 success: false,
                 message: loginType === 'admin' ? '無管理員權限或帳號不存在' : '帳號不存在'
@@ -43,6 +50,13 @@ router.post('/login', loginLimiter, async (req, res) => {
         const user = rows[0];
 
         if (!user.is_active) {
+            await AuditLogService.log({
+                userId: user.user_id,
+                username: user.username,
+                action: 'LOGIN_FAILED',
+                details: { reason: 'Account disabled', loginType },
+                req
+            });
             return res.status(403).json({
                 success: false,
                 message: '您的帳號已被禁用，請聯繫管理員'
@@ -52,6 +66,13 @@ router.post('/login', loginLimiter, async (req, res) => {
         const isPasswordValid = await bcrypt.compare(password, user.password_hash);
 
         if (!isPasswordValid) {
+            await AuditLogService.log({
+                userId: user.user_id,
+                username: user.username,
+                action: 'LOGIN_FAILED',
+                details: { reason: 'Invalid password', loginType },
+                req
+            });
             // 實際應用中可以加入登入失敗次數計數邏輯
             return res.status(401).json({
                 success: false,
@@ -60,6 +81,13 @@ router.post('/login', loginLimiter, async (req, res) => {
         }
         
         // 登入成功，重置登入失敗計數 (如果有的話)
+        await AuditLogService.log({
+            userId: user.user_id,
+            username: user.username,
+            action: 'LOGIN',
+            details: { loginType },
+            req
+        });
 
         let accessibleProjects = [];
         if (user.role === '系統管理員') {
@@ -154,6 +182,16 @@ router.post('/users', async (req, res) => {
         
         const { rows } = await db.query(sql, [username, hashedPassword, display_name || username, role || '一般使用者', isActive]);
         
+        await AuditLogService.log({
+            userId: req.user?.user_id, // Acting user
+            username: req.user?.username,
+            action: 'CREATE_USER',
+            resourceType: 'users',
+            resourceId: rows[0].user_id,
+            details: { createdUsername: username, role },
+            req
+        });
+
         res.status(201).json({
             success: true,
             message: '使用者新增成功',
@@ -212,6 +250,16 @@ router.put('/users/:id', async (req, res) => {
         const { rowCount } = await db.query(sql, values);
 
         if (rowCount > 0) {
+            await AuditLogService.log({
+                userId: req.user?.user_id,
+                username: req.user?.username,
+                action: 'UPDATE_USER',
+                resourceType: 'users',
+                resourceId: id,
+                details: { updatedFields: Object.keys(req.body).filter(k => k !== 'password') },
+                req
+            });
+
             res.json({
                 success: true,
                 message: '使用者修改成功'
@@ -249,6 +297,17 @@ router.put('/users/:id/status', async (req, res) => {
                 message: '找不到指定的使用者'
             });
         }
+
+        await AuditLogService.log({
+            userId: req.user?.user_id,
+            username: req.user?.username,
+            action: 'UPDATE_USER_STATUS',
+            resourceType: 'users',
+            resourceId: id,
+            details: { isActive },
+            req
+        });
+
         res.json({
             success: true,
             message: `使用者狀態已更新`
@@ -269,6 +328,15 @@ router.delete('/users/:id', async (req, res) => {
     try {
         const { rowCount } = await db.query('DELETE FROM users WHERE user_id = $1', [id]);
         if (rowCount > 0) {
+            await AuditLogService.log({
+                userId: req.user?.user_id,
+                username: req.user?.username,
+                action: 'DELETE_USER',
+                resourceType: 'users',
+                resourceId: id,
+                req
+            });
+
             res.json({
                 success: true,
                 message: '使用者刪除成功'
@@ -350,6 +418,16 @@ router.put('/users/:userId/projects', async (req, res) => {
                 message: '找不到指定的使用者'
             });
         }
+
+        await AuditLogService.log({
+            userId: req.user?.user_id,
+            username: req.user?.username,
+            action: 'UPDATE_USER_PROJECTS',
+            resourceType: 'users',
+            resourceId: userId,
+            details: { projects },
+            req
+        });
 
         res.json({
             success: true,

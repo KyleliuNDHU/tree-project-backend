@@ -109,6 +109,11 @@ router.post('/add', async (req, res) => {
     try {
         await client.query('BEGIN');
 
+        // 使用 Advisory Lock (Key 2) 確保專案代碼生成的原子性
+        // Key 1 用於樹木編號 (treeSurveyCreateController)
+        // Key 2 用於專案代碼 (projects.js)
+        await client.query('SELECT pg_advisory_xact_lock(2)');
+
         // 1. 產生新的專案代碼
         const { rows: maxCodeRows } = await client.query("SELECT MAX(CAST(project_code AS INTEGER)) as max_code FROM tree_survey WHERE project_code ~ '^[0-9]+$'");
         const nextCode = (maxCodeRows[0].max_code || 0) + 1;
@@ -148,6 +153,46 @@ router.post('/add', async (req, res) => {
         await client.query('ROLLBACK');
         console.error('新增專案錯誤:', err);
         res.status(500).json({ success: false, message: '新增專案時發生錯誤' });
+    } finally {
+        client.release();
+    }
+});
+
+// 刪除專案 (刪除該專案代碼下的所有樹木資料)
+router.delete('/:code', async (req, res) => {
+    const { code } = req.params;
+    
+    if (!code) {
+        return res.status(400).json({ success: false, message: '請提供專案代碼' });
+    }
+
+    const client = await db.pool.connect();
+    try {
+        await client.query('BEGIN');
+
+        // 檢查專案是否存在
+        const checkQuery = `SELECT COUNT(*) as count FROM tree_survey WHERE project_code = $1`;
+        const { rows: checkRows } = await client.query(checkQuery, [code]);
+        
+        if (parseInt(checkRows[0].count) === 0) {
+            await client.query('ROLLBACK');
+            return res.status(404).json({ success: false, message: '找不到指定專案或該專案已無資料' });
+        }
+
+        // 刪除專案下所有資料
+        const deleteQuery = `DELETE FROM tree_survey WHERE project_code = $1`;
+        await client.query(deleteQuery, [code]);
+
+        await client.query('COMMIT');
+        
+        res.json({ 
+            success: true, 
+            message: `專案 (代碼: ${code}) 及其所有樹木資料已刪除` 
+        });
+    } catch (err) {
+        await client.query('ROLLBACK');
+        console.error(`刪除專案[${code}]錯誤:`, err);
+        res.status(500).json({ success: false, message: '刪除專案時發生錯誤' });
     } finally {
         client.release();
     }

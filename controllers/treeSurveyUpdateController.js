@@ -1,4 +1,5 @@
 const db = require('../config/db');
+const AuditLogService = require('../services/auditLogService');
 
 /**
  * 更新單筆樹木調查資料 (v2)
@@ -41,21 +42,27 @@ exports.updateTreeV2 = async (req, res) => {
         await client.query('BEGIN');
 
         // 首先，檢查該樹木記錄是否存在
-        const checkExist = await client.query('SELECT id FROM tree_survey WHERE id = $1', [id]);
+        const checkExist = await client.query('SELECT id, project_code FROM tree_survey WHERE id = $1', [id]);
         if (checkExist.rows.length === 0) {
             await client.query('ROLLBACK');
             return res.status(404).json({ success: false, message: '找不到指定的樹木資料' });
         }
+        const existingTree = checkExist.rows[0];
 
         // 準備專案關聯 (如果提供了 project_code)
         let projectId = null;
         if (project_code) {
-             const prjRes = await client.query(
-                'SELECT id FROM projects WHERE project_code = $1',
-                [project_code]
-            );
-            if (prjRes.rows.length > 0) {
-                projectId = prjRes.rows[0].id;
+            try {
+                const prjRes = await client.query(
+                    'SELECT id FROM projects WHERE project_code = $1',
+                    [project_code]
+                );
+                if (prjRes.rows.length > 0) {
+                    projectId = prjRes.rows[0].id;
+                }
+            } catch (err) {
+                // projects table might not exist, skip silently
+                console.warn('Project association skipped in updateV2:', err.message);
             }
         }
 
@@ -104,6 +111,20 @@ exports.updateTreeV2 = async (req, res) => {
 
         await client.query(sql, values);
         await client.query('COMMIT');
+
+        // Audit Log
+        await AuditLogService.log({
+            userId: req.user?.user_id,
+            username: req.user?.username,
+            action: 'UPDATE_TREE',
+            resourceType: 'tree_survey',
+            resourceId: id,
+            details: { 
+                updatedFields: Object.keys(fieldMapping).filter(k => fieldMapping[k] !== undefined),
+                projectCode: project_code || existingTree.project_code
+            },
+            req
+        });
 
         res.status(200).json({
             success: true,

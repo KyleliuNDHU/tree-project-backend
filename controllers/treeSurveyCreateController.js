@@ -1,4 +1,5 @@
 const db = require('../config/db');
+const AuditLogService = require('../services/auditLogService');
 
 /**
  * 單筆新增樹木調查資料 (v2) - 用於人工手動輸入
@@ -67,6 +68,26 @@ exports.createTreeV2 = async (req, res) => {
         }
 
         // ---------------------------------------------------------
+        // Step 1.5: 嘗試查找或驗證 species_id
+        // ---------------------------------------------------------
+        let finalSpeciesId = species_id;
+        // 如果沒有提供 ID 但有提供名稱，嘗試查找
+        if ((!finalSpeciesId || finalSpeciesId === '無') && species_name && species_name !== '無') {
+            try {
+                // 嘗試精確匹配名稱 (中文名稱 或 學名)
+                const speciesRes = await client.query(
+                    'SELECT id FROM tree_species WHERE name = $1 OR scientific_name = $1', 
+                    [species_name]
+                );
+                if (speciesRes.rows.length > 0) {
+                    finalSpeciesId = speciesRes.rows[0].id;
+                }
+            } catch (err) {
+                console.warn('Species lookup failed:', err.message);
+            }
+        }
+
+        // ---------------------------------------------------------
         // Step 2: 鎖定並生成 ID (Atomic ID Generation)
         // ---------------------------------------------------------
         
@@ -128,7 +149,7 @@ exports.createTreeV2 = async (req, res) => {
             project_name || '無',
             systemTreeId,
             projectTreeId,
-            species_id || '無',
+            finalSpeciesId || '無',
             species_name || '無',
             finalX,
             finalY,
@@ -145,13 +166,30 @@ exports.createTreeV2 = async (req, res) => {
         ];
 
         const result = await client.query(insertSql, values);
+        const newTreeId = result.rows[0].id;
         
         await client.query('COMMIT');
+
+        // Audit Log
+        await AuditLogService.log({
+            userId: req.user?.user_id,
+            username: req.user?.username,
+            action: 'CREATE_TREE',
+            resourceType: 'tree_survey',
+            resourceId: newTreeId,
+            details: { 
+                systemTreeId, 
+                projectTreeId, 
+                projectCode: project_code, 
+                speciesName: species_name 
+            },
+            req
+        });
 
         res.status(201).json({
             success: true,
             message: '資料新增成功 (V2)',
-            id: result.rows[0].id,
+            id: newTreeId,
             system_tree_id: systemTreeId,
             project_tree_id: projectTreeId
         });

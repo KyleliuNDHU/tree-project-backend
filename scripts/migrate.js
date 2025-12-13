@@ -17,6 +17,7 @@ const pool = new Pool({
 const migrationFiles = [
   '00_init_functions.pg.sql', // Initialize shared functions first
   'users.pg.sql',
+  'system_settings_and_audit.pg.sql', // [New] System settings and Audit logs
   'project_areas.pg.sql',
   'tree_species.pg.sql',
   'species_region_score.pg.sql',
@@ -30,7 +31,8 @@ const migrationFiles = [
   '01_sync_project_id_trigger.sql', // [New] Project ID synchronization trigger
   'ml_training_data.pg.sql', // ML 訓練數據表
   'emission_factors.pg.sql', // 排放因子表
-  'z_pending_tree_measurements.pg.sql' // [New] 待測量樹木資料表 - 兩階段測量工作流程 (z_ 確保最後執行)
+  'z_pending_tree_measurements.pg.sql', // [New] 待測量樹木資料表 - 兩階段測量工作流程 (z_ 確保最後執行)
+  'tree_images.pg.sql' // [New] 樹木影像資料表 - 關聯到 tree_survey 與 pending_measurements
 ];
 
 // Define the order for view creation

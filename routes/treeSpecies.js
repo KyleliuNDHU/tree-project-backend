@@ -6,16 +6,16 @@ const db = require('../config/db');
 router.get('/', async (req, res) => {
     try {
         // 優先從獨立的 tree_species 表中獲取
-        let { rows } = await db.query('SELECT id, name FROM tree_species ORDER BY name');
+        let { rows } = await db.query('SELECT id, name, scientific_name FROM tree_species ORDER BY name');
 
         if (rows.length === 0) {
             // 如果 tree_species 為空，則從 tree_survey 中提取
             console.log('tree_species is empty, falling back to tree_survey.');
             const fallbackQuery = `
-                SELECT DISTINCT 樹種編號 as id, 樹種名稱 as name 
+                SELECT DISTINCT "樹種編號" as id, "樹種名稱" as name, NULL as scientific_name
                 FROM tree_survey 
-                WHERE 樹種名稱 IS NOT NULL AND 樹種名稱 != '' AND 樹種編號 IS NOT NULL AND 樹種編號 != ''
-                ORDER BY 樹種名稱
+                WHERE "樹種名稱" IS NOT NULL AND "樹種名稱" != '' AND "樹種編號" IS NOT NULL AND "樹種編號" != ''
+                ORDER BY "樹種名稱"
             `;
             const fallbackResult = await db.query(fallbackQuery);
             rows = fallbackResult.rows;

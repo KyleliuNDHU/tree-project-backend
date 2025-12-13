@@ -1,4 +1,5 @@
 const db = require('../config/db');
+const AuditLogService = require('../services/auditLogService');
 
 /**
  * 批量匯入樹木調查資料 (v2)
@@ -191,6 +192,22 @@ exports.batchImportTrees = async (req, res) => {
         }
 
         await client.query('COMMIT');
+
+        // Audit Log for batch import
+        await AuditLogService.log({
+            userId: req.user?.user_id,
+            username: req.user?.username,
+            action: 'BATCH_IMPORT_TREES',
+            resourceType: 'tree_survey',
+            details: { 
+                count: insertedIds.length,
+                projectCode: project_code,
+                projectName: project_name,
+                startSystemId: `ST-${nextSysId - insertedIds.length}`,
+                endSystemId: `ST-${nextSysId - 1}`
+            },
+            req
+        });
 
         res.status(201).json({
             success: true,

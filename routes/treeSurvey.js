@@ -10,6 +10,8 @@ const { cleanupUnusedSpecies, cleanupUnusedProjectAreas } = require('../utils/cl
 const treeSurveyBatchController = require('../controllers/treeSurveyBatchController');
 const treeSurveyCreateController = require('../controllers/treeSurveyCreateController');
 const treeSurveyUpdateController = require('../controllers/treeSurveyUpdateController'); // 引入新的 Update Controller
+const AuditLogService = require('../services/auditLogService');
+const { projectAuth, projectAuthFilter } = require('../middleware/projectAuth');
 
 // --- Multer 設定 (用於檔案上傳) ---
 const storage = multer.diskStorage({
@@ -41,7 +43,6 @@ const upload = multer({
     }
   }
 });
-
 
 // 取得所有樹木資料 (可選通過 project name 或 area name 過濾)
 router.get('/', async (req, res) => {
@@ -235,13 +236,14 @@ router.get('/by_area/:areaName', async (req, res) => {
 });
 
 // --- Batch Import Route (v2) ---
-router.post('/batch_import', treeSurveyBatchController.batchImportTrees);
+router.post('/batch_import', projectAuth, treeSurveyBatchController.batchImportTrees);
 
 // --- Single Create Route (v2) - For manual input with server-side ID generation ---
-router.post('/create_v2', treeSurveyCreateController.createTreeV2);
+router.post('/create_v2', projectAuth, treeSurveyCreateController.createTreeV2);
 
 // 新增樹木資料
-router.post('/', async (req, res) => {
+// 需要專案權限驗證
+router.post('/', projectAuth, async (req, res) => {
     const {
         '專案區位': project_location, '專案代碼': project_code, '專案名稱': project_name, 
         '系統樹木': system_tree_id, '專案樹木': project_tree_id, '樹種編號': species_id, 
@@ -283,6 +285,17 @@ router.post('/', async (req, res) => {
     
     try {
         const { rows } = await db.query(sql, values);
+        
+        await AuditLogService.log({
+            userId: req.user?.user_id,
+            username: req.user?.username,
+            action: 'CREATE_TREE_LEGACY',
+            resourceType: 'tree_survey',
+            resourceId: rows[0].id,
+            details: { projectCode: project_code, speciesName: species_name },
+            req
+        });
+
         res.status(201).json({ success: true, message: '資料插入成功', id: rows[0].id });
     } catch (err) {
         console.error('資料庫插入錯誤:', err);
@@ -292,10 +305,11 @@ router.post('/', async (req, res) => {
 });
 
 // --- Single Update Route (v2) ---
-router.put('/update_v2/:id', treeSurveyUpdateController.updateTreeV2);
+router.put('/update_v2/:id', projectAuth, treeSurveyUpdateController.updateTreeV2);
 
 // 編輯樹木資料
-router.put('/:id', async (req, res) => {
+// 需要專案權限驗證（會自動查詢該樹木的 project_code）
+router.put('/:id', projectAuth, async (req, res) => {
     const { id } = req.params;
 
     // 中文鍵名到資料庫欄位的映射
@@ -341,6 +355,15 @@ router.put('/:id', async (req, res) => {
     try {
         const { rowCount } = await db.query(sql, values);
         if (rowCount > 0) {
+            await AuditLogService.log({
+                userId: req.user?.user_id,
+                username: req.user?.username,
+                action: 'UPDATE_TREE_LEGACY',
+                resourceType: 'tree_survey',
+                resourceId: id,
+                details: { updatedFields: Object.keys(req.body) },
+                req
+            });
             res.status(200).json({ success: true, message: '樹木資料更新成功' });
         } else {
             res.status(404).json({ success: false, message: '找不到要更新的樹木資料' });
@@ -376,11 +399,21 @@ router.delete('/placeholder/:id', async (req, res) => {
 });
 
 // 刪除樹木資料
-router.delete('/:id', async (req, res) => {
+// 需要專案權限驗證
+router.delete('/:id', projectAuth, async (req, res) => {
     const { id } = req.params;
     try {
         const { rowCount } = await db.query('DELETE FROM tree_survey WHERE id = $1', [id]);
         if (rowCount > 0) {
+            await AuditLogService.log({
+                userId: req.user?.user_id,
+                username: req.user?.username,
+                action: 'DELETE_TREE',
+                resourceType: 'tree_survey',
+                resourceId: id,
+                req
+            });
+
             res.json({ success: true, message: '樹木資料刪除成功' });
 
             // 在回應發送後，異步執行清理任務

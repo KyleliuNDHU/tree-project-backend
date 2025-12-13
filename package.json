@@ -10,7 +10,11 @@
     "test:intent": "node tests/intentClassification.test.js",
     "test:sql": "node tests/sqlValidation.test.js",
     "test:integration": "node tests/chatIntegration.test.js",
-    "test:api": "node tests/apiIntegration.test.js"
+    "test:api": "node tests/apiIntegration.test.js",
+    "test:regression": "node tests/regression.test.js",
+    "test:regression:local": "node tests/regression.test.js --local",
+    "test:regression:verbose": "node tests/regression.test.js --verbose",
+    "test:all": "node tests/regression.test.js && node tests/apiIntegration.test.js && node tests/securityAudit.test.js"
   },
   "keywords": [],
   "author": "",

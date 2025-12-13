@@ -370,20 +370,37 @@ router.post('/transfer', async (req, res) => {
     const transferredIds = [];
     
     for (const p of pendingResult.rows) {
+      // 嘗試查找 species_id
+      let speciesId = null;
+      if (p.species_name) {
+        try {
+          const speciesRes = await client.query(
+            'SELECT id FROM tree_species WHERE name = $1 OR scientific_name = $1', 
+            [p.species_name]
+          );
+          if (speciesRes.rows.length > 0) {
+            speciesId = speciesRes.rows[0].id;
+          }
+        } catch (err) {
+          console.warn(`[Transfer] Species lookup failed for ${p.species_name}:`, err);
+        }
+      }
+
       // 插入到 tree_survey
       const insertResult = await client.query(`
         INSERT INTO tree_survey (
           project_location, project_code, project_name,
-          species_name, tree_height_m, dbh_cm,
+          species_name, species_id, tree_height_m, dbh_cm,
           x_coord, y_coord,
           survey_notes, survey_time
-        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
         RETURNING id
       `, [
         p.project_area,
         p.project_code,
         p.project_name,
         p.species_name || '待辨識',
+        speciesId, // 加入 species_id
         p.tree_height,
         p.measured_dbh_cm || p.dbh_cm,
         p.tree_longitude,  // x_coord = lon
