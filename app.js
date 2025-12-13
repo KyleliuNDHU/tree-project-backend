@@ -4,6 +4,7 @@ const cors = require('cors');
 const helmet = require('helmet');
 const path = require('path');
 const { apiLimiter, loginLimiter } = require('./middleware/rateLimiter');
+const { jwtAuth } = require('./middleware/jwtAuth');
 const { 
     cleanupUnusedProjectAreas, 
     cleanupUnusedSpecies, 
@@ -97,7 +98,7 @@ apiRouter.use('/ml-training', mlTrainingDataRoutes); // 掛載 ML 訓練數據�
 
 
 // 將所有 API 路由應用速率限制並掛載到 /api
-app.use('/api', apiLimiter, apiRouter);
+app.use('/api', apiLimiter, jwtAuth, apiRouter);
 
 
 // --- 靜態檔案服務 (可選) ---

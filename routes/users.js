@@ -3,6 +3,7 @@ const router = express.Router();
 const db = require('../config/db');
 const bcrypt = require('bcryptjs');
 const { loginLimiter } = require('../middleware/rateLimiter');
+const { signJwt } = require('../middleware/jwtAuth');
 
 // 使用者管理相關 API
 // 登入路由
@@ -73,9 +74,23 @@ router.post('/login', loginLimiter, async (req, res) => {
             }
         }
 
+        let token;
+        if (process.env.JWT_SECRET) {
+            try {
+                token = signJwt({
+                    user_id: user.user_id,
+                    username: user.username,
+                    role: user.role,
+                });
+            } catch (e) {
+                token = undefined;
+            }
+        }
+
         res.status(200).json({
             success: true,
             message: '登錄成功',
+            token,
             user: {
                 user_id: user.user_id,
                 username: user.username,

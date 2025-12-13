@@ -307,6 +307,10 @@ SiliconFlow_API_KEY=your_siliconflow_key  # 可選：DeepSeek/Qwen 模型
 # === JWT 設定 ===
 JWT_SECRET=your_jwt_secret_key
 
+# === JWT 過渡期相容 (Legacy Mode) ===
+AUTH_LEGACY_UNTIL=2026-02-01T00:00:00+08:00
+AUTH_LEGACY_LOG_MODE=off
+
 # === 伺服器設定 ===
 PORT=3000
 NODE_ENV=development
@@ -315,6 +319,15 @@ NODE_ENV=development
 Claude_API_KEY=your_anthropic_key         # 可選：Claude 模型
 RENDER_EXTERNAL_URL=https://xxx.onrender.com  # 部署時自動設定
 ```
+
+### AUTH_LEGACY_* 說明
+
+- **AUTH_LEGACY_UNTIL**
+  - JWT 導入過渡期的到期時間（固定時間點）。在到期前，未帶 JWT 的舊版 App 請求仍會被允許；到期後未帶 JWT 會回傳 `401`。
+- **AUTH_LEGACY_LOG_MODE**
+  - legacy 相容性 log 模式。
+  - `off`: 不輸出 legacy 相容性 log（預設）
+  - `summary`: 只輸出彙總資訊（避免刷 log）
 
 ### 如何取得 API 金鑰
 
