@@ -1,4 +1,4 @@
-/**
+﻿/**
  * 待測量樹木 API 路由
  * 
  * 處理 VLGEO2 數據的暫存和第二階段 DBH 測量
@@ -14,7 +14,7 @@
 
 const express = require('express');
 const router = express.Router();
-const pool = require('../config/db');
+const db = require('../config/db');
 
 /**
  * 初始化資料表 (如果不存在)
@@ -75,7 +75,7 @@ async function initTable() {
   `;
   
   try {
-    await pool.query(createTableSQL);
+    await db.query(createTableSQL);
     console.log('[pending-measurements] 資料表初始化完成');
   } catch (error) {
     console.error('[pending-measurements] 資料表初始化失敗:', error);
@@ -99,7 +99,7 @@ router.post('/batch', async (req, res) => {
     });
   }
   
-  const client = await pool.connect();
+  const client = await db.pool.connect();
   
   try {
     await client.query('BEGIN');
@@ -171,7 +171,7 @@ router.post('/batch', async (req, res) => {
  */
 router.get('/sessions', async (req, res) => {
   try {
-    const result = await pool.query(`
+    const result = await db.query(`
       SELECT 
         session_id,
         MIN(project_area) as project_area,
@@ -222,7 +222,7 @@ router.get('/trees', async (req, res) => {
     
     query += ' ORDER BY priority ASC, created_at ASC';
     
-    const result = await pool.query(query, params);
+    const result = await db.query(query, params);
     
     res.json(result.rows);
     
@@ -244,7 +244,7 @@ router.get('/:id', async (req, res) => {
   const { id } = req.params;
   
   try {
-    const result = await pool.query(
+    const result = await db.query(
       'SELECT * FROM pending_tree_measurements WHERE id = $1',
       [id]
     );
@@ -304,7 +304,7 @@ router.patch('/:id', async (req, res) => {
   values.push(id);
   
   try {
-    const result = await pool.query(`
+    const result = await db.query(`
       UPDATE pending_tree_measurements 
       SET ${setClauses.join(', ')}
       WHERE id = $${paramIndex}
@@ -348,7 +348,7 @@ router.post('/transfer', async (req, res) => {
     });
   }
   
-  const client = await pool.connect();
+  const client = await db.pool.connect();
   
   try {
     await client.query('BEGIN');
@@ -469,7 +469,7 @@ router.delete('/session/:sessionId', async (req, res) => {
   const { sessionId } = req.params;
   
   try {
-    const result = await pool.query(
+    const result = await db.query(
       'DELETE FROM pending_tree_measurements WHERE session_id = $1 RETURNING id',
       [sessionId]
     );
@@ -496,7 +496,7 @@ router.delete('/session/:sessionId', async (req, res) => {
  */
 router.get('/stats/overview', async (req, res) => {
   try {
-    const result = await pool.query(`
+    const result = await db.query(`
       SELECT 
         COUNT(*) as total,
         COUNT(*) FILTER (WHERE status = 'pending') as pending,
