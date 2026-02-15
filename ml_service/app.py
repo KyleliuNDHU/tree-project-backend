@@ -32,6 +32,7 @@ from dbh_calculator import (
     PHONE_SENSORS
 )
 from visualization import create_result_image, depth_to_colormap, image_to_bytes
+from tree_trunk_detector import detect_trunks, create_detection_visualization
 
 app = FastAPI(
     title="TreeAI DBH Measurement Service",
@@ -262,6 +263,188 @@ async def measure_dbh_endpoint(
             )
             viz_bytes = image_to_bytes(viz, "JPEG")
             response["visualization_base64"] = base64.b64encode(viz_bytes).decode()
+
+        return JSONResponse(content=response)
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+# ============================================================
+# Auto DBH Measurement (No Manual Bbox)
+# ============================================================
+
+@app.post("/api/v1/auto-measure-dbh")
+async def auto_measure_dbh_endpoint(
+    image: UploadFile = File(...),
+    focal_length_px: Optional[float] = Form(default=None,
+        description="Focal length in pixels. Auto-estimated if not provided."),
+    focal_length_mm: Optional[float] = Form(default=None,
+        description="EXIF focal length in mm"),
+    focal_length_35mm: Optional[float] = Form(default=None,
+        description="35mm equivalent focal length"),
+    fov_degrees: float = Form(default=70.0,
+        description="Horizontal FOV in degrees"),
+    return_visualization: bool = Form(default=True,
+        description="Return annotated visualization image"),
+    return_detection_visualization: bool = Form(default=True,
+        description="Return Tesla-style detection overlay"),
+):
+    """
+    Fully automatic DBH measurement — no manual bounding box needed.
+
+    Workflow:
+    1. Upload image (just take a photo of the tree)
+    2. Server runs depth estimation + automatic trunk detection
+    3. Auto-generates bounding box around detected trunk
+    4. Measures DBH automatically
+    5. Returns result with distance validation feedback
+
+    Like Tesla's vision system: point the camera, AI does everything.
+    """
+    try:
+        # Read image
+        img_bytes = await image.read()
+        pil_image = Image.open(io.BytesIO(img_bytes)).convert("RGB")
+        W, H = pil_image.size
+
+        # Compute focal length
+        effective_focal_px = focal_length_px
+        effective_fov = fov_degrees
+        focal_source = "default"
+
+        if effective_focal_px is None and focal_length_mm is not None:
+            sensor_w = PHONE_SENSORS.get("default", 7.0)
+            effective_focal_px = focal_length_from_exif(
+                focal_length_mm, sensor_w, W
+            )
+            focal_source = f"exif_mm ({focal_length_mm}mm)"
+
+        if effective_focal_px is None and focal_length_35mm is not None:
+            effective_fov = 2 * math.atan(36.0 / (2 * focal_length_35mm)) * 180.0 / math.pi
+            focal_source = f"35mm_equiv ({focal_length_35mm}mm → FOV={effective_fov:.1f}°)"
+
+        # Step 1: Depth estimation
+        t0 = time.time()
+        depth_map = estimate_depth(pil_image)
+        depth_time = time.time() - t0
+
+        # Step 2: Auto trunk detection
+        t1 = time.time()
+        detection = detect_trunks(depth_map)
+        detect_time = time.time() - t1
+
+        # Check if any trunk was found
+        if not detection.trunks or detection.best_trunk_index < 0:
+            response = {
+                "success": False,
+                "error": "no_trunk_detected",
+                "message": "未偵測到樹幹 — 請對準樹幹拍攝，保持 1-3 公尺距離",
+                "detection_notes": detection.notes,
+                "depth_stats": detection.depth_stats,
+                "timing": {
+                    "depth_estimation_ms": round(depth_time * 1000, 1),
+                    "detection_ms": round(detect_time * 1000, 1),
+                    "total_ms": round((depth_time + detect_time) * 1000, 1),
+                },
+            }
+
+            if return_detection_visualization:
+                det_viz = create_detection_visualization(
+                    pil_image, depth_map, detection
+                )
+                det_viz_bytes = image_to_bytes(det_viz, "JPEG")
+                response["detection_visualization_base64"] = base64.b64encode(det_viz_bytes).decode()
+
+            return JSONResponse(content=response)
+
+        # Step 3: Use the best detected trunk for DBH measurement
+        best_trunk = detection.trunks[detection.best_trunk_index]
+        bbox = BoundingBox(
+            x1=best_trunk.bbox_x1,
+            y1=best_trunk.bbox_y1,
+            x2=best_trunk.bbox_x2,
+            y2=best_trunk.bbox_y2,
+        )
+
+        # Step 4: Measure DBH using auto-detected bbox
+        t2 = time.time()
+        result = measure_dbh_multi_row(
+            depth_map, bbox,
+            focal_length_px=effective_focal_px,
+            image_width_px=W,
+            fov_degrees=effective_fov,
+        )
+        calc_time = time.time() - t2
+
+        if focal_source != "default":
+            result.notes.append(f"Focal source: {focal_source}")
+        result.notes.append(f"Auto-detected trunk (confidence: {best_trunk.confidence:.0%})")
+
+        # Build response
+        response = {
+            "success": True,
+            "auto_detected": True,
+            "dbh_cm": result.dbh_cm,
+            "confidence": result.confidence,
+            "trunk_depth_m": result.trunk_depth_m,
+            "trunk_pixel_width": result.trunk_pixel_width,
+            "chord_length_m": result.chord_length_m,
+            "focal_length_px": result.focal_length_px,
+            "measurement_row": result.measurement_row,
+            "method": result.method,
+            "notes": result.notes,
+            # Distance validation
+            "distance_status": best_trunk.distance_status,
+            "distance_message": best_trunk.distance_message,
+            # Auto-detected bbox
+            "detected_bbox": {
+                "x1": best_trunk.bbox_x1,
+                "y1": best_trunk.bbox_y1,
+                "x2": best_trunk.bbox_x2,
+                "y2": best_trunk.bbox_y2,
+            },
+            "detection_confidence": best_trunk.confidence,
+            # All detected trunks info
+            "all_trunks": [
+                {
+                    "bbox": {"x1": t.bbox_x1, "y1": t.bbox_y1,
+                             "x2": t.bbox_x2, "y2": t.bbox_y2},
+                    "confidence": t.confidence,
+                    "depth_m": t.depth_m,
+                    "distance_status": t.distance_status,
+                    "distance_message": t.distance_message,
+                }
+                for t in detection.trunks
+            ],
+            "timing": {
+                "depth_estimation_ms": round(depth_time * 1000, 1),
+                "detection_ms": round(detect_time * 1000, 1),
+                "dbh_calculation_ms": round(calc_time * 1000, 1),
+                "total_ms": round((depth_time + detect_time + calc_time) * 1000, 1),
+            },
+            "image_size": {"width": W, "height": H},
+        }
+
+        if return_visualization:
+            viz = create_result_image(
+                pil_image, depth_map,
+                (bbox.x1, bbox.y1, bbox.x2, bbox.y2),
+                result.dbh_cm, result.trunk_depth_m,
+                result.confidence, result.measurement_row,
+            )
+            viz_bytes = image_to_bytes(viz, "JPEG")
+            response["visualization_base64"] = base64.b64encode(viz_bytes).decode()
+
+        if return_detection_visualization:
+            det_viz = create_detection_visualization(
+                pil_image, depth_map, detection
+            )
+            det_viz_bytes = image_to_bytes(det_viz, "JPEG")
+            response["detection_visualization_base64"] = base64.b64encode(det_viz_bytes).decode()
 
         return JSONResponse(content=response)
 
