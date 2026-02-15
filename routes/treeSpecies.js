@@ -12,10 +12,10 @@ router.get('/', async (req, res) => {
             // 如果 tree_species 為空，則從 tree_survey 中提取
             console.log('tree_species is empty, falling back to tree_survey.');
             const fallbackQuery = `
-                SELECT DISTINCT "樹種編號" as id, "樹種名稱" as name, NULL as scientific_name
+                SELECT DISTINCT species_id as id, species_name as name, NULL as scientific_name
                 FROM tree_survey 
-                WHERE "樹種名稱" IS NOT NULL AND "樹種名稱" != '' AND "樹種編號" IS NOT NULL AND "樹種編號" != ''
-                ORDER BY "樹種名稱"
+                WHERE species_name IS NOT NULL AND species_name != '' AND species_id IS NOT NULL AND species_id != ''
+                ORDER BY species_name
             `;
             const fallbackResult = await db.query(fallbackQuery);
             rows = fallbackResult.rows;
@@ -35,7 +35,7 @@ router.get('/next_number', async (req, res) => {
         const query = `
             SELECT id FROM tree_species WHERE id ~ '^[0-9]+$'
             UNION
-            SELECT "樹種編號" as id FROM tree_survey WHERE "樹種編號" ~ '^[0-9]+$'
+            SELECT species_id as id FROM tree_survey WHERE species_id ~ '^[0-9]+$'
         `;
         const { rows } = await db.query(query);
 
@@ -92,7 +92,7 @@ router.post('/', async (req, res) => {
             const { rows: allIds } = await client.query(`
                 SELECT id FROM tree_species WHERE id ~ '^[0-9]+$'
                 UNION
-                SELECT "樹種編號" as id FROM tree_survey WHERE "樹種編號" ~ '^[0-9]+$'
+                SELECT species_id as id FROM tree_survey WHERE species_id ~ '^[0-9]+$'
             `);
             const existingNumbers = new Set(allIds.map(row => parseInt(row.id, 10)).filter(num => !isNaN(num)));
             let nextNumber = 1;

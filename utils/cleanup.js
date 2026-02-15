@@ -16,16 +16,41 @@ const cleanupUnusedProjectAreas = async () => {
 
 const cleanupUnusedSpecies = async () => {
   try {
+    // 刪除未使用的樹種，但保護：
+    // 1. 特殊樹種 '0000'
+    // 2. 最近 30 天內建立的（含 PlantNet 自動新增）
+    // 3. 被同義詞表引用的標準樹種
     const sql = `
       DELETE FROM tree_species ts
       WHERE NOT EXISTS (
         SELECT 1 FROM tree_survey tsv WHERE ts.id = tsv.species_id
       )
-      AND ts.id != '0000'`; // 保留"其他"這個特殊樹種
+      AND ts.id != '0000'
+      AND ts.created_at < NOW() - INTERVAL '30 days'
+      AND NOT EXISTS (
+        SELECT 1 FROM species_synonyms ss WHERE ss.canonical_species_id = ts.id
+      )`;
     const result = await db.query(sql);
     console.log(`[Cleanup] Cleaned up unused species. Rows affected: ${result.rowCount}`);
   } catch (err) {
-    console.error('[Cleanup] Error cleaning up unused species:', err);
+    if (err.code === '42P01') { // species_synonyms table doesn't exist yet
+      // Fallback: cleanup without synonym protection
+      try {
+        const fallbackSql = `
+          DELETE FROM tree_species ts
+          WHERE NOT EXISTS (
+            SELECT 1 FROM tree_survey tsv WHERE ts.id = tsv.species_id
+          )
+          AND ts.id != '0000'
+          AND ts.created_at < NOW() - INTERVAL '30 days'`;
+        const result = await db.query(fallbackSql);
+        console.log(`[Cleanup] Cleaned up unused species (no synonym table). Rows affected: ${result.rowCount}`);
+      } catch (fallbackErr) {
+        console.error('[Cleanup] Fallback species cleanup also failed:', fallbackErr);
+      }
+    } else {
+      console.error('[Cleanup] Error cleaning up unused species:', err);
+    }
   }
 };
 

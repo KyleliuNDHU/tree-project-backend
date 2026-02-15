@@ -127,11 +127,11 @@ app.listen(PORT, () => {
     const cleanupInterval = 60 * 60 * 1000; // 1小時
     setInterval(async () => {
         console.log('[Scheduler] Running hourly cleanup tasks...');
-        await cleanupOrphanedPlaceholders();
-        await cleanupUnusedSpecies();
-        await cleanupUnusedProjectAreas();
-        await cleanupOldChatLogs(); // 清理超過 24 小時的聊天記錄
-        await scheduledSynonymMaintenance(); // 定期執行樹種同義詞分析與合併
+        try { await cleanupOrphanedPlaceholders(); } catch (e) { console.error('[Scheduler] cleanupOrphanedPlaceholders error:', e.message); }
+        try { await cleanupUnusedSpecies(); } catch (e) { console.error('[Scheduler] cleanupUnusedSpecies error:', e.message); }
+        try { await cleanupUnusedProjectAreas(); } catch (e) { console.error('[Scheduler] cleanupUnusedProjectAreas error:', e.message); }
+        try { await cleanupOldChatLogs(); } catch (e) { console.error('[Scheduler] cleanupOldChatLogs error:', e.message); }
+        try { await scheduledSynonymMaintenance(); } catch (e) { console.error('[Scheduler] scheduledSynonymMaintenance error:', e.message); }
         console.log('[Scheduler] Hourly cleanup tasks finished.');
     }, cleanupInterval);
 

@@ -371,6 +371,12 @@ async function autoAddSpeciesFromIdentification(primaryResult) {
     try {
         const { scientificName, commonNames = [], score } = primaryResult;
         
+        // 信心門檻：PlantNet 分數低於 0.15 (15%) 不自動新增，避免垃圾資料
+        if (!score || score < 0.15) {
+            console.log(`[Species Auto-Add] 跳過低信心結果: score=${score}, name=${commonNames[0] || scientificName}`);
+            return null;
+        }
+        
         // 選擇最佳顯示名稱：優先取中文名，否則用學名
         const displayName = commonNames.length > 0 ? commonNames[0] : scientificName;
         if (!displayName) return null;
@@ -397,7 +403,7 @@ async function autoAddSpeciesFromIdentification(primaryResult) {
         const { rows: allIds } = await client.query(`
             SELECT id FROM tree_species WHERE id ~ '^[0-9]+$'
             UNION
-            SELECT "樹種編號" as id FROM tree_survey WHERE "樹種編號" ~ '^[0-9]+$'
+            SELECT species_id as id FROM tree_survey WHERE species_id ~ '^[0-9]+$'
         `);
         const existingNumbers = new Set(allIds.map(row => parseInt(row.id, 10)).filter(num => !isNaN(num)));
         let nextNumber = 1;

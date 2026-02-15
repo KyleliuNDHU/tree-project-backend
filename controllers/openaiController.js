@@ -344,9 +344,17 @@ function logApiError(error) {
         stack: error.stack
     };
     
-    // 將錯誤寫入日誌文件
-    const logPath = path.join(__dirname, '../logs/api-errors.log');
-    fs.appendFileSync(logPath, JSON.stringify(errorLog) + '\n');
+    // 將錯誤寫入日誌文件（確保目錄存在）
+    try {
+        const logDir = path.join(__dirname, '../logs');
+        if (!fs.existsSync(logDir)) {
+            fs.mkdirSync(logDir, { recursive: true });
+        }
+        const logPath = path.join(logDir, 'api-errors.log');
+        fs.appendFileSync(logPath, JSON.stringify(errorLog) + '\n');
+    } catch (logErr) {
+        console.error('[LogError] Failed to write error log:', logErr.message);
+    }
 }
 
 // 碳匯預測模型 - 由於缺乏歷史數據，暫時注釋此功能

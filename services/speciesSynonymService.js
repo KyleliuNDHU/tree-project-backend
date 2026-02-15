@@ -54,7 +54,7 @@ function stringSimilarity(a, b) {
 function normalizeChinese(text) {
     if (!text) return '';
     const map = {
-        '台': '臺', '麻': '蔴', '�的': '的', '裡': '裏', '佈': '布',
+        '台': '臺', '麻': '蔴', '裡': '裏', '佈': '布',
         '啟': '啓', '為': '爲', '線': '綫', '群': '羣', '峰': '峯',
     };
     // 只做台→臺 這個最常見的
@@ -106,10 +106,10 @@ async function analyzeSpeciesVariants() {
 
         // 2. 取得 tree_survey 中所有不同的樹種名稱
         const { rows: surveyNames } = await db.query(`
-            SELECT DISTINCT "樹種名稱" as name, COUNT(*) as count 
+            SELECT DISTINCT species_name as name, COUNT(*) as count 
             FROM tree_survey 
-            WHERE "樹種名稱" IS NOT NULL AND "樹種名稱" != '' AND "樹種名稱" != '預設樹種'
-            GROUP BY "樹種名稱" 
+            WHERE species_name IS NOT NULL AND species_name != '' AND species_name != '預設樹種'
+            GROUP BY species_name 
             ORDER BY count DESC
         `);
         report.totalSurveyNames = surveyNames.length;
@@ -253,11 +253,11 @@ async function runSynonymMerge() {
 
         // 取得調查中的不同名稱
         const { rows: surveyNames } = await client.query(`
-            SELECT DISTINCT "樹種名稱" as name, COUNT(*) as count,
-                   array_agg(DISTINCT "樹種編號") as species_ids
+            SELECT DISTINCT species_name as name, COUNT(*) as count,
+                   array_agg(DISTINCT species_id) as species_ids
             FROM tree_survey 
-            WHERE "樹種名稱" IS NOT NULL AND "樹種名稱" != '' AND "樹種名稱" != '預設樹種'
-            GROUP BY "樹種名稱"
+            WHERE species_name IS NOT NULL AND species_name != '' AND species_name != '預設樹種'
+            GROUP BY species_name
             ORDER BY count DESC
         `);
 
