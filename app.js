@@ -11,6 +11,7 @@ const {
     cleanupOrphanedPlaceholders,
     cleanupOldChatLogs
 } = require('./utils/cleanup');
+const { scheduledSynonymMaintenance } = require('./services/speciesSynonymService');
 const migrate = require('./scripts/migrate'); // Import migration script
 
 const app = express();
@@ -130,6 +131,7 @@ app.listen(PORT, () => {
         await cleanupUnusedSpecies();
         await cleanupUnusedProjectAreas();
         await cleanupOldChatLogs(); // 清理超過 24 小時的聊天記錄
+        await scheduledSynonymMaintenance(); // 定期執行樹種同義詞分析與合併
         console.log('[Scheduler] Hourly cleanup tasks finished.');
     }, cleanupInterval);
 

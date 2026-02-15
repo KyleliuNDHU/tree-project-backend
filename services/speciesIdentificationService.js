@@ -284,35 +284,71 @@ async function getSpeciesDetailFromINaturalist(taxonId) {
 }
 
 /**
- * 比對本地樹種資料庫
+ * 比對本地樹種資料庫（DB + JSON + 同義詞）
  * @param {string} scientificName - 學名
  * @param {Array<string>} commonNames - 常用名稱列表
  * @returns {Object|null} 匹配的本地樹種資料
  */
-function matchLocalSpecies(scientificName, commonNames = []) {
+async function matchLocalSpecies(scientificName, commonNames = []) {
     try {
+        // 1. 先從 DB 搜尋（含同義詞）
+        const db = require('../config/db');
+        
+        // 用學名匹配
+        if (scientificName) {
+            const { rows } = await db.query(
+                'SELECT id, name, scientific_name FROM tree_species WHERE LOWER(scientific_name) = LOWER($1)',
+                [scientificName]
+            );
+            if (rows.length > 0) return { id: rows[0].id, name: rows[0].name, scientificName: rows[0].scientific_name, source: 'db_sciname' };
+        }
+
+        // 用中文名匹配
+        for (const name of commonNames) {
+            const { rows } = await db.query(
+                'SELECT id, name, scientific_name FROM tree_species WHERE name = $1',
+                [name]
+            );
+            if (rows.length > 0) return { id: rows[0].id, name: rows[0].name, scientificName: rows[0].scientific_name, source: 'db_name' };
+        }
+
+        // 3. 從同義詞表匹配
+        for (const name of commonNames) {
+            try {
+                const { rows } = await db.query(`
+                    SELECT ts.id, ts.name, ts.scientific_name, ss.variant_name
+                    FROM species_synonyms ss
+                    JOIN tree_species ts ON ss.canonical_species_id = ts.id
+                    WHERE ss.variant_name = $1
+                `, [name]);
+                if (rows.length > 0) return { id: rows[0].id, name: rows[0].name, scientificName: rows[0].scientific_name, source: 'synonym', matchedVariant: rows[0].variant_name };
+            } catch (e) {
+                // species_synonyms 表可能不存在
+                if (e.code !== '42P01') console.error('同義詞匹配錯誤:', e.message);
+            }
+        }
+
+        // 4. Fallback to JSON file (模糊匹配)
         const fs = require('fs');
         const path = require('path');
         const speciesData = JSON.parse(
             fs.readFileSync(path.join(__dirname, '../data/tree_species.json'), 'utf8')
         );
 
-        // 嘗試用中文名匹配
         for (const name of commonNames) {
             const match = speciesData.find(s => 
                 s.name === name || 
                 s.name.includes(name) || 
                 name.includes(s.name)
             );
-            if (match) return match;
+            if (match) return { ...match, source: 'json' };
         }
 
-        // 嘗試用學名匹配（如果有的話）
         if (scientificName) {
             const match = speciesData.find(s => 
                 s.scientificName?.toLowerCase() === scientificName.toLowerCase()
             );
-            if (match) return match;
+            if (match) return { ...match, source: 'json_sciname' };
         }
 
         return null;
@@ -360,8 +396,8 @@ async function identifySpecies(imageBuffer, options = {}) {
                 }
             }
 
-            // 3. 比對本地資料庫
-            const localMatch = matchLocalSpecies(
+            // 3. 比對本地資料庫（含 DB + 同義詞）
+            const localMatch = await matchLocalSpecies(
                 result.primaryResult.scientificName,
                 result.primaryResult.commonNames
             );
