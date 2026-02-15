@@ -44,3 +44,10 @@ coverage/
 # --- Build & Dist ---
 dist/
 build/
+
+# --- Python / ML Service ---
+__pycache__/
+*.pyc
+*.pyo
+.hf_cache/
+*.egg-info/

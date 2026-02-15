@@ -1,0 +1,609 @@
+"""
+DBH Calculator
+==============
+Computes Diameter at Breast Height from a depth map and trunk region.
+
+Core formulas from:
+  - Holcomb et al. (2023): Basic pixel-to-metric conversion
+  - Xiang et al. (2025): Cylindrical geometry correction
+
+Pipeline:
+  1. Extract trunk region depth from depth map using bounding box
+  2. Calculate pixel width of trunk at breast height row
+  3. Convert pixel width to metric width using depth + focal length
+  4. Apply cylindrical geometry correction (chord → diameter)
+  5. Return DBH in centimeters with confidence score
+"""
+
+import math
+import numpy as np
+from dataclasses import dataclass
+from typing import Optional, Tuple
+
+
+@dataclass
+class BoundingBox:
+    """Bounding box in pixel coordinates (x1, y1, x2, y2)."""
+    x1: int
+    y1: int
+    x2: int
+    y2: int
+
+    @property
+    def width(self) -> int:
+        return self.x2 - self.x1
+
+    @property
+    def height(self) -> int:
+        return self.y2 - self.y1
+
+    @property
+    def center_x(self) -> int:
+        return (self.x1 + self.x2) // 2
+
+    @property
+    def center_y(self) -> int:
+        return (self.y1 + self.y2) // 2
+
+
+@dataclass
+class DBHResult:
+    """Result of DBH measurement."""
+    dbh_cm: float                    # Diameter at breast height (cm)
+    confidence: float                # Confidence score 0-1
+    trunk_depth_m: float             # Estimated depth to trunk (m)
+    trunk_pixel_width: float         # Trunk width in pixels
+    chord_length_m: float            # Chord length before correction (m)
+    focal_length_px: float           # Focal length used (px)
+    measurement_row: int             # Image row where measurement was taken
+    method: str                      # "simplified" or "cylindrical_corrected"
+    notes: list                      # Any warnings or notes
+
+
+# ============================================================
+# Focal Length Utilities
+# ============================================================
+
+def estimate_focal_length_from_fov(image_width_px: int,
+                                    fov_degrees: float = 70.0) -> float:
+    """
+    Estimate focal length in pixels from field of view.
+
+    Formula: f_px = W_px / (2 * tan(θ/2))
+
+    Most smartphone main cameras have FOV ≈ 65-80 degrees.
+    Default 70° is a reasonable fallback.
+    """
+    fov_rad = math.radians(fov_degrees)
+    f_px = image_width_px / (2.0 * math.tan(fov_rad / 2.0))
+    return f_px
+
+
+def focal_length_from_exif(focal_length_mm: float,
+                            sensor_width_mm: float,
+                            image_width_px: int) -> float:
+    """
+    Calculate focal length in pixels from EXIF metadata.
+
+    Formula: f_px = f_mm * W_px / W_sensor
+    """
+    return focal_length_mm * image_width_px / sensor_width_mm
+
+
+# Common phone sensor data (sensor_width_mm)
+PHONE_SENSORS = {
+    "iphone_15_pro": 9.8,      # 1/1.28"
+    "iphone_14_pro": 9.8,
+    "iphone_13_pro": 7.6,      # 1/1.65"
+    "iphone_13":     7.0,      # 1/1.7"
+    "samsung_s24":   9.8,      # 1/1.3"
+    "samsung_s23":   9.0,
+    "pixel_8_pro":   9.0,
+    "pixel_8":       6.4,
+    "default":       7.0,       # ~1/1.7" typical mid-range
+}
+
+
+# ============================================================
+# Core DBH Calculation
+# ============================================================
+
+def calculate_trunk_width_pixels(depth_map: np.ndarray,
+                                  bbox: BoundingBox,
+                                  measurement_row: Optional[int] = None,
+                                  depth_threshold_ratio: float = 0.3
+                                  ) -> Tuple[float, int, float]:
+    """
+    Calculate the pixel width of the trunk at the measurement row.
+
+    Uses a multi-strategy approach for robustness:
+    1. Depth gradient (Sobel) — detects edges where depth changes sharply
+    2. Depth threshold — clusters trunk vs background by absolute depth
+    3. Combined — intersects both methods for best result
+    Falls back to simpler methods if the primary strategy fails.
+
+    Args:
+        depth_map: (H, W) depth array in meters
+        bbox: Bounding box around the trunk
+        measurement_row: Specific row to measure (None = center of bbox)
+        depth_threshold_ratio: Ratio of depth range to use as threshold
+
+    Returns:
+        (pixel_width, measurement_row, median_trunk_depth)
+    """
+    if measurement_row is None:
+        measurement_row = bbox.center_y
+
+    # Clamp measurement row to bbox
+    measurement_row = max(bbox.y1, min(bbox.y2 - 1, measurement_row))
+
+    # Extract depth values along the measurement row within bbox
+    row_depths = depth_map[measurement_row, bbox.x1:bbox.x2]
+
+    if len(row_depths) == 0:
+        return 0.0, measurement_row, 0.0
+
+    bbox_width = len(row_depths)
+
+    # --- Strategy 1: Depth gradient edge detection ---
+    gradient_width = _gradient_edge_detection(row_depths, bbox_width)
+
+    # --- Strategy 2: Depth threshold clustering ---
+    threshold_width, threshold_mask = _threshold_clustering(
+        row_depths, depth_threshold_ratio
+    )
+
+    # --- Strategy 3: Vertical consistency check ---
+    # Check a few rows above/below to validate the width
+    vertical_widths = []
+    for dr in [-3, -1, 0, 1, 3]:
+        r = measurement_row + dr
+        if bbox.y1 <= r < bbox.y2:
+            rd = depth_map[r, bbox.x1:bbox.x2]
+            w, _ = _threshold_clustering(rd, depth_threshold_ratio)
+            if w > 0:
+                vertical_widths.append(w)
+
+    # --- Select best width ---
+    candidates = []
+    if gradient_width > 5:
+        candidates.append(gradient_width)
+    if threshold_width > 5:
+        candidates.append(threshold_width)
+    if vertical_widths:
+        candidates.append(float(np.median(vertical_widths)))
+
+    if not candidates:
+        # Fallback: use 70% of bbox width (conservative estimate)
+        trunk_width = bbox_width * 0.7
+    elif len(candidates) == 1:
+        trunk_width = candidates[0]
+    else:
+        # Use median of all candidates for robustness
+        trunk_width = float(np.median(candidates))
+
+    # Sanity check: trunk can't be wider than bbox
+    trunk_width = min(trunk_width, float(bbox_width))
+
+    # Compute trunk depth from center pixels
+    center = bbox_width // 2
+    half_w = max(int(trunk_width / 2), 1)
+    trunk_slice = row_depths[max(0, center - half_w):min(bbox_width, center + half_w)]
+    trunk_depth = float(np.median(trunk_slice)) if len(trunk_slice) > 0 else float(np.median(row_depths))
+
+    return float(trunk_width), measurement_row, trunk_depth
+
+
+def _gradient_edge_detection(row_depths: np.ndarray, bbox_width: int) -> float:
+    """
+    Detect trunk edges using depth gradient (Sobel-like).
+    Trunk edges appear as sharp depth increases (foreground → background).
+    """
+    if bbox_width < 10:
+        return 0.0
+
+    # Smooth the depth profile to reduce noise
+    from scipy.ndimage import uniform_filter1d
+    smoothed = uniform_filter1d(row_depths.astype(float), size=max(3, bbox_width // 20))
+
+    # Compute gradient (depth change per pixel)
+    gradient = np.gradient(smoothed)
+    abs_gradient = np.abs(gradient)
+
+    # Find significant edges (gradient > adaptive threshold)
+    grad_threshold = max(np.percentile(abs_gradient, 75), 0.01)
+
+    # Find the leftmost and rightmost strong edges
+    edge_positions = np.where(abs_gradient > grad_threshold)[0]
+    if len(edge_positions) < 2:
+        return 0.0
+
+    # The trunk is between the first strong "far→near" edge and
+    # the last strong "near→far" edge
+    # Look for sign changes: negative gradient = getting closer (left edge)
+    #                        positive gradient = getting farther (right edge)
+    center = bbox_width // 2
+
+    # Find left edge: rightmost negative gradient edge left of center
+    left_edges = edge_positions[(edge_positions < center) & (gradient[edge_positions] < 0)]
+    left_edge = left_edges[-1] if len(left_edges) > 0 else edge_positions[0]
+
+    # Find right edge: leftmost positive gradient edge right of center
+    right_edges = edge_positions[(edge_positions > center) & (gradient[edge_positions] > 0)]
+    right_edge = right_edges[0] if len(right_edges) > 0 else edge_positions[-1]
+
+    width = float(right_edge - left_edge)
+    return max(width, 0.0)
+
+
+def _threshold_clustering(row_depths: np.ndarray,
+                           depth_threshold_ratio: float
+                           ) -> Tuple[float, np.ndarray]:
+    """
+    Cluster trunk pixels by depth threshold.
+    Returns (width, mask).
+    """
+    if len(row_depths) == 0:
+        return 0.0, np.array([], dtype=bool)
+
+    # Use percentile-based approach instead of pure min/median
+    # This is more robust to outlier pixels
+    p10 = float(np.percentile(row_depths, 10))  # near-trunk depth
+    p90 = float(np.percentile(row_depths, 90))  # likely background
+    depth_range = p90 - p10
+
+    if depth_range < 0.05:
+        # Very uniform depth → entire bbox width is the trunk
+        mask = np.ones(len(row_depths), dtype=bool)
+    else:
+        # Adaptive threshold: trunk depth + fraction of range
+        threshold = p10 + depth_range * (0.3 + depth_threshold_ratio)
+        mask = row_depths <= threshold
+
+    if not np.any(mask):
+        return 0.0, mask
+
+    # Find the widest contiguous segment
+    width, _ = _longest_contiguous_true(mask)
+    return float(width), mask
+
+
+def _longest_contiguous_true(mask: np.ndarray) -> Tuple[int, int]:
+    """Find the longest contiguous run of True values."""
+    max_len = 0
+    max_start = 0
+    current_len = 0
+    current_start = 0
+
+    for i, val in enumerate(mask):
+        if val:
+            if current_len == 0:
+                current_start = i
+            current_len += 1
+            if current_len > max_len:
+                max_len = current_len
+                max_start = current_start
+        else:
+            current_len = 0
+
+    return max_len, max_start
+
+
+def pixel_width_to_metric(pixel_width: float,
+                           depth_m: float,
+                           focal_length_px: float) -> float:
+    """
+    Convert pixel width to metric width.
+
+    Formula: w_m = w_px * Z / f_x
+
+    Args:
+        pixel_width: Width in pixels
+        depth_m: Depth in meters
+        focal_length_px: Focal length in pixels
+
+    Returns:
+        Width in meters
+    """
+    if focal_length_px <= 0:
+        raise ValueError("Focal length must be positive")
+    return pixel_width * depth_m / focal_length_px
+
+
+def cylindrical_correction(chord_length_m: float,
+                            camera_distance_m: float) -> float:
+    """
+    Apply cylindrical geometry correction to convert chord to diameter.
+
+    A camera looking at a cylinder sees a chord, not the full diameter.
+    The chord is always shorter than the diameter.
+
+    Formula (Xiang et al. 2025):
+        d = l² * p / (l² + 4p²)
+
+    Where:
+        l = chord length (meters)
+        p = camera distance to chord plane (meters)
+        d = cylinder diameter (meters)
+
+    For large distances (p >> d), the correction is small (<1%).
+    """
+    l = chord_length_m
+    p = camera_distance_m
+
+    if p <= 0:
+        return chord_length_m
+
+    # Full formula
+    diameter = (l * l * p) / (l * l + 4 * p * p)
+
+    # The formula above gives the *radius offset*, not the diameter.
+    # Let me re-derive correctly:
+    #
+    # For a cylinder of diameter d at distance p from camera:
+    # The visible chord length l relates to diameter by:
+    #   l = d * sqrt(1 - (d/(2p))^2) * 2p / d  [simplified]
+    #
+    # Actually, the simpler approach:
+    # The chord the camera sees is shorter than the diameter.
+    # For a circle of radius r, the chord at distance p from center:
+    #   half_chord = r * p / sqrt(r² + p²)
+    #   chord = 2 * half_chord
+    #   chord = 2rp / sqrt(r² + p²)
+    #
+    # Solving for d = 2r from l (chord) and p:
+    #   l = dp / sqrt((d/2)² + p²)
+    #   l² = d²p² / (d²/4 + p²)
+    #   l²(d²/4 + p²) = d²p²
+    #   l²d²/4 + l²p² = d²p²
+    #   l²p² = d²(p² - l²/4)
+    #   d² = l²p² / (p² - l²/4)
+    #   d = lp / sqrt(p² - l²/4)
+
+    # Check if chord is physically possible (l < 2p for the geometry to work)
+    if l >= 2 * p:
+        # Too close, chord > possible → return chord as-is
+        return chord_length_m
+
+    d_squared = (l * l * p * p) / (p * p - l * l / 4.0)
+    if d_squared <= 0:
+        return chord_length_m
+
+    diameter = math.sqrt(d_squared)
+    return diameter
+
+
+def compute_confidence(trunk_depth_m: float,
+                       trunk_pixel_width: float,
+                       dbh_cm: float,
+                       bbox: BoundingBox,
+                       depth_map: np.ndarray) -> float:
+    """
+    Compute a confidence score for the DBH measurement.
+
+    Factors:
+    - Distance: 1-4m is ideal, further reduces confidence
+    - Trunk pixel width: more pixels = more precision
+    - DBH reasonableness: 5-150cm is expected
+    - Depth consistency: low variance in trunk region = better
+    """
+    scores = []
+    notes = []
+
+    # Distance score (ideal: 1-3m)
+    if 1.0 <= trunk_depth_m <= 3.0:
+        dist_score = 1.0
+    elif 0.5 <= trunk_depth_m < 1.0 or 3.0 < trunk_depth_m <= 5.0:
+        dist_score = 0.7
+    elif 5.0 < trunk_depth_m <= 8.0:
+        dist_score = 0.4
+    else:
+        dist_score = 0.2
+    scores.append(dist_score * 0.25)
+
+    # Pixel width score (more = better, minimum ~20px for reliability)
+    if trunk_pixel_width >= 100:
+        px_score = 1.0
+    elif trunk_pixel_width >= 50:
+        px_score = 0.8
+    elif trunk_pixel_width >= 20:
+        px_score = 0.5
+    else:
+        px_score = 0.2
+    scores.append(px_score * 0.25)
+
+    # DBH reasonableness (5-150cm is normal range)
+    if 5.0 <= dbh_cm <= 150.0:
+        dbh_score = 1.0
+    elif 3.0 <= dbh_cm < 5.0 or 150.0 < dbh_cm <= 200.0:
+        dbh_score = 0.6
+    else:
+        dbh_score = 0.2
+    scores.append(dbh_score * 0.25)
+
+    # Depth consistency in trunk region
+    trunk_region = depth_map[bbox.y1:bbox.y2, bbox.x1:bbox.x2]
+    if trunk_region.size > 0:
+        depth_std = np.std(trunk_region)
+        depth_mean = np.mean(trunk_region)
+        cv = depth_std / max(depth_mean, 0.01)  # coefficient of variation
+        if cv < 0.05:
+            consistency_score = 1.0
+        elif cv < 0.1:
+            consistency_score = 0.8
+        elif cv < 0.2:
+            consistency_score = 0.6
+        else:
+            consistency_score = 0.3
+    else:
+        consistency_score = 0.3
+    scores.append(consistency_score * 0.25)
+
+    return min(1.0, sum(scores))
+
+
+# ============================================================
+# Main DBH Measurement Function
+# ============================================================
+
+def measure_dbh(depth_map: np.ndarray,
+                bbox: BoundingBox,
+                focal_length_px: Optional[float] = None,
+                image_width_px: Optional[int] = None,
+                fov_degrees: float = 70.0,
+                apply_cylindrical_correction: bool = True,
+                breast_height_ratio: Optional[float] = None
+                ) -> DBHResult:
+    """
+    Measure DBH from a depth map and trunk bounding box.
+
+    Args:
+        depth_map: (H, W) numpy array with metric depth in meters
+        bbox: Bounding box around the trunk (x1, y1, x2, y2)
+        focal_length_px: Focal length in pixels. If None, estimated from FOV.
+        image_width_px: Image width (needed if focal_length_px is None)
+        fov_degrees: Horizontal FOV for focal length estimation
+        apply_cylindrical_correction: Whether to apply chord→diameter correction
+        breast_height_ratio: Where to measure within bbox (0=top, 1=bottom).
+                            None = center (0.5). For full pipeline, this would
+                            be computed from ground plane fitting.
+
+    Returns:
+        DBHResult with all measurement details
+    """
+    notes = []
+
+    # Determine focal length
+    if focal_length_px is None:
+        if image_width_px is None:
+            image_width_px = depth_map.shape[1]
+        focal_length_px = estimate_focal_length_from_fov(image_width_px, fov_degrees)
+        notes.append(f"Focal length estimated from FOV ({fov_degrees}°): {focal_length_px:.1f}px")
+
+    # Determine measurement row
+    if breast_height_ratio is not None:
+        measurement_row = int(bbox.y1 + breast_height_ratio * bbox.height)
+    else:
+        measurement_row = bbox.center_y
+        notes.append("Measuring at bbox center (no ground plane fitting)")
+
+    # Calculate trunk pixel width and depth
+    trunk_pixel_width, measurement_row, trunk_depth_m = \
+        calculate_trunk_width_pixels(depth_map, bbox, measurement_row)
+
+    if trunk_pixel_width < 1.0 or trunk_depth_m <= 0:
+        return DBHResult(
+            dbh_cm=0.0,
+            confidence=0.0,
+            trunk_depth_m=trunk_depth_m,
+            trunk_pixel_width=trunk_pixel_width,
+            chord_length_m=0.0,
+            focal_length_px=focal_length_px,
+            measurement_row=measurement_row,
+            method="failed",
+            notes=["Could not detect trunk at measurement row"]
+        )
+
+    # Convert pixel width to metric chord length
+    chord_length_m = pixel_width_to_metric(
+        trunk_pixel_width, trunk_depth_m, focal_length_px
+    )
+
+    # Apply cylindrical correction
+    if apply_cylindrical_correction and chord_length_m > 0:
+        dbh_m = cylindrical_correction(chord_length_m, trunk_depth_m)
+        method = "cylindrical_corrected"
+        correction_pct = ((dbh_m - chord_length_m) / chord_length_m) * 100
+        notes.append(f"Cylindrical correction: +{correction_pct:.1f}%")
+    else:
+        dbh_m = chord_length_m
+        method = "simplified"
+
+    dbh_cm = dbh_m * 100.0
+
+    # Compute confidence
+    confidence = compute_confidence(
+        trunk_depth_m, trunk_pixel_width, dbh_cm, bbox, depth_map
+    )
+
+    return DBHResult(
+        dbh_cm=round(dbh_cm, 2),
+        confidence=round(confidence, 3),
+        trunk_depth_m=round(trunk_depth_m, 3),
+        trunk_pixel_width=round(trunk_pixel_width, 1),
+        chord_length_m=round(chord_length_m, 4),
+        focal_length_px=round(focal_length_px, 1),
+        measurement_row=measurement_row,
+        method=method,
+        notes=notes,
+    )
+
+
+def measure_dbh_multi_row(depth_map: np.ndarray,
+                           bbox: BoundingBox,
+                           focal_length_px: Optional[float] = None,
+                           image_width_px: Optional[int] = None,
+                           fov_degrees: float = 70.0,
+                           num_rows: int = 5
+                           ) -> DBHResult:
+    """
+    Measure DBH using multiple rows and take the median.
+    More robust than single-row measurement.
+
+    Samples num_rows evenly spaced rows within the middle 60% of the bbox.
+    """
+    if focal_length_px is None:
+        if image_width_px is None:
+            image_width_px = depth_map.shape[1]
+        focal_length_px = estimate_focal_length_from_fov(image_width_px, fov_degrees)
+
+    # Sample rows in the middle 60% of the bbox
+    margin = 0.2
+    ratios = np.linspace(margin, 1.0 - margin, num_rows)
+
+    results = []
+    for ratio in ratios:
+        result = measure_dbh(
+            depth_map, bbox,
+            focal_length_px=focal_length_px,
+            apply_cylindrical_correction=True,
+            breast_height_ratio=ratio
+        )
+        if result.dbh_cm > 0:
+            results.append(result)
+
+    if not results:
+        return DBHResult(
+            dbh_cm=0.0, confidence=0.0, trunk_depth_m=0.0,
+            trunk_pixel_width=0.0, chord_length_m=0.0,
+            focal_length_px=focal_length_px, measurement_row=bbox.center_y,
+            method="multi_row_failed", notes=["No valid measurements from any row"]
+        )
+
+    # Take median DBH
+    dbh_values = [r.dbh_cm for r in results]
+    median_dbh = float(np.median(dbh_values))
+    std_dbh = float(np.std(dbh_values))
+
+    # Use the result closest to the median
+    best_result = min(results, key=lambda r: abs(r.dbh_cm - median_dbh))
+
+    notes = best_result.notes.copy()
+    notes.append(f"Multi-row median from {len(results)}/{num_rows} valid rows")
+    notes.append(f"DBH range: {min(dbh_values):.1f} - {max(dbh_values):.1f} cm (std: {std_dbh:.1f})")
+
+    # Adjust confidence based on consistency
+    consistency_bonus = max(0, 0.1 - std_dbh / median_dbh * 0.5) if median_dbh > 0 else 0
+    adjusted_confidence = min(1.0, best_result.confidence + consistency_bonus)
+
+    return DBHResult(
+        dbh_cm=round(median_dbh, 2),
+        confidence=round(adjusted_confidence, 3),
+        trunk_depth_m=best_result.trunk_depth_m,
+        trunk_pixel_width=best_result.trunk_pixel_width,
+        chord_length_m=best_result.chord_length_m,
+        focal_length_px=focal_length_px,
+        measurement_row=best_result.measurement_row,
+        method="multi_row_median",
+        notes=notes,
+    )
