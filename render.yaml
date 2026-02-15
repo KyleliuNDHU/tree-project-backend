@@ -24,31 +24,6 @@ services:
         sync: false
       - key: NODE_VERSION
         value: 20.11.1
-  - type: web
-    name: tree-app-backend-staging
-    env: node
-    rootDir: ./
-    plan: free
-    branch: develop
-    buildCommand: "./build.sh"
-    startCommand: "node app.js"
-    envVars:
-      - key: DATABASE_URL
-        fromDatabase:
-          name: tree-database-staging
-          property: connectionString
-      - key: NODE_ENV
-        value: staging
-      - key: OPENAI_API_KEY
-        sync: false
-      - key: GEMINI_API_KEY
-        sync: false
-      - key: Claude_API_KEY
-        sync: false
-      - key: SiliconFlow_API_KEY
-        sync: false
-      - key: NODE_VERSION
-        value: 20.11.1
   # ============================
   # ML Service (Python / FastAPI)
   # ============================
@@ -72,6 +47,3 @@ databases:
   - name: tree-database-prod
     databaseName: tree_data_prod
     plan: Basic-256mb
-  - name: tree-database-staging
-    databaseName: tree_data_staging
-    plan: free
