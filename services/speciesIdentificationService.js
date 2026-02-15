@@ -436,7 +436,7 @@ async function autoAddSpeciesFromIdentification(primaryResult) {
                     await client.query(`
                         INSERT INTO species_synonyms (canonical_species_id, variant_name, scientific_name, source, confidence)
                         VALUES ($1, $2, $3, 'plantnet_auto', 0.95)
-                        ON CONFLICT (variant_name) DO NOTHING
+                        ON CONFLICT (canonical_species_id, variant_name) DO NOTHING
                     `, [newId, commonNames[i], scientificName]);
                 } catch (synErr) {
                     if (synErr.code !== '42P01') console.warn('[Auto-Add] 同義詞新增失敗:', synErr.message);
