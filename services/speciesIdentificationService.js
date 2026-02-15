@@ -359,6 +359,111 @@ async function matchLocalSpecies(scientificName, commonNames = []) {
 }
 
 /**
+ * PlantNet 辨識到未知樹種時，自動新增到 tree_species 表
+ * PlantNet 由 CIRAD/INRA/IRD/INRIA 組織維護，可信度極高
+ * @param {Object} primaryResult - PlantNet 辨識結果的第一筆 (score 最高)
+ * @returns {Object|null} 新增的樹種資料 { id, name, scientificName, source }
+ */
+async function autoAddSpeciesFromIdentification(primaryResult) {
+    const db = require('../config/db');
+    const client = await db.pool.connect();
+    
+    try {
+        const { scientificName, commonNames = [], score } = primaryResult;
+        
+        // 選擇最佳顯示名稱：優先取中文名，否則用學名
+        const displayName = commonNames.length > 0 ? commonNames[0] : scientificName;
+        if (!displayName) return null;
+
+        await client.query('BEGIN');
+
+        // 再次確認不存在（防止並發）
+        const { rows: existing } = await client.query(
+            `SELECT id, name, scientific_name FROM tree_species 
+             WHERE name = $1 OR ($2 IS NOT NULL AND LOWER(scientific_name) = LOWER($2))`,
+            [displayName, scientificName]
+        );
+        if (existing.length > 0) {
+            await client.query('ROLLBACK');
+            return { 
+                id: existing[0].id, 
+                name: existing[0].name, 
+                scientificName: existing[0].scientific_name, 
+                source: 'db_existing' 
+            };
+        }
+
+        // 生成下一個可用 ID
+        const { rows: allIds } = await client.query(`
+            SELECT id FROM tree_species WHERE id ~ '^[0-9]+$'
+            UNION
+            SELECT "樹種編號" as id FROM tree_survey WHERE "樹種編號" ~ '^[0-9]+$'
+        `);
+        const existingNumbers = new Set(allIds.map(row => parseInt(row.id, 10)).filter(num => !isNaN(num)));
+        let nextNumber = 1;
+        while (existingNumbers.has(nextNumber)) {
+            nextNumber++;
+        }
+        const newId = nextNumber.toString().padStart(4, '0');
+
+        // 插入新樹種
+        const { rows: inserted } = await client.query(
+            'INSERT INTO tree_species (id, name, scientific_name) VALUES ($1, $2, $3) RETURNING id, name, scientific_name',
+            [newId, displayName, scientificName || null]
+        );
+
+        // 記錄到 species_merge_log（如果表存在）
+        try {
+            await client.query(`
+                INSERT INTO species_merge_log (action_type, species_id, details)
+                VALUES ('auto_add', $1, $2)
+            `, [newId, JSON.stringify({
+                source: 'plantnet',
+                score: score,
+                scientificName: scientificName,
+                commonNames: commonNames,
+                displayName: displayName
+            })]);
+        } catch (logErr) {
+            // species_merge_log 可能不存在，忽略
+            if (logErr.code !== '42P01') console.warn('[Auto-Add] 記錄日誌失敗:', logErr.message);
+        }
+
+        // 若有多個中文名，新增為同義詞
+        if (commonNames.length > 1) {
+            for (let i = 1; i < commonNames.length; i++) {
+                try {
+                    await client.query(`
+                        INSERT INTO species_synonyms (canonical_species_id, variant_name, scientific_name, source, confidence)
+                        VALUES ($1, $2, $3, 'plantnet_auto', 0.95)
+                        ON CONFLICT (variant_name) DO NOTHING
+                    `, [newId, commonNames[i], scientificName]);
+                } catch (synErr) {
+                    if (synErr.code !== '42P01') console.warn('[Auto-Add] 同義詞新增失敗:', synErr.message);
+                }
+            }
+        }
+
+        await client.query('COMMIT');
+
+        console.log(`[Species Auto-Add] 新增樹種 ID=${newId}, name=${displayName}, sci=${scientificName}, score=${score}`);
+
+        return {
+            id: inserted[0].id,
+            name: inserted[0].name,
+            scientificName: inserted[0].scientific_name,
+            source: 'auto_added'
+        };
+    } catch (error) {
+        await client.query('ROLLBACK');
+        console.error('[Species Auto-Add] 自動新增樹種失敗:', error.message);
+        return null;
+    } finally {
+        client.release();
+    }
+}
+
+/**
  * 綜合辨識服務 - 整合多個來源
  * @param {Buffer} imageBuffer - 圖片 Buffer
  * @param {Object} options - 選項
@@ -370,9 +475,10 @@ async function identifySpecies(imageBuffer, options = {}) {
     const result = {
         success: false,
         primaryResult: null,
-        allResults: [],
+        results: [],
         gbifData: null,
         localMatch: null,
+        autoAdded: false,
         sources: []
     };
 
@@ -384,7 +490,7 @@ async function identifySpecies(imageBuffer, options = {}) {
         if (plantnetResult.success && plantnetResult.results.length > 0) {
             result.success = true;
             result.primaryResult = plantnetResult.results[0];
-            result.allResults = plantnetResult.results;
+            result.results = plantnetResult.results;
             result.remainingRequests = plantnetResult.remainingRequests;
 
             // 2. 用 GBIF 驗證並豐富資料
@@ -404,6 +510,15 @@ async function identifySpecies(imageBuffer, options = {}) {
             if (localMatch) {
                 result.localMatch = localMatch;
                 result.sources.push('local');
+            } else {
+                // 4. PlantNet 可信度高 — 自動新增未知樹種到 DB
+                const autoAdded = await autoAddSpeciesFromIdentification(result.primaryResult);
+                if (autoAdded) {
+                    result.localMatch = autoAdded;
+                    result.autoAdded = true;
+                    result.sources.push('auto_added');
+                    console.log(`[Species Auto-Add] 已自動新增樹種: ${autoAdded.name} (${autoAdded.scientificName})`);
+                }
             }
         } else {
             result.error = plantnetResult.error || '無法辨識此植物';
