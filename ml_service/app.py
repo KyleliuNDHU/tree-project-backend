@@ -29,7 +29,7 @@ from depth_estimation import estimate_depth, estimate_depth_with_info, load_mode
 from dbh_calculator import (
     BoundingBox, measure_dbh, measure_dbh_multi_row,
     estimate_focal_length_from_fov, focal_length_from_exif,
-    PHONE_SENSORS
+    PHONE_SENSORS, match_phone_sensor
 )
 from visualization import create_result_image, depth_to_colormap, image_to_bytes
 from tree_trunk_detector import detect_trunks, create_detection_visualization
@@ -149,6 +149,10 @@ async def measure_dbh_endpoint(
         description="35mm equivalent focal length (from EXIF)"),
     fov_degrees: float = Form(default=70.0,
         description="Horizontal FOV in degrees (used if focal_length not provided)"),
+    phone_make: Optional[str] = Form(default=None,
+        description="EXIF Make (e.g. 'Apple', 'samsung', 'Xiaomi')"),
+    phone_model: Optional[str] = Form(default=None,
+        description="EXIF Model (e.g. 'iPhone 15 Pro', 'SM-S928B', 'Mi A1')"),
     use_multi_row: bool = Form(default=True,
         description="Use multi-row median measurement for robustness"),
     return_visualization: bool = Form(default=True,
@@ -194,11 +198,13 @@ async def measure_dbh_endpoint(
         if effective_focal_px is None and focal_length_mm is not None:
             # Use EXIF focal length + sensor width to compute focal_length_px
             # f_px = f_mm * W_px / sensor_width_mm
-            sensor_w = PHONE_SENSORS.get("default", 7.0)
+            sensor_w, sensor_match = match_phone_sensor(
+                phone_make or "", phone_model or ""
+            )
             effective_focal_px = focal_length_from_exif(
                 focal_length_mm, sensor_w, W
             )
-            focal_source = f"exif_mm ({focal_length_mm}mm, sensor={sensor_w}mm)"
+            focal_source = f"exif_mm ({focal_length_mm}mm, sensor={sensor_w}mm [{sensor_match}])"
 
         if effective_focal_px is None and focal_length_35mm is not None:
             # Compute FOV from 35mm equivalent focal length
@@ -288,6 +294,10 @@ async def auto_measure_dbh_endpoint(
         description="35mm equivalent focal length"),
     fov_degrees: float = Form(default=70.0,
         description="Horizontal FOV in degrees"),
+    phone_make: Optional[str] = Form(default=None,
+        description="EXIF Make (e.g. 'Apple', 'samsung', 'Xiaomi')"),
+    phone_model: Optional[str] = Form(default=None,
+        description="EXIF Model (e.g. 'iPhone 15 Pro', 'SM-S928B', 'Mi A1')"),
     return_visualization: bool = Form(default=True,
         description="Return annotated visualization image"),
     return_detection_visualization: bool = Form(default=True,
@@ -317,11 +327,13 @@ async def auto_measure_dbh_endpoint(
         focal_source = "default"
 
         if effective_focal_px is None and focal_length_mm is not None:
-            sensor_w = PHONE_SENSORS.get("default", 7.0)
+            sensor_w, sensor_match = match_phone_sensor(
+                phone_make or "", phone_model or ""
+            )
             effective_focal_px = focal_length_from_exif(
                 focal_length_mm, sensor_w, W
             )
-            focal_source = f"exif_mm ({focal_length_mm}mm)"
+            focal_source = f"exif_mm ({focal_length_mm}mm, sensor={sensor_w}mm [{sensor_match}])"
 
         if effective_focal_px is None and focal_length_35mm is not None:
             effective_fov = 2 * math.atan(36.0 / (2 * focal_length_35mm)) * 180.0 / math.pi

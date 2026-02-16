@@ -85,6 +85,22 @@ def detect_trunks(depth_map: np.ndarray,
     H, W = depth_map.shape
     notes = []
 
+    # Guard: validate depth map
+    if H == 0 or W == 0:
+        return DetectionResult(trunks=[], best_trunk_index=-1,
+                               depth_stats={}, detection_method="depth_based_auto",
+                               notes=["Empty depth map"])
+
+    # Replace NaN/Inf with median
+    if np.any(~np.isfinite(depth_map)):
+        finite_mask = np.isfinite(depth_map)
+        if np.any(finite_mask):
+            median_val = float(np.median(depth_map[finite_mask]))
+        else:
+            median_val = 5.0
+        depth_map = np.where(np.isfinite(depth_map), depth_map, median_val)
+        notes.append("Replaced NaN/Inf values in depth map")
+
     # Step 1: Compute depth statistics
     depth_stats = {
         "min_m": float(np.min(depth_map)),
@@ -182,55 +198,51 @@ def _enhance_vertical_structures(fg_mask: np.ndarray,
     """
     Enhance vertically-continuous structures (tree trunks).
 
-    Uses column-wise analysis to find vertically consistent foreground regions.
-    Tree trunks have high vertical continuity and relatively uniform depth.
+    Uses vectorized column-wise run-length encoding to find vertically
+    consistent foreground regions. Tree trunks have high vertical continuity
+    and relatively uniform depth.
     """
-    # Column-wise: count consecutive foreground pixels
-    vertical_score = np.zeros((H, W), dtype=float)
+    # Vectorized run-length analysis: for each column, compute the length
+    # of the consecutive foreground run each pixel belongs to.
+    vertical_score = np.zeros((H, W), dtype=np.float32)
+    fg_float = fg_mask.astype(np.float32)
 
     for col in range(W):
-        fg_col = fg_mask[:, col].astype(float)
+        col_data = fg_float[:, col]
+        if col_data.sum() == 0:
+            continue
 
-        # Count vertical continuity: how many consecutive foreground pixels
-        # above and below each pixel
-        for i in range(H):
-            if fg_col[i] <= 0:
-                continue
+        # Find run-length of each consecutive segment using diff
+        # Pad with 0 at both ends to detect start/end of runs
+        padded = np.concatenate(([0], col_data, [0]))
+        diffs = np.diff(padded)
+        run_starts = np.where(diffs > 0)[0]   # start indices of True runs
+        run_ends = np.where(diffs < 0)[0]      # end indices (exclusive)
 
-            # Count consecutive True values above
-            up = 0
-            for j in range(i - 1, -1, -1):
-                if fg_col[j] > 0:
-                    up += 1
-                else:
-                    break
-
-            # Count consecutive True values below
-            down = 0
-            for j in range(i + 1, H):
-                if fg_col[j] > 0:
-                    down += 1
-                else:
-                    break
-
-            vertical_score[i, col] = up + down + 1
+        # Assign each pixel in a run the length of that run
+        for start, end in zip(run_starts, run_ends):
+            run_len = end - start
+            vertical_score[start:end, col] = run_len
 
     # Threshold: pixels with strong vertical continuity
     min_vertical_run = max(H * 0.1, 20)  # At least 10% of image height
     enhanced = vertical_score >= min_vertical_run
 
-    # Depth consistency filter: within each column, check depth variance
-    # of the enhanced pixels (trunk should have consistent depth)
+    # Depth consistency filter: vectorized per-column check
     for col in range(W):
         col_mask = enhanced[:, col]
-        if np.sum(col_mask) < min_vertical_run:
+        n_true = np.sum(col_mask)
+        if n_true < min_vertical_run:
             continue
 
         col_depths = depth_map[col_mask, col]
-        if len(col_depths) > 0:
-            cv = np.std(col_depths) / max(np.mean(col_depths), 0.01)
-            if cv > 0.3:  # Too much depth variation → probably not a trunk
-                enhanced[:, col] = False
+        mean_d = np.mean(col_depths)
+        if mean_d < 0.01:
+            enhanced[:, col] = False
+            continue
+        cv = np.std(col_depths) / mean_d
+        if cv > 0.3:  # Too much depth variation → probably not a trunk
+            enhanced[:, col] = False
 
     return enhanced
 
@@ -295,7 +307,7 @@ def _find_trunk_candidates(mask: np.ndarray,
 
         candidates.append({
             "mask": component_mask,
-            "bbox": (x1, y1, x2 + 1, y2 + 1),
+            "bbox": (x1, y1, x2, y2),
             "width": w,
             "height": h,
             "aspect_ratio": aspect_ratio,
@@ -364,7 +376,7 @@ def _score_candidate(candidate: dict,
 
     # Estimate trunk pixel width at center row
     center_row = candidate["center_y"]
-    row_mask = candidate["mask"][center_row, x1:x2+1] if center_row < H else np.array([])
+    row_mask = candidate["mask"][center_row, x1:x2+1] if center_row < H and y1 <= center_row <= y2 else np.array([])
     if len(row_mask) > 0 and np.any(row_mask):
         true_positions = np.where(row_mask)[0]
         pixel_width = float(true_positions[-1] - true_positions[0] + 1) if len(true_positions) > 1 else float(candidate["width"])
@@ -438,14 +450,24 @@ def create_detection_visualization(image: 'Image.Image',
     blended = Image.blend(image, depth_overlay, alpha=0.25)
     draw = ImageDraw.Draw(blended)
 
-    # Load font
+    # Load font (prioritize CJK font for Chinese text)
     font = None
     font_large = None
+    import os as _os
+    script_dir = _os.path.dirname(_os.path.abspath(__file__))
     for font_path in [
+        # Render deployment path
         "/opt/render/project/src/../Noto_Sans_TC/static/NotoSansTC-Regular.ttf",
+        "/opt/render/project/src/Noto_Sans_TC/static/NotoSansTC-Regular.ttf",
+        # Local dev: font is in backend/Noto_Sans_TC/
+        _os.path.join(script_dir, "..", "Noto_Sans_TC", "static", "NotoSansTC-Regular.ttf"),
+        # System fonts
+        "/usr/share/fonts/truetype/noto/NotoSansCJK-Regular.ttc",
+        "/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc",
         "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
         "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
-        "/usr/share/fonts/truetype/liberation/LiberationSans-Regular.ttf",
+        "C:/Windows/Fonts/msjh.ttc",   # Windows Chinese font
+        "C:/Windows/Fonts/arial.ttf",
         "arial.ttf",
     ]:
         try:
@@ -518,8 +540,10 @@ def create_detection_visualization(image: 'Image.Image',
 
         # Draw distance message at bottom of bbox
         msg_y = min(trunk.bbox_y2 + 4, H - 22)
+        # Chinese characters are ~2x width of Latin, estimate width accordingly
+        msg_pixel_width = sum(18 if ord(c) > 0x7F else 11 for c in trunk.distance_message)
         draw.rectangle(
-            [trunk.bbox_x1, msg_y, trunk.bbox_x1 + len(trunk.distance_message) * 11, msg_y + 22],
+            [trunk.bbox_x1, msg_y, trunk.bbox_x1 + msg_pixel_width + 8, msg_y + 22],
             fill=(0, 0, 0, 200)
         )
         draw.text((trunk.bbox_x1 + 4, msg_y + 2),

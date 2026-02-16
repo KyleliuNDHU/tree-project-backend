@@ -91,17 +91,149 @@ def focal_length_from_exif(focal_length_mm: float,
 
 
 # Common phone sensor data (sensor_width_mm)
+# Key: lowercase normalized model name fragment
 PHONE_SENSORS = {
-    "iphone_15_pro": 9.8,      # 1/1.28"
-    "iphone_14_pro": 9.8,
-    "iphone_13_pro": 7.6,      # 1/1.65"
-    "iphone_13":     7.0,      # 1/1.7"
-    "samsung_s24":   9.8,      # 1/1.3"
-    "samsung_s23":   9.0,
-    "pixel_8_pro":   9.0,
-    "pixel_8":       6.4,
-    "default":       7.0,       # ~1/1.7" typical mid-range
+    # Apple iPhone
+    "iphone 16 pro max": 9.8,
+    "iphone 16 pro": 9.8,
+    "iphone 16": 7.6,
+    "iphone 15 pro max": 9.8,    # 1/1.28"
+    "iphone 15 pro": 9.8,
+    "iphone 15": 7.6,
+    "iphone 14 pro max": 9.8,
+    "iphone 14 pro": 9.8,
+    "iphone 14": 7.6,
+    "iphone 13 pro max": 7.6,    # 1/1.65"
+    "iphone 13 pro": 7.6,
+    "iphone 13 mini": 7.0,
+    "iphone 13": 7.0,            # 1/1.7"
+    "iphone 12 pro max": 7.0,
+    "iphone 12 pro": 7.0,
+    "iphone 12": 7.0,
+    "iphone 11 pro": 7.0,
+    "iphone 11": 6.17,
+    "iphone se": 4.89,
+    # Samsung Galaxy S
+    "sm-s928": 9.8,  # S24 Ultra
+    "sm-s926": 7.6,  # S24+
+    "sm-s921": 7.6,  # S24
+    "sm-s918": 9.8,  # S23 Ultra
+    "sm-s916": 7.6,  # S23+
+    "sm-s911": 7.0,  # S23
+    "sm-s908": 9.0,  # S22 Ultra
+    "sm-s906": 7.0,  # S22+
+    "sm-s901": 7.0,  # S22
+    "galaxy s24": 9.8,
+    "galaxy s23": 9.0,
+    "galaxy s22": 7.0,
+    "galaxy s21": 6.4,
+    # Samsung Galaxy A
+    "sm-a556": 6.4,  # A55
+    "sm-a546": 6.4,  # A54
+    "sm-a536": 6.4,  # A53
+    "galaxy a55": 6.4,
+    "galaxy a54": 6.4,
+    "galaxy a53": 6.4,
+    # Google Pixel
+    "pixel 9 pro": 9.0,
+    "pixel 9": 7.6,
+    "pixel 8 pro": 9.0,
+    "pixel 8a": 6.4,
+    "pixel 8": 6.4,
+    "pixel 7 pro": 9.0,
+    "pixel 7a": 6.4,
+    "pixel 7": 6.4,
+    "pixel 6 pro": 9.0,
+    "pixel 6a": 6.4,
+    "pixel 6": 6.4,
+    # Xiaomi
+    "mi a1": 5.64,             # 1/2.9"  ← user's test device
+    "mi 5x": 5.64,             # same as Mi A1
+    "mi a2": 5.64,
+    "14 ultra": 9.8,
+    "14 pro": 9.0,
+    "13 ultra": 9.8,
+    "13 pro": 9.0,
+    "redmi note 13": 6.4,
+    "redmi note 12": 6.4,
+    "poco f5": 6.4,
+    "poco x5": 6.4,
+    # OnePlus
+    "oneplus 12": 9.0,
+    "oneplus 11": 9.0,
+    "oneplus 10 pro": 9.0,
+    "oneplus nord": 6.4,
+    # Sony
+    "xperia 1": 9.0,
+    "xperia 5": 6.4,
+    # ASUS
+    "zenfone 10": 9.0,
+    "zenfone 9": 9.0,
+    "rog phone": 9.0,
+    # Huawei
+    "p60 pro": 9.0,
+    "mate 60": 9.0,
+    "p50 pro": 9.0,
+    # OPPO
+    "find x7": 9.0,
+    "find x6": 9.0,
+    "reno 11": 6.4,
+    # Vivo
+    "x100": 9.0,
+    "x90": 9.0,
+    # Fallback
+    "default": 7.0,            # ~1/1.7" typical mid-range
 }
+
+
+def match_phone_sensor(make: str = "", model: str = "") -> tuple:
+    """
+    Match EXIF Make/Model to sensor width.
+
+    Returns:
+        (sensor_width_mm, matched_key)
+    """
+    if not make and not model:
+        return PHONE_SENSORS["default"], "default"
+
+    # Normalize: lowercase, strip whitespace
+    query = f"{make} {model}".lower().strip()
+
+    # Try exact prefix match first (longest match wins)
+    best_key = None
+    best_len = 0
+    for key in PHONE_SENSORS:
+        if key == "default":
+            continue
+        if key in query and len(key) > best_len:
+            best_key = key
+            best_len = len(key)
+
+    if best_key:
+        return PHONE_SENSORS[best_key], best_key
+
+    # Brand-level fallback
+    brand_defaults = {
+        "apple": 7.0,     # Older iPhones
+        "samsung": 6.4,   # Mid-range Samsung
+        "google": 6.4,    # Pixel
+        "xiaomi": 5.64,   # Xiaomi mid-range
+        "oneplus": 6.4,
+        "huawei": 7.0,
+        "oppo": 6.4,
+        "vivo": 6.4,
+        "sony": 6.4,
+        "asus": 6.4,
+        "realme": 6.4,
+        "motorola": 5.64,
+        "nokia": 5.64,
+    }
+    query_lower = query.lower()
+    for brand, sw in brand_defaults.items():
+        if brand in query_lower:
+            return sw, f"brand:{brand}"
+
+    return PHONE_SENSORS["default"], "default"
 
 
 # ============================================================
