@@ -34,6 +34,32 @@ from dbh_calculator import (
 from visualization import create_result_image, depth_to_colormap, image_to_bytes
 from tree_trunk_detector import detect_trunks, create_detection_visualization
 
+# Max processing dimension — larger images are resized to save memory & time.
+# Depth Anything V2 internally resizes to ~518px anyway; full-resolution is wasteful.
+# On Render free (1 CPU, 512 MB), a 12 MP photo can cause 502 timeout.
+MAX_PROCESSING_DIM = 800
+
+
+def _resize_for_processing(image: Image.Image) -> tuple:
+    """Resize image if it exceeds MAX_PROCESSING_DIM on its longest side.
+
+    Returns:
+        (resized_image, scale_factor)  where scale_factor = new_size / old_size.
+        If no resize needed, scale_factor = 1.0.
+    """
+    W, H = image.size
+    longest = max(W, H)
+    if longest <= MAX_PROCESSING_DIM:
+        return image, 1.0
+
+    scale = MAX_PROCESSING_DIM / longest
+    new_w = int(W * scale)
+    new_h = int(H * scale)
+    resized = image.resize((new_w, new_h), Image.LANCZOS)
+    print(f"[Resize] {W}x{H} → {new_w}x{new_h} (scale={scale:.3f})")
+    return resized, scale
+
+
 app = FastAPI(
     title="TreeAI DBH Measurement Service",
     description="Pure vision DBH measurement using Depth Anything V2",
@@ -95,9 +121,10 @@ async def estimate_depth_endpoint(
     Returns depth statistics and optionally a colorized depth map.
     """
     try:
-        # Read image
+        # Read image and resize for performance
         img_bytes = await image.read()
         pil_image = Image.open(io.BytesIO(img_bytes)).convert("RGB")
+        pil_image, _ = _resize_for_processing(pil_image)
 
         # Run depth estimation
         t0 = time.time()
@@ -177,17 +204,19 @@ async def measure_dbh_endpoint(
                 detail="Invalid bounding box: x1 must < x2, y1 must < y2"
             )
 
-        # Read image
+        # Read image and resize for performance
         img_bytes = await image.read()
-        pil_image = Image.open(io.BytesIO(img_bytes)).convert("RGB")
+        pil_image_orig = Image.open(io.BytesIO(img_bytes)).convert("RGB")
+        W_orig, H_orig = pil_image_orig.size
+        pil_image, scale = _resize_for_processing(pil_image_orig)
         W, H = pil_image.size
 
-        # Clamp bbox to image bounds
+        # Scale bbox to resized coordinates
         bbox = BoundingBox(
-            x1=max(0, bbox_x1),
-            y1=max(0, bbox_y1),
-            x2=min(W, bbox_x2),
-            y2=min(H, bbox_y2),
+            x1=max(0, int(bbox_x1 * scale)),
+            y1=max(0, int(bbox_y1 * scale)),
+            x2=min(W, int(bbox_x2 * scale)),
+            y2=min(H, int(bbox_y2 * scale)),
         )
 
         # Compute focal length from EXIF if available
@@ -255,7 +284,8 @@ async def measure_dbh_endpoint(
                 "dbh_calculation_ms": round(calc_time * 1000, 1),
                 "total_ms": round((depth_time + calc_time) * 1000, 1),
             },
-            "image_size": {"width": W, "height": H},
+            "image_size": {"width": W_orig, "height": H_orig},
+            "processing_size": {"width": W, "height": H},
             "bbox": {"x1": bbox.x1, "y1": bbox.y1,
                      "x2": bbox.x2, "y2": bbox.y2},
         }
@@ -316,9 +346,11 @@ async def auto_measure_dbh_endpoint(
     Like Tesla's vision system: point the camera, AI does everything.
     """
     try:
-        # Read image
+        # Read image and resize for performance
         img_bytes = await image.read()
-        pil_image = Image.open(io.BytesIO(img_bytes)).convert("RGB")
+        pil_image_orig = Image.open(io.BytesIO(img_bytes)).convert("RGB")
+        W_orig, H_orig = pil_image_orig.size
+        pil_image, scale = _resize_for_processing(pil_image_orig)
         W, H = pil_image.size
 
         # Compute focal length
@@ -438,7 +470,8 @@ async def auto_measure_dbh_endpoint(
                 "dbh_calculation_ms": round(calc_time * 1000, 1),
                 "total_ms": round((depth_time + detect_time + calc_time) * 1000, 1),
             },
-            "image_size": {"width": W, "height": H},
+            "image_size": {"width": W_orig, "height": H_orig},
+            "processing_size": {"width": W, "height": H},
         }
 
         if return_visualization:
