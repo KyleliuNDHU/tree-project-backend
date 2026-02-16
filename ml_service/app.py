@@ -197,13 +197,6 @@ async def measure_dbh_endpoint(
     The bounding box should tightly surround the tree trunk.
     """
     try:
-        # Validate bbox
-        if bbox_x1 >= bbox_x2 or bbox_y1 >= bbox_y2:
-            raise HTTPException(
-                status_code=400,
-                detail="Invalid bounding box: x1 must < x2, y1 must < y2"
-            )
-
         # Read image and resize for performance
         img_bytes = await image.read()
         pil_image_orig = Image.open(io.BytesIO(img_bytes)).convert("RGB")
@@ -211,13 +204,24 @@ async def measure_dbh_endpoint(
         pil_image, scale = _resize_for_processing(pil_image_orig)
         W, H = pil_image.size
 
-        # Scale bbox to resized coordinates
-        bbox = BoundingBox(
-            x1=max(0, int(bbox_x1 * scale)),
-            y1=max(0, int(bbox_y1 * scale)),
-            x2=min(W, int(bbox_x2 * scale)),
-            y2=min(H, int(bbox_y2 * scale)),
-        )
+        # Normalize bbox (auto-swap if drawn right-to-left or bottom-to-top)
+        nx1, nx2 = sorted([bbox_x1, bbox_x2])
+        ny1, ny2 = sorted([bbox_y1, bbox_y2])
+
+        # Scale bbox to resized coordinates and clamp to image bounds
+        sx1 = max(0, int(nx1 * scale))
+        sy1 = max(0, int(ny1 * scale))
+        sx2 = min(W, int(nx2 * scale))
+        sy2 = min(H, int(ny2 * scale))
+
+        # Ensure minimum bbox size (at least 5px after scaling)
+        if sx2 - sx1 < 5 or sy2 - sy1 < 5:
+            raise HTTPException(
+                status_code=400,
+                detail="框選範圍太小，請框選更大的樹幹區域"
+            )
+
+        bbox = BoundingBox(x1=sx1, y1=sy1, x2=sx2, y2=sy2)
 
         # Compute focal length from EXIF if available
         effective_focal_px = focal_length_px
