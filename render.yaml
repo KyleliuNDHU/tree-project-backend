@@ -31,7 +31,7 @@ services:
     name: tree-app-ml-service
     env: python
     rootDir: ./ml_service
-    plan: starter
+    plan: free
     branch: main
     buildCommand: "pip install -r requirements.txt && python -c \"from transformers import AutoImageProcessor, AutoModelForDepthEstimation; AutoImageProcessor.from_pretrained('depth-anything/Depth-Anything-V2-Metric-Outdoor-Small-hf'); AutoModelForDepthEstimation.from_pretrained('depth-anything/Depth-Anything-V2-Metric-Outdoor-Small-hf')\""
     startCommand: "gunicorn app:app --workers 1 --worker-class uvicorn.workers.UvicornWorker --bind 0.0.0.0:$PORT --timeout 120"
