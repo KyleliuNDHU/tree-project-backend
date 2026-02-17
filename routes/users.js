@@ -7,6 +7,7 @@ const { signJwt } = require('../middleware/jwtAuth');
 const AuditLogService = require('../services/auditLogService');
 const { checkAccountLocked, recordLoginFailure, resetLoginAttempts } = require('../middleware/loginAttemptMonitor');
 const { requireRole, getRoleLevel } = require('../middleware/roleAuth');
+const { invalidateUserProjectsCache } = require('../middleware/projectAuth');
 
 // 使用者管理相關 API
 // 登入路由
@@ -108,27 +109,59 @@ router.post('/login', loginLimiter, async (req, res) => {
             req
         });
 
+        // [Phase A] 優先從 projects 表查詢可存取專案，保留 fallback
         let accessibleProjects = [];
-        if (user.role === '系統管理員') {
-            const { rows: projectRows } = await db.query('SELECT DISTINCT project_code as code, project_name as name, project_location as area FROM tree_survey');
-            accessibleProjects = projectRows;
-        } else {
-            const projectCodes = user.associated_projects ? user.associated_projects.split(',') : [];
-            if (projectCodes.length > 0) {
-                const projectQuery = 'SELECT DISTINCT project_code as code, project_name as name, project_location as area FROM tree_survey WHERE project_code = ANY($1::text[])';
-                const { rows: projectRows } = await db.query(projectQuery, [projectCodes]);
+        try {
+            if (user.role === '系統管理員' || user.role === '業務管理員') {
+                const { rows: projectRows } = await db.query(`
+                    SELECT p.project_code AS code, p.name, COALESCE(pa.area_name, '') AS area
+                    FROM projects p
+                    LEFT JOIN project_areas pa ON pa.id = p.area_id
+                    WHERE p.is_active = true
+                    ORDER BY p.project_code
+                `);
                 accessibleProjects = projectRows;
+            } else {
+                // 優先從 user_projects junction table 查詢
+                const { rows: projectRows } = await db.query(`
+                    SELECT p.project_code AS code, p.name, COALESCE(pa.area_name, '') AS area
+                    FROM user_projects up
+                    JOIN projects p ON p.project_code = up.project_code
+                    LEFT JOIN project_areas pa ON pa.id = p.area_id
+                    WHERE up.user_id = $1 AND p.is_active = true
+                    ORDER BY p.project_code
+                `, [user.user_id]);
+                accessibleProjects = projectRows;
+            }
+        } catch (newQueryErr) {
+            console.warn('[Phase A fallback] 新表查詢失敗，退回 tree_survey:', newQueryErr.message);
+            accessibleProjects = [];
+        }
+
+        // Fallback: 如果新表查無結果，退回 SELECT DISTINCT FROM tree_survey
+        if (accessibleProjects.length === 0) {
+            if (user.role === '系統管理員' || user.role === '業務管理員') {
+                const { rows: projectRows } = await db.query('SELECT DISTINCT project_code as code, project_name as name, project_location as area FROM tree_survey');
+                accessibleProjects = projectRows;
+            } else {
+                const projectCodes = user.associated_projects ? user.associated_projects.split(',') : [];
+                if (projectCodes.length > 0) {
+                    const projectQuery = 'SELECT DISTINCT project_code as code, project_name as name, project_location as area FROM tree_survey WHERE project_code = ANY($1::text[])';
+                    const { rows: projectRows } = await db.query(projectQuery, [projectCodes]);
+                    accessibleProjects = projectRows;
+                }
             }
         }
 
         let token;
         if (process.env.JWT_SECRET) {
             try {
+                // [Phase B] JWT payload 不再包含 associated_projects
+                // 改為即時查 user_projects 表，改權限後立即生效不需重新登入
                 token = signJwt({
                     user_id: user.user_id,
                     username: user.username,
                     role: user.role,
-                    associated_projects: user.associated_projects || '',
                 });
             } catch (e) {
                 token = undefined;
@@ -154,8 +187,9 @@ router.post('/login', loginLimiter, async (req, res) => {
                 username: user.username,
                 display_name: user.display_name,
                 role: user.role,
-                associated_projects: user.associated_projects,
-                accessibleProjects: accessibleProjects // 新增此欄位
+                associated_projects: user.associated_projects, // [舊] 保留向後相容
+                projects: accessibleProjects, // [Phase A 新增] 結構化專案陣列
+                accessibleProjects: accessibleProjects // 保留此欄位向後相容
             },
             mlConfig: Object.keys(mlConfig).length > 0 ? mlConfig : undefined,
         });
@@ -452,39 +486,57 @@ router.delete('/users/:id', requireRole('業務管理員'), async (req, res) => 
 });
 
 // 獲取使用者關聯專案 (業務管理員以上)
+// [Phase A] 優先從 user_projects + projects 查詢，fallback 到 associated_projects
 router.get('/users/:userId/projects', requireRole('業務管理員'), async (req, res) => {
     const { userId } = req.params;
 
     try {
-        const { rows } = await db.query('SELECT associated_projects FROM users WHERE user_id = $1', [userId]);
-
-        if (rows.length === 0) {
+        // 檢查使用者是否存在
+        const { rows: userRows } = await db.query('SELECT user_id, associated_projects FROM users WHERE user_id = $1', [userId]);
+        if (userRows.length === 0) {
             return res.status(404).json({
                 success: false,
                 message: '找不到指定的使用者'
             });
         }
 
-        const associatedProjects = rows[0].associated_projects;
-        const projectList = associatedProjects ? associatedProjects.split(',') : [];
+        let projectRows = [];
 
-        if (projectList.length > 0) {
-            const projectQuery = 'SELECT DISTINCT project_code, project_name, project_location FROM tree_survey WHERE project_code = ANY($1::text[])';
-            const { rows: projectRows } = await db.query(projectQuery, [projectList]);
-            res.json({
-                success: true,
-                projects: projectRows.map(p => ({
+        // [Phase A] 優先從 user_projects junction table 查詢
+        try {
+            const result = await db.query(`
+                SELECT p.project_code AS "專案代碼", p.name AS "專案名稱", COALESCE(pa.area_name, '') AS "專案區位"
+                FROM user_projects up
+                JOIN projects p ON p.project_code = up.project_code
+                LEFT JOIN project_areas pa ON pa.id = p.area_id
+                WHERE up.user_id = $1
+                ORDER BY p.project_code
+            `, [userId]);
+            projectRows = result.rows;
+        } catch (newQueryErr) {
+            console.warn('[Phase A fallback] user_projects 查詢失敗:', newQueryErr.message);
+        }
+
+        // Fallback: 從 associated_projects 逗號分隔字串查詢
+        if (projectRows.length === 0) {
+            const associatedProjects = userRows[0].associated_projects;
+            const projectList = associatedProjects ? associatedProjects.split(',').map(p => p.trim()).filter(p => p) : [];
+
+            if (projectList.length > 0) {
+                const projectQuery = 'SELECT DISTINCT project_code, project_name, project_location FROM tree_survey WHERE project_code = ANY($1::text[])';
+                const { rows: fallbackRows } = await db.query(projectQuery, [projectList]);
+                projectRows = fallbackRows.map(p => ({
                     "專案代碼": p.project_code,
                     "專案名稱": p.project_name,
                     "專案區位": p.project_location
-                }))
-            });
-        } else {
-            res.json({
-                success: true,
-                projects: []
-            });
+                }));
+            }
         }
+
+        res.json({
+            success: true,
+            projects: projectRows
+        });
     } catch (err) {
         console.error('獲取關聯專案錯誤:', err);
         return res.status(500).json({
@@ -507,6 +559,7 @@ router.put('/users/:userId/projects', requireRole('業務管理員'), async (req
     }
 
     try {
+        // [舊] 寫入 associated_projects 逗號分隔字串
         const projectsString = projects.join(',');
         const { rowCount } = await db.query('UPDATE users SET associated_projects = $1 WHERE user_id = $2', [projectsString, userId]);
 
@@ -515,6 +568,22 @@ router.put('/users/:userId/projects', requireRole('業務管理員'), async (req
                 success: false,
                 message: '找不到指定的使用者'
             });
+        }
+
+        // [Phase A 雙寫] 同步寫入 user_projects junction table
+        try {
+            await db.query('DELETE FROM user_projects WHERE user_id = $1', [userId]);
+            if (projects.length > 0) {
+                const values = projects.map((code, i) => `($1, $${i + 2})`).join(', ');
+                await db.query(
+                    `INSERT INTO user_projects (user_id, project_code) VALUES ${values} ON CONFLICT DO NOTHING`,
+                    [userId, ...projects]
+                );
+            }
+            // [Phase B] 清除快取，使新權限立即生效
+            invalidateUserProjectsCache(userId);
+        } catch (dualWriteErr) {
+            console.error('[Phase A 雙寫] user_projects 同步失敗 (非致命):', dualWriteErr.message);
         }
 
         await AuditLogService.log({

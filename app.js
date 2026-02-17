@@ -97,6 +97,7 @@ const projectBoundariesRoutes = require('./routes/project_boundaries'); // V3 �
 const mlTrainingDataRoutes = require('./routes/ml_training_data'); // V3 ML 訓練數據收集路由
 const treeImagesRoutes = require('./routes/tree_images'); // 樹木影像路由
 const mlServiceRoutes = require('./routes/ml_service'); // ML Service 代理路由
+const csvImportRoutes = require('./routes/csvImport'); // [Phase C] CSV 匯入路由
 
 apiRouter.use('/', usersRoutes); // 包含 /login
 apiRouter.use('/projects', projectsRoutes);
@@ -118,6 +119,7 @@ apiRouter.use('/project-boundaries', projectBoundariesRoutes); // 掛載專案�
 apiRouter.use('/ml-training', mlTrainingDataRoutes); // 掛載 ML 訓練數據路由
 apiRouter.use('/tree-images', treeImagesRoutes); // 掛載樹木影像路由
 apiRouter.use('/ml-service', mlServiceRoutes); // 掛載 ML Service 代理路由
+apiRouter.use('/admin/import-csv', csvImportRoutes); // [Phase C] 掛載 CSV 匯入路由
 
 
 // 將所有 API 路由應用速率限制並掛載到 /api

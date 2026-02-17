@@ -5,31 +5,61 @@ const { requireRole } = require('../middleware/roleAuth');
 const { projectAuthFilter } = require('../middleware/projectAuth');
 
 // 取得專案列表 (依使用者權限過濾)
+// [Phase A] 優先從 projects 表查詢，fallback 到 SELECT DISTINCT FROM tree_survey
 router.get('/', projectAuthFilter, async (req, res) => {
     try {
-        let query = `
-            SELECT DISTINCT ON (project_code) 
-                project_name as name, 
-                project_code as code, 
-                project_location as area 
-            FROM tree_survey 
-            WHERE project_name IS NOT NULL AND project_name != ''
-        `;
-        const params = [];
-        let paramIdx = 1;
-
         // 依使用者權限過濾專案
-        if (req.projectFilter) {
-            if (req.projectFilter.length === 0) {
-                return res.json({ success: true, data: [] });
-            }
-            query += ` AND project_code = ANY($${paramIdx}::text[])`;
-            params.push(req.projectFilter);
-            paramIdx++;
+        if (req.projectFilter && req.projectFilter.length === 0) {
+            return res.json({ success: true, data: [] });
         }
 
-        query += ` ORDER BY project_code, project_name`;
-        const { rows } = await db.query(query, params);
+        // 優先查 projects 表
+        let rows = [];
+        try {
+            let query = `
+                SELECT p.name, p.project_code AS code, COALESCE(pa.area_name, '') AS area
+                FROM projects p
+                LEFT JOIN project_areas pa ON pa.id = p.area_id
+                WHERE p.is_active = true
+            `;
+            const params = [];
+            let paramIdx = 1;
+
+            if (req.projectFilter) {
+                query += ` AND p.project_code = ANY($${paramIdx}::text[])`;
+                params.push(req.projectFilter);
+                paramIdx++;
+            }
+            query += ` ORDER BY p.project_code`;
+            const result = await db.query(query, params);
+            rows = result.rows;
+        } catch (projectsTableErr) {
+            console.warn('[Phase A fallback] projects 表查詢失敗，退回 tree_survey:', projectsTableErr.message);
+        }
+
+        // Fallback: 如果 projects 表查無結果，退回 SELECT DISTINCT
+        if (rows.length === 0) {
+            let fallbackQuery = `
+                SELECT DISTINCT ON (project_code)
+                    project_name AS name,
+                    project_code AS code,
+                    project_location AS area
+                FROM tree_survey
+                WHERE project_name IS NOT NULL AND project_name != ''
+            `;
+            const fallbackParams = [];
+            let paramIdx = 1;
+
+            if (req.projectFilter) {
+                fallbackQuery += ` AND project_code = ANY($${paramIdx}::text[])`;
+                fallbackParams.push(req.projectFilter);
+                paramIdx++;
+            }
+            fallbackQuery += ` ORDER BY project_code, project_name`;
+            const fallbackResult = await db.query(fallbackQuery, fallbackParams);
+            rows = fallbackResult.rows;
+        }
+
         res.json({ success: true, data: rows });
     } catch (err) {
         console.error('取得專案列表錯誤:', err);
@@ -38,16 +68,37 @@ router.get('/', projectAuthFilter, async (req, res) => {
 });
 
 // 根據專案區位獲取專案列表
+// [Phase A] 優先從 projects 表查詢
 router.get('/by_area/:area', async (req, res) => {
     const { area } = req.params;
     try {
-        const query = `
-            SELECT DISTINCT project_name as name, project_code as code, project_location as area 
-            FROM tree_survey 
-            WHERE project_location = $1 AND project_name IS NOT NULL AND project_name != '' 
-            ORDER BY project_name;
-        `;
-        const { rows } = await db.query(query, [area]);
+        let rows = [];
+
+        // 優先查 projects + project_areas
+        try {
+            const result = await db.query(`
+                SELECT p.name, p.project_code AS code, pa.area_name AS area
+                FROM projects p
+                JOIN project_areas pa ON pa.id = p.area_id
+                WHERE pa.area_name = $1 AND p.is_active = true
+                ORDER BY p.name
+            `, [area]);
+            rows = result.rows;
+        } catch (e) {
+            console.warn('[Phase A fallback] by_area projects 表查詢失敗:', e.message);
+        }
+
+        // Fallback
+        if (rows.length === 0) {
+            const fallback = await db.query(`
+                SELECT DISTINCT project_name AS name, project_code AS code, project_location AS area
+                FROM tree_survey
+                WHERE project_location = $1 AND project_name IS NOT NULL AND project_name != ''
+                ORDER BY project_name
+            `, [area]);
+            rows = fallback.rows;
+        }
+
         res.json({ success: true, data: rows });
     } catch (err) {
         console.error(`取得區位[${area}]的專案列表錯誤:`, err);
@@ -56,21 +107,41 @@ router.get('/by_area/:area', async (req, res) => {
 });
 
 // 根據專案名稱獲取專案資訊 (主要用於檢查專案是否存在)
+// [Phase A] 優先從 projects 表查詢
 router.get('/by_name/:name', async (req, res) => {
     const { name } = req.params;
     try {
-        const query = `
-            SELECT DISTINCT ON (project_code) 
-                project_name as name, 
-                project_code as code, 
-                project_location as area 
-            FROM tree_survey 
-            WHERE project_name = $1 
-            LIMIT 1;
-        `;
-        const { rows } = await db.query(query, [name]);
-        if (rows.length > 0) {
-            res.json({ success: true, data: rows[0] });
+        let row = null;
+
+        try {
+            const result = await db.query(`
+                SELECT p.name, p.project_code AS code, COALESCE(pa.area_name, '') AS area
+                FROM projects p
+                LEFT JOIN project_areas pa ON pa.id = p.area_id
+                WHERE p.name = $1
+                LIMIT 1
+            `, [name]);
+            if (result.rows.length > 0) row = result.rows[0];
+        } catch (e) {
+            console.warn('[Phase A fallback] by_name projects 表查詢失敗:', e.message);
+        }
+
+        // Fallback
+        if (!row) {
+            const fallback = await db.query(`
+                SELECT DISTINCT ON (project_code)
+                    project_name AS name,
+                    project_code AS code,
+                    project_location AS area
+                FROM tree_survey
+                WHERE project_name = $1
+                LIMIT 1
+            `, [name]);
+            if (fallback.rows.length > 0) row = fallback.rows[0];
+        }
+
+        if (row) {
+            res.json({ success: true, data: row });
         } else {
             res.status(404).json({ success: false, message: '找不到指定的專案' });
         }
@@ -82,21 +153,41 @@ router.get('/by_name/:name', async (req, res) => {
 
 
 // 根據專案代碼獲取專案資訊
+// [Phase A] 優先從 projects 表查詢
 router.get('/by_code/:code', async (req, res) => {
     const { code } = req.params;
     try {
-        const query = `
-            SELECT DISTINCT ON (project_code) 
-                project_name as name, 
-                project_code as code, 
-                project_location as area 
-            FROM tree_survey 
-            WHERE project_code = $1 
-            LIMIT 1;
-        `;
-        const { rows } = await db.query(query, [code]);
-        if (rows.length > 0) {
-            res.json({ success: true, data: rows[0] });
+        let row = null;
+
+        try {
+            const result = await db.query(`
+                SELECT p.name, p.project_code AS code, COALESCE(pa.area_name, '') AS area
+                FROM projects p
+                LEFT JOIN project_areas pa ON pa.id = p.area_id
+                WHERE p.project_code = $1
+                LIMIT 1
+            `, [code]);
+            if (result.rows.length > 0) row = result.rows[0];
+        } catch (e) {
+            console.warn('[Phase A fallback] by_code projects 表查詢失敗:', e.message);
+        }
+
+        // Fallback
+        if (!row) {
+            const fallback = await db.query(`
+                SELECT DISTINCT ON (project_code)
+                    project_name AS name,
+                    project_code AS code,
+                    project_location AS area
+                FROM tree_survey
+                WHERE project_code = $1
+                LIMIT 1
+            `, [code]);
+            if (fallback.rows.length > 0) row = fallback.rows[0];
+        }
+
+        if (row) {
+            res.json({ success: true, data: row });
         } else {
             res.status(404).json({ success: false, message: '找不到指定的專案' });
         }
@@ -106,14 +197,9 @@ router.get('/by_code/:code', async (req, res) => {
     }
 });
 
-// 新增專案 (這會創建一個新的專案代碼和一筆預設的樹木記錄來"佔位")
-// 
-// [FIX v17.1] 專案第一筆資料 ID 問題修復
-// 問題：原本佔位記錄使用 project_tree_id='1'，導致實際第一筆資料變成 PT-2
-// 解決方案：使用特殊標記 'PT-0' 或 'PLACEHOLDER' 作為佔位記錄的 project_tree_id
-// 這樣 treeSurveyCreateController.js 查詢 MAX 時會正確返回 null 或 0，第一筆實際資料就是 PT-1
-//
-// 新增專案 (業務管理員以上)
+// 新增專案
+// [Phase B] 不再建立 placeholder tree_survey 記錄，直接寫入 projects 表
+// 專案代碼改由 projects 表的數據生成，不再依賴 tree_survey
 router.post('/add', requireRole('業務管理員'), async (req, res) => {
     const { name, area } = req.body;
     if (!name || !area) {
@@ -124,42 +210,49 @@ router.post('/add', requireRole('業務管理員'), async (req, res) => {
     try {
         await client.query('BEGIN');
 
-        // 使用 Advisory Lock (Key 2) 確保專案代碼生成的原子性
-        // Key 1 用於樹木編號 (treeSurveyCreateController)
-        // Key 2 用於專案代碼 (projects.js)
+        // Advisory Lock (Key 2) 確保專案代碼生成的原子性
         await client.query('SELECT pg_advisory_xact_lock(2)');
 
-        // 1. 產生新的專案代碼
-        const { rows: maxCodeRows } = await client.query("SELECT MAX(CAST(project_code AS INTEGER)) as max_code FROM tree_survey WHERE project_code ~ '^[0-9]+$'");
+        // 從 tree_survey 和 projects 兩個表取最大代碼，確保不衝突
+        const { rows: maxCodeRows } = await client.query(`
+            SELECT GREATEST(
+                COALESCE((SELECT MAX(CAST(project_code AS INTEGER)) FROM tree_survey WHERE project_code ~ '^[0-9]+$'), 0),
+                COALESCE((SELECT MAX(CAST(project_code AS INTEGER)) FROM projects WHERE project_code ~ '^[0-9]+$'), 0)
+            ) AS max_code
+        `);
         const nextCode = (maxCodeRows[0].max_code || 0) + 1;
 
-        // [FIX] 2. 產生下一個系統樹木編號以滿足 NOT NULL 約束
-        // 佔位記錄使用特殊 ID 格式，避免影響正常 ID 序列
-        const { rows: maxSystemIdRows } = await client.query("SELECT MAX(CAST(regexp_replace(system_tree_id, '[^0-9]', '', 'g') AS INTEGER)) as max_id FROM tree_survey WHERE system_tree_id ~ '^ST-[0-9]+$'");
-        const nextSystemId = (maxSystemIdRows[0].max_id || 0) + 1;
-        // 佔位記錄使用 PLACEHOLDER 前綴，與正常 ST- 格式區分
+        // 查找 area_id
+        let areaId = null;
+        const { rows: areaRows } = await client.query(
+            'SELECT id FROM project_areas WHERE area_name = $1 LIMIT 1', [area]
+        );
+        if (areaRows.length > 0) {
+            areaId = areaRows[0].id;
+        }
+
+        // 寫入 projects 表
+        await client.query(
+            `INSERT INTO projects (project_code, name, area_id, description)
+             VALUES ($1, $2, $3, '由系統自動建立')
+             ON CONFLICT (project_code) DO UPDATE SET name = $2, area_id = COALESCE($3, projects.area_id)`,
+            [nextCode.toString(), name, areaId]
+        );
+
+        // [雙寫向後相容] 仍插入 placeholder 記錄到 tree_survey
+        // 這確保舊的 SELECT DISTINCT 查詢仍可找到此專案
         const placeholderSystemId = `PLACEHOLDER-${nextCode}`;
-
-
-        // 3. 插入一筆預設的樹木記錄來代表這個新專案
-        // [FIX v17.1] 使用 'PT-0' 作為佔位記錄的 project_tree_id
-        // 這樣 treeSurveyCreateController.js 的正規表達式 '^[A-Za-z]+-[0-9]+$' 會匹配到 PT-0
-        // 但 MAX 函數會把 0 視為最小值，使得實際第一筆資料成為 PT-1
-        const insertQuery = `
-            INSERT INTO tree_survey (project_name, project_code, project_location, species_name, system_tree_id, project_tree_id, is_placeholder) 
+        await client.query(`
+            INSERT INTO tree_survey (project_name, project_code, project_location, species_name, system_tree_id, project_tree_id, is_placeholder)
             VALUES ($1, $2, $3, '__PLACEHOLDER__', $4, 'PT-0', true)
-            RETURNING *
-        `;
-        const insertParams = [name, nextCode.toString(), area, placeholderSystemId];
-        
-        const { rows: newTreeRows } = await client.query(insertQuery, insertParams);
-        const placeholderTree = newTreeRows[0];
-        
+        `, [name, nextCode.toString(), area, placeholderSystemId]);
+
         await client.query('COMMIT');
 
         // 自動將創建者關聯到新專案
         if (req.user && req.user.user_id) {
             try {
+                // [舊] 寫入 associated_projects 逗號分隔字串
                 const { rows: userRows } = await db.query('SELECT associated_projects FROM users WHERE user_id = $1', [req.user.user_id]);
                 if (userRows.length > 0) {
                     const existing = userRows[0].associated_projects || '';
@@ -169,6 +262,16 @@ router.post('/add', requireRole('業務管理員'), async (req, res) => {
                         await db.query('UPDATE users SET associated_projects = $1 WHERE user_id = $2', [projectList.join(','), req.user.user_id]);
                     }
                 }
+
+                // [新] 寫入 user_projects
+                await db.query(
+                    'INSERT INTO user_projects (user_id, project_code) VALUES ($1, $2) ON CONFLICT DO NOTHING',
+                    [req.user.user_id, nextCode.toString()]
+                );
+
+                // 清除快取
+                const { invalidateUserProjectsCache } = require('../middleware/projectAuth');
+                invalidateUserProjectsCache(req.user.user_id);
             } catch (autoAssignErr) {
                 console.error('自動關聯專案失敗 (非致命):', autoAssignErr);
             }
@@ -177,9 +280,7 @@ router.post('/add', requireRole('業務管理員'), async (req, res) => {
         res.status(201).json({
             success: true,
             message: '專案新增成功',
-            project: { name, code: nextCode.toString(), area },
-            placeholderTree: placeholderTree,
-            note: '已使用新的佔位記錄機制 (PT-0)，確保第一筆實際資料為 PT-1'
+            project: { name, code: nextCode.toString(), area }
         });
     } catch (err) {
         await client.query('ROLLBACK');
@@ -224,11 +325,19 @@ router.delete('/:code', requireRole('業務管理員'), async (req, res) => {
         const deleteQuery = `DELETE FROM tree_survey WHERE project_code = $1`;
         await client.query(deleteQuery, [code]);
 
-        // 3. 清理使用者的 associated_projects 中的此專案代碼
+        // 3. 清理使用者的 associated_projects 中的此專案代碼（舊）
         const { rows: allUsers } = await client.query('SELECT user_id, associated_projects FROM users WHERE associated_projects IS NOT NULL');
         for (const user of allUsers) {
             const projects = user.associated_projects.split(',').filter(p => p.trim() !== code);
             await client.query('UPDATE users SET associated_projects = $1 WHERE user_id = $2', [projects.join(','), user.user_id]);
+        }
+
+        // [Phase A 雙寫] 清理 user_projects 和 projects 表
+        try {
+            await client.query('DELETE FROM user_projects WHERE project_code = $1', [code]);
+            await client.query('DELETE FROM projects WHERE project_code = $1', [code]);
+        } catch (dualWriteErr) {
+            console.error('[Phase A 雙寫] 清理新表失敗 (非致命):', dualWriteErr.message);
         }
 
         await client.query('COMMIT');

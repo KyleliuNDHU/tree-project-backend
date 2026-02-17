@@ -33,7 +33,8 @@ const migrationFiles = [
   'emission_factors.pg.sql', // 排放因子表
   'z_pending_tree_measurements.pg.sql', // [New] 待測量樹木資料表 - 兩階段測量工作流程 (z_ 確保最後執行)
   'tree_images.pg.sql', // [New] 樹木影像資料表 - 關聯到 tree_survey 與 pending_measurements
-  'species_synonyms.pg.sql' // [New] 樹種同義詞/名稱變體對照表 - 統一不同量測員的命名差異
+  'species_synonyms.pg.sql', // [New] 樹種同義詞/名稱變體對照表 - 統一不同量測員的命名差異
+  '03_user_projects.pg.sql' // [Phase A] user_projects junction table + 從 associated_projects 遷移 + 填充 projects 表
 ];
 
 // Define the order for view creation
