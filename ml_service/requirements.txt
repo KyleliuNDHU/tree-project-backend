@@ -9,3 +9,22 @@ python-multipart>=0.0.6
 numpy>=1.24.0
 scipy>=1.11.0
 gunicorn>=21.2.0
+
+# ── Phase 2+: ONNX Runtime (1.5-2.5x CPU speedup) ──────────
+# Uncomment when ready to export and use ONNX models:
+# optimum>=1.17.0
+# onnxruntime>=1.17.0
+
+# ── Phase 2+: SAM 2.1 Segmentation ─────────────────────────
+# Uncomment when ready to add pixel-perfect segmentation:
+# sam2               # Or install from source: pip install -e ./sam2
+
+# ── Phase 3: Ellipse fitting for trunk cross-section ────────
+# Uncomment for ellipse-based DBH correction:
+# scikit-image>=0.21.0
+
+# ── Phase 3+: DA3 Depth Anything 3 ─────────────────────────
+# WARNING: DA3 officially requires CUDA. CPU support untested.
+# Uncomment only after verifying CPU compatibility:
+# xformers
+# depth-anything-3

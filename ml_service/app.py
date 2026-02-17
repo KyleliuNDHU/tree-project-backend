@@ -112,6 +112,11 @@ from dbh_calculator import (
 )
 from visualization import create_result_image, depth_to_colormap, image_to_bytes
 from tree_trunk_detector import detect_trunks, create_detection_visualization
+from model_registry import (
+    get_depth_config, get_seg_config, get_preset,
+    print_config_summary, ACCURACY_PRESETS, DEPTH_MODELS,
+    USE_ONNX_RUNTIME, ENABLE_SAM_SEGMENTATION,
+)
 
 # Max processing dimension — larger images are resized to save memory & time.
 # Depth Anything V2 internally resizes to ~518px anyway; full-resolution is wasteful.
@@ -171,7 +176,8 @@ app.add_middleware(
 @app.on_event("startup")
 async def startup_event():
     """Pre-load model on startup."""
-    print("[Startup] Pre-loading Depth Anything V2 model...")
+    print_config_summary()
+    print("[Startup] Pre-loading depth model...")
     try:
         load_model()
         print("[Startup] Model ready!")
@@ -188,11 +194,18 @@ async def startup_event():
 @app.get("/api/v1/health")
 async def health_check():
     """Health check endpoint (no auth required)."""
+    depth_config = get_depth_config()
+    seg_config = get_seg_config()
     return {
         "status": "ok",
         "service": "dbh-measurement",
-        "model": "Depth-Anything-V2-Metric-Outdoor-Small",
+        "model": depth_config.display_name,
+        "model_params_m": depth_config.params_m,
+        "segmentation": seg_config.display_name,
+        "onnx_enabled": USE_ONNX_RUNTIME,
+        "sam_enabled": ENABLE_SAM_SEGMENTATION,
         "auth_required": bool(ML_API_KEY),
+        "available_modes": list(ACCURACY_PRESETS.keys()),
     }
 
 
@@ -422,6 +435,19 @@ async def auto_measure_dbh_endpoint(
         description="EXIF Make (e.g. 'Apple', 'samsung', 'Xiaomi')"),
     phone_model: Optional[str] = Form(default=None,
         description="EXIF Model (e.g. 'iPhone 15 Pro', 'SM-S928B', 'Mi A1')"),
+    # ── 新增: 精度模式選擇 (Phase 1+) ────────────────────────
+    # mode=fast    → ~1.5s, 快速篩選
+    # mode=balanced → ~3-6s, 日常使用 (預設)
+    # mode=accurate → ~5-10s, 研究級精密量測
+    mode: Optional[str] = Form(default=None,
+        description="Accuracy mode: 'fast', 'balanced', or 'accurate'. "
+                    "Controls model selection & processing detail."),
+    # ── 新增: 使用者觸碰點 (Phase 2: SAM prompt) ──────────────
+    # 使用者在手機上點擊目標樹幹 → 送出座標作為 SAM 分割的 prompt
+    tap_x: Optional[int] = Form(default=None,
+        description="User tap X coordinate on the tree trunk (for SAM segmentation)"),
+    tap_y: Optional[int] = Form(default=None,
+        description="User tap Y coordinate on the tree trunk (for SAM segmentation)"),
     return_visualization: bool = Form(default=True,
         description="Return annotated visualization image"),
     return_detection_visualization: bool = Form(default=True,
@@ -592,6 +618,55 @@ async def auto_measure_dbh_endpoint(
     except Exception as e:
         traceback.print_exc()
         raise HTTPException(status_code=500, detail=str(e))
+
+
+# ============================================================
+# ML Service Configuration Endpoint
+# ============================================================
+
+@app.get("/api/v1/config")
+async def get_ml_config():
+    """
+    Return current ML service configuration and available options.
+    
+    Frontend can use this to:
+    - Show available accuracy modes in the UI
+    - Display which model is active
+    - Show estimated processing times
+    """
+    depth_config = get_depth_config()
+    seg_config = get_seg_config()
+    
+    modes_info = {}
+    for name, preset in ACCURACY_PRESETS.items():
+        depth_m = DEPTH_MODELS.get(preset.depth_model)
+        modes_info[name] = {
+            "description": preset.description,
+            "depth_model": preset.depth_model,
+            "segmentation": preset.seg_model,
+            "estimated_time_s": depth_m.expected_cpu_time_s if depth_m else 0,
+            "features": {
+                "multi_row": preset.use_multi_row,
+                "subpixel": preset.use_subpixel,
+                "ellipse_fit": preset.use_ellipse_fit,
+            },
+        }
+    
+    return {
+        "active_depth_model": {
+            "key": os.environ.get("ML_DEPTH_MODEL", "da_v2_small"),
+            "name": depth_config.display_name,
+            "params_m": depth_config.params_m,
+            "license": depth_config.license,
+        },
+        "active_segmentation": {
+            "key": os.environ.get("ML_SEG_MODEL", "depth_heuristic"),
+            "name": seg_config.display_name,
+        },
+        "onnx_enabled": USE_ONNX_RUNTIME,
+        "sam_enabled": ENABLE_SAM_SEGMENTATION,
+        "available_modes": modes_info,
+    }
 
 
 # ============================================================

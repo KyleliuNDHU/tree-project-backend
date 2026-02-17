@@ -3,3 +3,12 @@ __pycache__/
 .hf_cache/
 *.egg-info/
 .env
+venv/
+
+# ONNX exported models (large binary files)
+onnx_models/
+
+# SAM 2.1 checkpoints
+checkpoints/
+*.pt
+*.pth
