@@ -44,7 +44,7 @@
     │ 拍照 + EXIF
     │
     ▼ HTTPS (ngrok 固定域名)
-MacBook Pro 2012 (i7-3720QM, 8GB DDR3, CPU-only)
+MacBook Pro 2012 (i7-3615QM, 8GB DDR3, CPU-only)
     │ ML Service (FastAPI + PyTorch)
     │ Depth Estimation + Segmentation + DBH Calculation
     │
@@ -56,10 +56,11 @@ MacBook Pro 2012 (i7-3720QM, 8GB DDR3, CPU-only)
 
 | 指標 | 值 | 對模型的意義 |
 |------|---|-------------|
-| CPU | Intel i7-3720QM (4C/8T, 2.6-3.6GHz) | 可執行 ~350M 參數模型 |
-| RAM | 8GB DDR3 | 最大載入 ~2GB 模型 (FP16) |
-| GPU | 無 (GT 650M 不支援 Metal 2.0) | **CPU-only 推論** |
-| PyTorch 效能 | ~4 TFLOPS (AVX) | Single image: 1-5 秒 |
+| CPU | Intel i7-3615QM (4C/8T, 2.3-3.3GHz) | 可執行 ~350M 參數模型 |
+| RAM | 8GB 1600MHz DDR3 | 最大載入 ~2GB 模型 (FP16) |
+| GPU (內建) | Intel HD Graphics 4000 (1536MB) | 不支援 MPS/CUDA |
+| GPU (獨顯) | NVIDIA GeForce GT 650M | macOS Sonoma 已停用 NVIDIA |
+| 最終推論 | **CPU-only (AVX)** | Single image: 1-5 秒 |
 | 並行能力 | 8 threads | 可管線化 depth + seg |
 
 ### 1.3 關鍵洞察：Server-side 解鎖了什麼
@@ -456,7 +457,130 @@ def estimate_uncertainty(depth_values, pixel_width, focal_length):
 ╚══════════════════════════════════════════════════════════╝
 ```
 
-### 5.2 各階段改善預期
+### 5.2 處理時間估算與速度優化 ⚡
+
+#### 硬體實測規格
+
+```
+CPU:  Intel i7-3615QM (Ivy Bridge, 4C/8T, 2.3-3.3 GHz)
+ISA:  SSE4.2, AVX (注意: 無 AVX2, AVX2 是 Haswell 第 4 代才有)
+GPU:  Intel HD Graphics 4000 (1536MB 共享) — 不支援 MPS/CUDA
+      NVIDIA GT 650M — macOS Sonoma 已停止支援 NVIDIA
+RAM:  8 GB 1600 MHz DDR3
+OS:   macOS Sonoma 14.8.2
+```
+
+#### 各模型 CPU 推論時間估算（PyTorch FP32, 8 threads）
+
+| 模型 | 參數量 | 輸入解析度 | PyTorch 估計 | ONNX Runtime 估計 |
+|------|--------|----------|-------------|------------------|
+| DA V2 Small | 24.8M | 518×518 | ~1.5-2.5s | ~0.8-1.5s |
+| **DA V2 Base** | **97.5M** | 518×518 | **~5-7s** | **~2.5-4s** |
+| DA V2 Large | 335.3M | 518×518 | ~15-25s | ~8-15s |
+| DA3Metric-Large | 350M | 518×518 | ~15-20s ⚠️ | 待測 |
+| SAM 2.1 Tiny | 38.9M | 1024×1024 | ~3-5s | ~1.5-3s |
+| SAM 2.1 Small | 46M | 1024×1024 | ~4-7s | ~2-4s |
+
+> ⚠️ DA3 官方要求 CUDA + xformers，CPU 推論可能需要額外適配。
+
+#### 完整管線時間（端到端：收到圖片 → 返回結果）
+
+| 組合方案 | 深度 | 分割 | 後處理 | PyTorch 總計 | ONNX 總計 | 精度 |
+|---------|------|------|--------|-------------|----------|------|
+| **A: 現狀 (V1)** | DA V2 Small ~2s | 啟發式 ~0.3s | ~0.2s | **~2.5s** | ~1.5s | 基準 |
+| **B: 快速升級** | DA V2 Base ~6s | 啟發式 ~0.3s | ~0.3s | **~6.5s** | ~3.5s | 深度 +15% |
+| **C: 分割升級** | DA V2 Small ~2s | SAM Tiny ~4s | ~0.3s | **~6.3s** | ~3.5s | 分割 +40% |
+| **D: 平衡方案 ⭐** | DA V2 Base ~6s | SAM Tiny ~4s | ~0.3s | **~10.3s** | **~5.5s** | 整體 +50% |
+| **E: 極致精度** | DA3Metric-L ~18s | SAM Tiny ~4s | ~0.3s | ~22s | ~13s | 整體 +70% |
+| **F: 方案 D + 降低解析度** | Base@384 ~3.5s | SAM@768 ~2.5s | ~0.3s | ~6.3s | **~3.5s** | 整體 +40% |
+
+#### ⭐ 推薦方案: D + ONNX 優化 → 約 5-6 秒
+
+這是 **精度與速度的最佳平衡點**：
+- 深度模型從 Small→Base：深度誤差降低 ~15%
+- SAM 分割取代啟發式：邊界精度提升 ~40%
+- ONNX Runtime 加速：總時間從 ~10s 降至 ~5.5s
+- 使用者體驗：拍照後等 5-6 秒看結果，完全可接受
+
+#### 速度優化策略
+
+##### 策略 1: ONNX Runtime 轉換（預期加速 1.5-2.5x）⭐ 最重要
+
+ONNX Runtime 對 Intel CPU 有專門的 SSE/AVX 優化核心：
+
+```python
+# 從 PyTorch 轉 ONNX
+from optimum.onnxruntime import ORTModel
+model = ORTModel.from_pretrained("depth-anything/...", export=True)
+
+# 或手動 ONNX 導出
+import onnxruntime as ort
+sess_options = ort.SessionOptions()
+sess_options.intra_op_num_threads = 4  # 4 物理核心
+sess_options.graph_optimization_level = ort.GraphOptimizationLevel.ORT_ENABLE_ALL
+session = ort.InferenceSession("model.onnx", sess_options)
+```
+
+**對 i7-3615QM 的所有優化中，ONNX Runtime 是投入產出比最高的。**
+
+##### 策略 2: 降低輸入解析度（加速 1.4-1.8x，微小精度損失）
+
+```python
+# DA V2 預設 518×518，改為 384×384
+# 計算量: (384/518)^2 ≈ 0.55 → 減少 45% 計算
+# 精度影響: 對大尺度物體(樹幹)影響很小 (<2%)
+processor = AutoImageProcessor.from_pretrained(model_id, 
+                                                size={"height": 384, "width": 384})
+```
+
+##### 策略 3: SAM 圖片編碼器預計算（節省重複請求時間）
+
+SAM 2.1 架構: `image_encoder(慢) → prompt_encoder(快) → mask_decoder(快)`
+
+```python
+# 如果使用者需要多次標記同一張照片的不同樹
+# 只需要跑一次 image_encoder
+image_embedding = sam_encoder(image)  # ~3s，只做一次
+
+# 之後每次新 prompt 只需 ~0.3s
+mask1 = sam_decoder(image_embedding, point1)  # ~0.3s
+mask2 = sam_decoder(image_embedding, point2)  # ~0.3s
+```
+
+##### 策略 4: 模型常駐 + 預熱（已實作）
+
+當前已經做了 Singleton 模式，模型載入一次常駐記憶體。
+補充：啟動時做一次 warmup 推論，避免首次請求特別慢。
+
+```python
+# 在 app.py 啟動時
+with torch.no_grad():
+    dummy = torch.randn(1, 3, 518, 518)
+    model(dummy)  # warmup: 讓 PyTorch 完成 JIT 編譯
+```
+
+##### 策略 5: 靈活精度模式（讓使用者選擇）
+
+提供 `/api/v1/measure-dbh?mode=fast` 和 `?mode=accurate`:
+
+| 模式 | 深度模型 | 分割 | 總時間 | 用途 |
+|------|---------|------|--------|------|
+| `fast` | DA V2 Small + ONNX | 啟發式 | ~1.5s | 快速篩選、野外大量調查 |
+| `balanced` | DA V2 Base + ONNX | SAM Tiny | ~5.5s | 常規使用 ⭐ |
+| `accurate` | DA V2 Base + ONNX | SAM Tiny + 多帶 + 亞像素 | ~7s | 精確研究量測 |
+
+#### 加速時間軸
+
+```
+V1 現狀:                    ~2.5s ████████
+Phase 1 (Base 模型):        ~6.5s ████████████████████
+Phase 1 + ONNX:             ~3.5s ██████████
+Phase 2 (Base + SAM):      ~10.3s ██████████████████████████████
+Phase 2 + ONNX:             ~5.5s ████████████████ ⭐ 推薦
+Phase 2 + ONNX + 降解:     ~3.5s ██████████
+```
+
+### 5.3 各階段精度改善預期
 
 | 改善項目 | V1 精度 | V2 預期精度 | 改善來源 |
 |---------|---------|-----------|---------|
@@ -467,7 +591,7 @@ def estimate_uncertainty(depth_values, pixel_width, focal_length):
 | 不確定度 | 無 | ±CI 報告 | 誤差傳播 |
 | **整體 RMSE** | **3-5 cm** | **1.5-3 cm** | — |
 
-### 5.3 記憶體規劃
+### 5.4 記憶體規劃
 
 8GB RAM 需要仔細規劃：
 
