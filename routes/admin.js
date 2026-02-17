@@ -143,8 +143,8 @@ const aiLimiter = rateLimit({
 });
 
 
-// Chat API
-router.post('/chat', aiLimiter, async (req, res) => {
+// Chat API — 需要 adminAuth 保護（防止未授權使用付費 AI API）
+router.post('/chat', adminAuth, aiLimiter, async (req, res) => {
     try {
         const { message, projectAreas, userId, model_preference = 'gpt-4.1-mini' } = req.body;
     
@@ -248,9 +248,9 @@ router.post('/chat', aiLimiter, async (req, res) => {
   }
 });
 
-// AI報告相關路由
-router.get('/reports/ai-sustainability', aiLimiter, aiReportController.generateAIReport);
-router.get('/reports/ai-sustainability/pdf', aiLimiter, async (req, res) => {
+// AI報告相關路由 — 全部加上 adminAuth
+router.get('/reports/ai-sustainability', adminAuth, aiLimiter, aiReportController.generateAIReport);
+router.get('/reports/ai-sustainability/pdf', adminAuth, aiLimiter, async (req, res) => {
     // 此路由較複雜，暫時保持原樣，待確認 controller 內部邏輯
     try {
         const originalJson = res.json;
@@ -277,11 +277,11 @@ router.get('/reports/ai-sustainability/pdf', aiLimiter, async (req, res) => {
     }
 });
 
-// 其他 AI 相關路由
-router.post('/sustainability-policy', aiLimiter, openaiController.generateSustainabilityPolicyRecommendations);
-router.get('/carbon-education/:topic', aiLimiter, openaiController.generateCarbonEducationContent);
-router.post('/carbon-footprint/advice', aiLimiter, openaiController.generateCarbonFootprintAdvice);
-router.post('/species-comparison', aiLimiter, openaiController.generateSpeciesCarbonComparison);
+// 其他 AI 相關路由 — 全部加上 adminAuth
+router.post('/sustainability-policy', adminAuth, aiLimiter, openaiController.generateSustainabilityPolicyRecommendations);
+router.get('/carbon-education/:topic', adminAuth, aiLimiter, openaiController.generateCarbonEducationContent);
+router.post('/carbon-footprint/advice', adminAuth, aiLimiter, openaiController.generateCarbonFootprintAdvice);
+router.post('/species-comparison', adminAuth, aiLimiter, openaiController.generateSpeciesCarbonComparison);
 
 
 // --- 備份與還原 (使用 pg_dump 和 pg_restore) ---
@@ -329,11 +329,19 @@ router.post('/backup', adminAuth, (req, res) => {
 router.post('/restore', adminAuth, (req, res) => {
     const { backupFile } = req.body;
     
-    if (!backupFile || !fs.existsSync(backupFile)) {
-        return res.status(400).json({
-            success: false,
-            message: '無效的備份檔案'
-        });
+    // 防止路徑遍歷和命令注入
+    const backupDir = path.join(__dirname, '..', 'backups');
+    if (!backupFile || typeof backupFile !== 'string') {
+        return res.status(400).json({ success: false, message: '無效的備份檔案' });
+    }
+    
+    // 只允許 backups 目錄下的檔案，防止路徑遍歷
+    const resolvedPath = path.resolve(backupDir, path.basename(backupFile));
+    if (!resolvedPath.startsWith(path.resolve(backupDir))) {
+        return res.status(400).json({ success: false, message: '不允許的檔案路徑' });
+    }
+    if (!fs.existsSync(resolvedPath)) {
+        return res.status(400).json({ success: false, message: '備份檔案不存在' });
     }
     
     const dbUrl = new URL(process.env.DATABASE_URL);
@@ -343,8 +351,8 @@ router.post('/restore', adminAuth, (req, res) => {
     const host = dbUrl.hostname;
     const port = dbUrl.port;
 
-    // 構建 pg_restore 命令
-    const command = `pg_restore -h ${host} -p ${port} -U ${user} -d ${dbName} --clean --if-exists -v "${backupFile}"`;
+    // 構建 pg_restore 命令 — 使用 resolvedPath 而非用戶輸入
+    const command = `pg_restore -h ${host} -p ${port} -U ${user} -d ${dbName} --clean --if-exists -v "${resolvedPath}"`;
 
     exec(command, { env: { ...process.env, PGPASSWORD: password } }, (error, stdout, stderr) => {
         if (error) {

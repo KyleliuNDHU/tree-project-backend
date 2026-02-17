@@ -64,7 +64,7 @@ async function getLegacyUntilMs() {
 
 async function isLegacyAllowed() {
     const untilMs = await getLegacyUntilMs();
-    if (!untilMs) return true; // If not set, allow by default (legacy behavior)
+    if (!untilMs) return false; // If not set, DENY by default (secure default)
 
     return Date.now() < untilMs;
 }
@@ -122,7 +122,7 @@ function shouldSkipAuth(req) {
     if (req.method === 'OPTIONS') return true;
     if (req.path === '/login') return true;
     if (req.path.startsWith('/download/')) return true;
-    if (req.path.startsWith('/admin')) return true;
+    // Admin paths now go through JWT too — adminAuth handles the admin-specific check
 
     return false;
 }

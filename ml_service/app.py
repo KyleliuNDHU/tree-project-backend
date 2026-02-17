@@ -13,17 +13,96 @@ Usage:
 """
 
 import io
+import os
 import math
 import time
+import hmac
 import base64
+import hashlib
 import traceback
 from typing import Optional
+from collections import defaultdict
 
-from fastapi import FastAPI, File, UploadFile, Form, HTTPException
+from fastapi import FastAPI, File, UploadFile, Form, HTTPException, Request, Depends
 from fastapi.responses import JSONResponse, StreamingResponse
 from fastapi.middleware.cors import CORSMiddleware
+from starlette.middleware.base import BaseHTTPMiddleware
 from PIL import Image
 import numpy as np
+
+# ============================================================
+# Security: API Key Authentication
+# ============================================================
+
+ML_API_KEY = os.environ.get("ML_API_KEY", "")
+
+# Allowed origins (restrict CORS)
+# Add your frontend domains, ngrok domains, and localhost for dev
+ALLOWED_ORIGINS = [
+    o.strip() for o in os.environ.get(
+        "ML_CORS_ORIGINS",
+        "http://localhost:3000,http://localhost:8080,https://tree-app-backend-prod.onrender.com"
+    ).split(",") if o.strip()
+]
+
+
+def verify_api_key(request: Request):
+    """Dependency that verifies the ML API key on protected endpoints."""
+    if not ML_API_KEY:
+        # If no API key is configured, skip auth (dev mode)
+        return
+    
+    # Check X-ML-API-Key header
+    provided_key = request.headers.get("X-ML-API-Key", "")
+    if not provided_key:
+        # Also check Authorization: Bearer <key>
+        auth_header = request.headers.get("Authorization", "")
+        if auth_header.startswith("Bearer "):
+            provided_key = auth_header[7:].strip()
+    
+    if not provided_key or not hmac.compare_digest(provided_key, ML_API_KEY):
+        raise HTTPException(
+            status_code=401,
+            detail="Unauthorized: Invalid or missing ML API key"
+        )
+
+
+# ============================================================
+# Security: Simple In-Memory Rate Limiter
+# ============================================================
+
+class RateLimitMiddleware(BaseHTTPMiddleware):
+    """Simple IP-based rate limiter for ML endpoints."""
+    
+    def __init__(self, app, max_requests: int = 30, window_seconds: int = 3600):
+        super().__init__(app)
+        self.max_requests = max_requests
+        self.window_seconds = window_seconds
+        self.requests: dict[str, list[float]] = defaultdict(list)
+    
+    async def dispatch(self, request: Request, call_next):
+        # Skip rate limiting for health check
+        if request.url.path.endswith("/health"):
+            return await call_next(request)
+        
+        client_ip = request.client.host if request.client else "unknown"
+        now = time.time()
+        
+        # Clean old entries
+        self.requests[client_ip] = [
+            t for t in self.requests[client_ip]
+            if now - t < self.window_seconds
+        ]
+        
+        if len(self.requests[client_ip]) >= self.max_requests:
+            return JSONResponse(
+                status_code=429,
+                content={"detail": "Rate limit exceeded. Try again later."}
+            )
+        
+        self.requests[client_ip].append(now)
+        response = await call_next(request)
+        return response
 
 from depth_estimation import estimate_depth, estimate_depth_with_info, load_model
 from dbh_calculator import (
@@ -63,16 +142,25 @@ def _resize_for_processing(image: Image.Image) -> tuple:
 app = FastAPI(
     title="TreeAI DBH Measurement Service",
     description="Pure vision DBH measurement using Depth Anything V2",
-    version="0.1.0",
+    version="0.2.0",
+    docs_url="/docs" if os.environ.get("ML_DEBUG", "").lower() == "true" else None,
+    redoc_url=None,
 )
 
-# CORS for Flutter web / dev
+# Rate limiting middleware (30 requests per hour per IP)
+app.add_middleware(
+    RateLimitMiddleware,
+    max_requests=int(os.environ.get("ML_RATE_LIMIT", "30")),
+    window_seconds=3600,
+)
+
+# CORS — restricted to known origins
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
+    allow_origins=ALLOWED_ORIGINS,
+    allow_credentials=False,
+    allow_methods=["GET", "POST", "OPTIONS"],
+    allow_headers=["Content-Type", "X-ML-API-Key", "Authorization"],
 )
 
 
@@ -96,13 +184,15 @@ async def startup_event():
 # Health Check
 # ============================================================
 
+@app.get("/health")
 @app.get("/api/v1/health")
 async def health_check():
-    """Health check endpoint."""
+    """Health check endpoint (no auth required)."""
     return {
         "status": "ok",
         "service": "dbh-measurement",
         "model": "Depth-Anything-V2-Metric-Outdoor-Small",
+        "auth_required": bool(ML_API_KEY),
     }
 
 
@@ -110,7 +200,7 @@ async def health_check():
 # Depth Estimation
 # ============================================================
 
-@app.post("/api/v1/estimate-depth")
+@app.post("/api/v1/estimate-depth", dependencies=[Depends(verify_api_key)])
 async def estimate_depth_endpoint(
     image: UploadFile = File(...),
     return_visualization: bool = Form(default=True),
@@ -161,7 +251,7 @@ async def estimate_depth_endpoint(
 # DBH Measurement
 # ============================================================
 
-@app.post("/api/v1/measure-dbh")
+@app.post("/api/v1/measure-dbh", dependencies=[Depends(verify_api_key)])
 async def measure_dbh_endpoint(
     image: UploadFile = File(...),
     bbox_x1: int = Form(..., description="Bounding box left x"),
@@ -317,7 +407,7 @@ async def measure_dbh_endpoint(
 # Auto DBH Measurement (No Manual Bbox)
 # ============================================================
 
-@app.post("/api/v1/auto-measure-dbh")
+@app.post("/api/v1/auto-measure-dbh", dependencies=[Depends(verify_api_key)])
 async def auto_measure_dbh_endpoint(
     image: UploadFile = File(...),
     focal_length_px: Optional[float] = Form(default=None,
@@ -508,7 +598,7 @@ async def auto_measure_dbh_endpoint(
 # Batch / Debug Endpoints
 # ============================================================
 
-@app.post("/api/v1/debug/depth-at-point")
+@app.post("/api/v1/debug/depth-at-point", dependencies=[Depends(verify_api_key)])
 async def depth_at_point(
     image: UploadFile = File(...),
     x: int = Form(...),

@@ -7,6 +7,18 @@ const { signJwt } = require('../middleware/jwtAuth');
 const AuditLogService = require('../services/auditLogService');
 const { checkAccountLocked, recordLoginFailure, resetLoginAttempts } = require('../middleware/loginAttemptMonitor');
 
+// RBAC 中介軟體：只允許管理員角色操作使用者管理
+const requireAdmin = (req, res, next) => {
+    const adminRoles = ['系統管理員', '業務管理員', '專案管理員', '調查管理員'];
+    if (!req.user || !adminRoles.includes(req.user.role)) {
+        return res.status(403).json({
+            success: false,
+            message: '權限不足：只有管理員可以執行此操作'
+        });
+    }
+    next();
+};
+
 // 使用者管理相關 API
 // 登入路由
 router.post('/login', loginLimiter, async (req, res) => {
@@ -127,6 +139,7 @@ router.post('/login', loginLimiter, async (req, res) => {
                     user_id: user.user_id,
                     username: user.username,
                     role: user.role,
+                    associated_projects: user.associated_projects || '',
                 });
             } catch (e) {
                 token = undefined;
@@ -157,8 +170,8 @@ router.post('/login', loginLimiter, async (req, res) => {
 });
 
 
-// 取得使用者列表
-router.get('/users', async (req, res) => {
+// 取得使用者列表 (管理員專用)
+router.get('/users', requireAdmin, async (req, res) => {
     try {
         // [FIX] 明確轉換 is_active 為布林值 (true/false)，避免前端混淆
         const { rows } = await db.query('SELECT user_id, username, display_name, role, is_active FROM users ORDER BY user_id ASC');
@@ -182,8 +195,8 @@ router.get('/users', async (req, res) => {
     }
 });
 
-// 新增使用者
-router.post('/users', async (req, res) => {
+// 新增使用者 (管理員專用)
+router.post('/users', requireAdmin, async (req, res) => {
     const { username, password, display_name, role } = req.body;
     const isActive = req.body.is_active === undefined ? true : (req.body.is_active ? true : false);
 
@@ -227,8 +240,8 @@ router.post('/users', async (req, res) => {
     }
 });
 
-// 修改使用者
-router.put('/users/:id', async (req, res) => {
+// 修改使用者 (管理員專用)
+router.put('/users/:id', requireAdmin, async (req, res) => {
     const { id } = req.params;
     const { display_name, role, password, is_active } = req.body;
 
@@ -294,8 +307,8 @@ router.put('/users/:id', async (req, res) => {
     }
 });
 
-// 切換使用者啟用狀態
-router.put('/users/:id/status', async (req, res) => {
+// 切換使用者啟用狀態 (管理員專用)
+router.put('/users/:id/status', requireAdmin, async (req, res) => {
     const { id } = req.params;
     const { isActive } = req.body;
 
@@ -339,8 +352,8 @@ router.put('/users/:id/status', async (req, res) => {
     }
 });
 
-// 刪除使用者
-router.delete('/users/:id', async (req, res) => {
+// 刪除使用者 (管理員專用)
+router.delete('/users/:id', requireAdmin, async (req, res) => {
     const { id } = req.params;
 
     try {
@@ -371,8 +384,8 @@ router.delete('/users/:id', async (req, res) => {
     }
 });
 
-// 獲取使用者關聯專案
-router.get('/users/:userId/projects', async (req, res) => {
+// 獲取使用者關聯專案 (管理員專用)
+router.get('/users/:userId/projects', requireAdmin, async (req, res) => {
     const { userId } = req.params;
 
     try {
@@ -414,8 +427,8 @@ router.get('/users/:userId/projects', async (req, res) => {
     }
 });
 
-// 更新使用者關聯專案
-router.put('/users/:userId/projects', async (req, res) => {
+// 更新使用者關聯專案 (管理員專用)
+router.put('/users/:userId/projects', requireAdmin, async (req, res) => {
     const { userId } = req.params;
     const { projects } = req.body; // 專案代碼陣列
 

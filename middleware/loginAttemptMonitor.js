@@ -148,6 +148,8 @@ async function checkAccountLocked(username) {
  */
 async function getLoginFailureStats(hours = 24) {
     try {
+        // 參數化查詢，避免 SQL 注入
+        const safeHours = Math.max(1, Math.min(8760, parseInt(hours, 10) || 24));
         const result = await pool.query(
             `SELECT 
                 username,
@@ -155,12 +157,12 @@ async function getLoginFailureStats(hours = 24) {
                 MAX(created_at) as last_failure
              FROM audit_logs
              WHERE action = 'LOGIN_FAILED'
-               AND created_at > NOW() - INTERVAL '${hours} hours'
+               AND created_at > NOW() - INTERVAL '1 hour' * $1
              GROUP BY username
              HAVING COUNT(*) >= 3
              ORDER BY failure_count DESC
              LIMIT 20`,
-            []
+            [safeHours]
         );
         
         return result.rows;

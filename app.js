@@ -43,14 +43,26 @@ app.get('/health', (req, res) => {
 });
 
 // --- 中介軟體 (Middleware) ---
+
+// CORS — 限制允許的來源
+const allowedOrigins = (process.env.CORS_ALLOWED_ORIGINS || '').split(',').map(s => s.trim()).filter(Boolean);
 app.use(cors({
-    origin: '*',
+    origin: allowedOrigins.length > 0
+        ? (origin, callback) => {
+            // 允許無 origin（如 mobile apps、curl）和白名單內的來源
+            if (!origin || allowedOrigins.includes(origin)) {
+                callback(null, true);
+            } else {
+                callback(null, false);
+            }
+        }
+        : '*', // 沒設定環境變數時退回 * (開發模式)
     methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
-    allowedHeaders: ['Content-Type', 'Authorization'],
+    allowedHeaders: ['Content-Type', 'Authorization', 'X-Admin-Token', 'X-API-Key'],
 }));
 app.use(helmet());
-app.use(express.json({ limit: '50mb' })); // 增加請求大小限制以應對潛在的大請求
-app.use(express.urlencoded({ extended: true, limit: '50mb' }));
+app.use(express.json({ limit: '10mb' })); // 縮小到 10MB，防止 DoS
+app.use(express.urlencoded({ extended: true, limit: '10mb' }));
 
 // --- 路由 (Routes) ---
 // 將所有 API 路由都放在 /api 前綴下
