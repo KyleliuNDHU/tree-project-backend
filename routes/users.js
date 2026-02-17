@@ -146,6 +146,15 @@ router.post('/login', loginLimiter, async (req, res) => {
             }
         }
 
+        // ML Service 設定（自架 ML 透過環境變數提供，登入後自動下發給 App）
+        const mlConfig = {};
+        if (process.env.ML_SERVICE_URL) {
+            mlConfig.url = process.env.ML_SERVICE_URL;
+        }
+        if (process.env.ML_API_KEY) {
+            mlConfig.apiKey = process.env.ML_API_KEY;
+        }
+
         res.status(200).json({
             success: true,
             message: '登錄成功',
@@ -157,7 +166,8 @@ router.post('/login', loginLimiter, async (req, res) => {
                 role: user.role,
                 associated_projects: user.associated_projects,
                 accessibleProjects: accessibleProjects // 新增此欄位
-            }
+            },
+            mlConfig: Object.keys(mlConfig).length > 0 ? mlConfig : undefined,
         });
 
     } catch (error) {
