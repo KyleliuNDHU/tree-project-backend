@@ -103,46 +103,9 @@ const listApiKeys = () => {
     }));
 };
 
-// 中間件：驗證 API 密鑰
-const apiKeyMiddleware = (req, res, next) => {
-    // 暫時禁用 API 密鑰驗證，便於測試
-    return next();
-    
-    // 跳過特定路徑的驗證（如登入）
-    const skipPaths = ['/login', '/api/login', '/api/register', '/api/reports/sustainability', '/api/admin/apikeys'];
-    if (skipPaths.includes(req.path)) {
-        return next();
-    }
-    
-    const apiKey = req.header('X-API-Key');
-    
-    if (!apiKey) {
-        return res.status(401).json({
-            success: false,
-            message: '缺少 API 密鑰'
-        });
-    }
-    
-    // 根據請求路徑和方法決定所需權限
-    let requiredPermission = 'read';
-    if (['POST', 'PUT', 'DELETE'].includes(req.method)) {
-        requiredPermission = 'write';
-    }
-    
-    if (!validateApiKey(apiKey, requiredPermission)) {
-        return res.status(403).json({
-            success: false,
-            message: '無效的 API 密鑰或權限不足'
-        });
-    }
-    
-    next();
-};
-
 module.exports = {
     generateApiKey,
     validateApiKey,
     deleteApiKey,
-    listApiKeys,
-    apiKeyMiddleware
-}; 
+    listApiKeys
+};

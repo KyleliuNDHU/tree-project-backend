@@ -1,5 +1,5 @@
 require('dotenv').config({ path: '../.env' });
-const db = require('../config/database');
+const db = require('../config/db');
 const { getEmbedding } = require('../services/knowledgeEmbeddingService');
 const { OpenAI } = require('openai');
 

@@ -1,21 +1,35 @@
 const express = require('express');
 const router = express.Router();
 const db = require('../config/db');
+const { requireRole } = require('../middleware/roleAuth');
+const { projectAuthFilter } = require('../middleware/projectAuth');
 
-// 取得專案列表 (從 tree_survey 表格中提取)
-router.get('/', async (req, res) => {
+// 取得專案列表 (依使用者權限過濾)
+router.get('/', projectAuthFilter, async (req, res) => {
     try {
-        // DISTINCT ON (project_code) 是 PostgreSQL 特有的語法，用來確保每個專案只返回一筆
-        const query = `
+        let query = `
             SELECT DISTINCT ON (project_code) 
                 project_name as name, 
                 project_code as code, 
                 project_location as area 
             FROM tree_survey 
             WHERE project_name IS NOT NULL AND project_name != ''
-            ORDER BY project_code, project_name;
         `;
-        const { rows } = await db.query(query);
+        const params = [];
+        let paramIdx = 1;
+
+        // 依使用者權限過濾專案
+        if (req.projectFilter) {
+            if (req.projectFilter.length === 0) {
+                return res.json({ success: true, data: [] });
+            }
+            query += ` AND project_code = ANY($${paramIdx}::text[])`;
+            params.push(req.projectFilter);
+            paramIdx++;
+        }
+
+        query += ` ORDER BY project_code, project_name`;
+        const { rows } = await db.query(query, params);
         res.json({ success: true, data: rows });
     } catch (err) {
         console.error('取得專案列表錯誤:', err);
@@ -99,7 +113,8 @@ router.get('/by_code/:code', async (req, res) => {
 // 解決方案：使用特殊標記 'PT-0' 或 'PLACEHOLDER' 作為佔位記錄的 project_tree_id
 // 這樣 treeSurveyCreateController.js 查詢 MAX 時會正確返回 null 或 0，第一筆實際資料就是 PT-1
 //
-router.post('/add', async (req, res) => {
+// 新增專案 (業務管理員以上)
+router.post('/add', requireRole('業務管理員'), async (req, res) => {
     const { name, area } = req.body;
     if (!name || !area) {
         return res.status(400).json({ success: false, message: '請提供專案名稱與區位' });
@@ -142,6 +157,23 @@ router.post('/add', async (req, res) => {
         
         await client.query('COMMIT');
 
+        // 自動將創建者關聯到新專案
+        if (req.user && req.user.user_id) {
+            try {
+                const { rows: userRows } = await db.query('SELECT associated_projects FROM users WHERE user_id = $1', [req.user.user_id]);
+                if (userRows.length > 0) {
+                    const existing = userRows[0].associated_projects || '';
+                    const projectList = existing ? existing.split(',') : [];
+                    if (!projectList.includes(nextCode.toString())) {
+                        projectList.push(nextCode.toString());
+                        await db.query('UPDATE users SET associated_projects = $1 WHERE user_id = $2', [projectList.join(','), req.user.user_id]);
+                    }
+                }
+            } catch (autoAssignErr) {
+                console.error('自動關聯專案失敗 (非致命):', autoAssignErr);
+            }
+        }
+
         res.status(201).json({
             success: true,
             message: '專案新增成功',
@@ -158,8 +190,8 @@ router.post('/add', async (req, res) => {
     }
 });
 
-// 刪除專案 (刪除該專案代碼下的所有樹木資料)
-router.delete('/:code', async (req, res) => {
+// 刪除專案 (刪除該專案代碼下的所有樹木+邊界+區域資料) — 業務管理員以上
+router.delete('/:code', requireRole('業務管理員'), async (req, res) => {
     const { code } = req.params;
     
     if (!code) {
@@ -179,15 +211,31 @@ router.delete('/:code', async (req, res) => {
             return res.status(404).json({ success: false, message: '找不到指定專案或該專案已無資料' });
         }
 
-        // 刪除專案下所有資料
+        // 取得專案名稱（用於刪除邊界）
+        const { rows: nameRows } = await client.query('SELECT DISTINCT project_name FROM tree_survey WHERE project_code = $1 LIMIT 1', [code]);
+        const projectName = nameRows.length > 0 ? nameRows[0].project_name : null;
+
+        // 1. 刪除專案邊界
+        if (projectName) {
+            await client.query('DELETE FROM project_boundaries WHERE project_name = $1 OR project_code = $2', [projectName, code]);
+        }
+
+        // 2. 刪除專案下所有樹木資料
         const deleteQuery = `DELETE FROM tree_survey WHERE project_code = $1`;
         await client.query(deleteQuery, [code]);
+
+        // 3. 清理使用者的 associated_projects 中的此專案代碼
+        const { rows: allUsers } = await client.query('SELECT user_id, associated_projects FROM users WHERE associated_projects IS NOT NULL');
+        for (const user of allUsers) {
+            const projects = user.associated_projects.split(',').filter(p => p.trim() !== code);
+            await client.query('UPDATE users SET associated_projects = $1 WHERE user_id = $2', [projects.join(','), user.user_id]);
+        }
 
         await client.query('COMMIT');
         
         res.json({ 
             success: true, 
-            message: `專案 (代碼: ${code}) 及其所有樹木資料已刪除` 
+            message: `專案 (代碼: ${code}) 及其所有樹木資料、邊界已刪除` 
         });
     } catch (err) {
         await client.query('ROLLBACK');

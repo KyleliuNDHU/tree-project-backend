@@ -4,6 +4,7 @@ const db = require('../config/db');
 const fs = require('fs');
 const path = require('path');
 const { v4: uuidv4 } = require('uuid');
+const { requireRole } = require('../middleware/roleAuth');
 
 // 確保圖片儲存目錄存在
 const UPLOAD_DIR = path.join(__dirname, '..', 'uploads', 'tree_images');
@@ -200,10 +201,10 @@ router.get('/tree/:treeId', async (req, res) => {
 });
 
 /**
- * 刪除影像
+ * 刪除影像 — 需要管理員權限
  * DELETE /api/tree-images/:id
  */
-router.delete('/:id', async (req, res) => {
+router.delete('/:id', requireRole('專案管理員'), async (req, res) => {
     const { id } = req.params;
     const client = await db.pool.connect();
 

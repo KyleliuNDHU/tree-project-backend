@@ -43,9 +43,27 @@ function getCountyByCoordinates(lat, lng) {
 
 // 驗證位置是否在指定區位的合理範圍內
 router.post('/validate', (req, res) => {
-    // ... (此部分邏輯較為複雜且可能不直接涉及資料庫，暫時保持原樣)
     const { area, latitude, longitude } = req.body;
-    res.json({ success: true, isValid: true, message: '位置驗證功能待重構' });
+    
+    // 基本座標範圍驗證（台灣範圍）
+    const lat = parseFloat(latitude);
+    const lng = parseFloat(longitude);
+    if (isNaN(lat) || isNaN(lng) || lat < 21.5 || lat > 26.5 || lng < 119 || lng > 123) {
+        return res.json({ success: true, isValid: false, message: '座標超出台灣範圍' });
+    }
+    
+    // 使用 GeoJSON 判斷座標所在區位
+    const suggestedArea = getCountyByCoordinates(lat, lng);
+    if (area && suggestedArea && suggestedArea !== area) {
+        return res.json({ 
+            success: true, 
+            isValid: false, 
+            message: `座標位於「${suggestedArea}」，與指定區位「${area}」不符`,
+            suggestedArea 
+        });
+    }
+    
+    res.json({ success: true, isValid: true, message: '位置驗證通過' });
 });
   
 // 建議合理的區位

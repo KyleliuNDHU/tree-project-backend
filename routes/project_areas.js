@@ -9,6 +9,7 @@ const {
     cleanupOrphanedPlaceholders,
     cleanupOldChatLogs // 引入新的清理函式
 } = require('../utils/cleanup');
+const { requireRole } = require('../middleware/roleAuth');
 
 // 載入台灣縣市 GeoJSON 資料
 let countyPolygons = new Map();
@@ -74,8 +75,8 @@ router.get('/', async (req, res) => {
     }
 });
 
-// 新增專案區位
-router.post('/', async (req, res) => {
+// 新增專案區位 (專案管理員以上)
+router.post('/', requireRole('專案管理員'), async (req, res) => {
     const { area_name, description, city, xCoord, yCoord, isSubmit } = req.body;
     if (!area_name) {
         return res.status(400).json({ success: false, message: '區位名稱不能為空' });
@@ -95,6 +96,9 @@ router.post('/', async (req, res) => {
                 data: { area_name, area_code: existingAreas[0].area_code, description, city: existingAreas[0].city }
             });
         }
+
+        // 使用 Advisory Lock (Key 3) 確保區位代碼生成的原子性
+        await client.query('SELECT pg_advisory_xact_lock(3)');
 
         const { rows: allAreas } = await client.query('SELECT area_code FROM project_areas');
         const usedNumbers = new Set(allAreas.map(row => {
@@ -136,8 +140,8 @@ router.post('/', async (req, res) => {
     }
 });
 
-// 修改專案區位
-router.put('/:id', async (req, res) => {
+// 修改專案區位 (專案管理員以上)
+router.put('/:id', requireRole('專案管理員'), async (req, res) => {
     const { id } = req.params;
     const { area_name, area_code, description } = req.body;
     if (!area_name || !area_code) {
@@ -156,8 +160,8 @@ router.put('/:id', async (req, res) => {
     }
 });
 
-// 刪除專案區位
-router.delete('/:id', async (req, res) => {
+// 刪除專案區位 — 專案管理員以上
+router.delete('/:id', requireRole('專案管理員'), async (req, res) => {
     const { id } = req.params;
     try {
         const { rowCount } = await db.query('DELETE FROM project_areas WHERE id = $1', [id]);
@@ -173,8 +177,8 @@ router.delete('/:id', async (req, res) => {
 });
 
 
-// 手動觸發清理
-router.post('/cleanup', async (req, res) => {
+// 手動觸發清理 — 系統管理員專用
+router.post('/cleanup', requireRole('系統管理員'), async (req, res) => {
     try {
         console.log('[API] Manual cleanup process triggered.');
         // 呼叫所有清理函式

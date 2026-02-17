@@ -1,39 +1,41 @@
-const jwt = require('jsonwebtoken');
+const crypto = require('crypto');
+
+/**
+ * 常數時間字串比較，防止 timing attack
+ */
+function safeCompare(a, b) {
+    if (typeof a !== 'string' || typeof b !== 'string') return false;
+    if (a.length !== b.length) {
+        const dummy = Buffer.alloc(a.length, 0);
+        crypto.timingSafeEqual(dummy, Buffer.from(a));
+        return false;
+    }
+    return crypto.timingSafeEqual(Buffer.from(a), Buffer.from(b));
+}
 
 const adminAuth = (req, res, next) => {
-    // 1. Token-based auth (Header or Query) - For scripts/API calls
-    const token = req.headers['x-admin-token'] || req.query.admin_token;
+    // 1. X-Admin-Token 驗證（僅 Header，不接受 query string）
+    const token = req.headers['x-admin-token'];
     const validToken = process.env.ADMIN_API_TOKEN;
 
-    if (token && validToken && token === validToken) {
+    if (token && validToken && safeCompare(token, validToken)) {
         req.isAdmin = true;
         return next();
     }
 
-    // 2. JWT-based auth — check if decoded JWT has admin role
-    const authHeader = req.headers.authorization;
-    if (authHeader && authHeader.startsWith('Bearer ')) {
-        const jwtToken = authHeader.slice(7).trim();
-        const secret = process.env.JWT_SECRET;
-        if (jwtToken && secret) {
-            try {
-                const decoded = jwt.verify(jwtToken, secret);
-                const adminRoles = ['系統管理員', '業務管理員', '專案管理員', '調查管理員'];
-                if (decoded.role && adminRoles.includes(decoded.role)) {
-                    req.isAdmin = true;
-                    req.user = decoded;
-                    return next();
-                }
-            } catch (err) {
-                // JWT invalid or expired — fall through
-            }
+    // 2. JWT — 使用 jwtAuth 中間件已解析的 req.user
+    //    不再重複解析 JWT，直接檢查角色
+    if (req.user && req.user.role) {
+        const adminRoles = ['系統管理員', '業務管理員', '專案管理員'];
+        if (adminRoles.includes(req.user.role)) {
+            req.isAdmin = true;
+            return next();
         }
     }
 
-    // Auth failed
     return res.status(401).json({
         success: false,
-        message: 'Unauthorized: Admin access required'
+        message: '未授權：需要管理員權限'
     });
 };
 

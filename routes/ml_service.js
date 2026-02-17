@@ -93,7 +93,6 @@ router.get('/status', async (req, res) => {
                 success: true,
                 configured: true,
                 online: false,
-                url: mlUrl,
                 message: 'ML Service 無法連線',
             });
         }
@@ -102,7 +101,6 @@ router.get('/status', async (req, res) => {
             success: true,
             configured: true,
             online: true,
-            url: mlUrl,
             health,
         });
     } catch (err) {

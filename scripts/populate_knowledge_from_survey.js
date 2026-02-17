@@ -1,5 +1,5 @@
 require('dotenv').config({ path: '../.env' }); // 確保能載入 .env
-const db = require('../config/database'); // db 現在包含 { query, pool }
+const db = require('../config/db'); // db 現在包含 { query, pool }
 const { getEmbedding } = require('../services/knowledgeEmbeddingService'); // 引入嵌入生成函數
 
 async function processTreeSurveyData() {

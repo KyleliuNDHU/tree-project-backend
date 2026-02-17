@@ -12,6 +12,7 @@ const treeSurveyCreateController = require('../controllers/treeSurveyCreateContr
 const treeSurveyUpdateController = require('../controllers/treeSurveyUpdateController'); // 引入新的 Update Controller
 const AuditLogService = require('../services/auditLogService');
 const { projectAuth, projectAuthFilter } = require('../middleware/projectAuth');
+const { requireRole } = require('../middleware/roleAuth');
 
 // --- Multer 設定 (用於檔案上傳) ---
 const storage = multer.diskStorage({
@@ -44,8 +45,8 @@ const upload = multer({
   }
 });
 
-// 取得所有樹木資料 (可選通過 project name 或 area name 過濾)
-router.get('/', async (req, res) => {
+// 取得所有樹木資料 (依使用者權限過濾專案)
+router.get('/', projectAuthFilter, async (req, res) => {
     try {
         // 支援分頁參數
         const limit = req.query.limit ? parseInt(req.query.limit) : null;
@@ -75,27 +76,63 @@ router.get('/', async (req, res) => {
                 carbon_sequestration_per_year AS "推估年碳吸存量"
             FROM tree_survey 
             WHERE (is_placeholder IS NULL OR is_placeholder = false)
-            ORDER BY id ASC
         `;
 
-        // 如果有提供 limit，則加入分頁
-        if (limit) {
-            sql += ` LIMIT ${limit} OFFSET ${offset}`;
+        const params = [];
+        let paramIdx = 1;
+
+        // 依使用者權限過濾專案
+        if (req.projectFilter) {
+            if (req.projectFilter.length === 0) {
+                return res.json({ success: true, data: [] });
+            }
+            sql += ` AND project_code = ANY($${paramIdx}::text[])`;
+            params.push(req.projectFilter);
+            paramIdx++;
         }
 
-        const { rows } = await db.query(sql);
-        // 將回應包裹在標準格式中
-        res.json({ success: true, data: rows });
+        sql += ` ORDER BY id ASC`;
+
+        // 使用參數化查詢避免 SQL injection
+        if (limit && Number.isFinite(limit) && limit > 0) {
+            sql += ` LIMIT $${paramIdx}`;
+            params.push(limit);
+            paramIdx++;
+            if (Number.isFinite(offset) && offset >= 0) {
+                sql += ` OFFSET $${paramIdx}`;
+                params.push(offset);
+                paramIdx++;
+            }
+        }
+
+        const { rows } = await db.query(sql, params);
+        
+        // 回傳資料與分頁資訊
+        const response = { success: true, data: rows };
+        if (limit) {
+            let countSql = `SELECT COUNT(*) FROM tree_survey WHERE (is_placeholder IS NULL OR is_placeholder = false)`;
+            const countParams = [];
+            let countIdx = 1;
+            if (req.projectFilter && req.projectFilter.length > 0) {
+                countSql += ` AND project_code = ANY($${countIdx}::text[])`;
+                countParams.push(req.projectFilter);
+            }
+            const countResult = await db.query(countSql, countParams);
+            response.totalCount = parseInt(countResult.rows[0].count, 10);
+            response.limit = limit;
+            response.offset = offset;
+        }
+        res.json(response);
     } catch (err) {
         console.error('獲取所有樹木資料錯誤:', err);
         res.status(500).json({ success: false, message: '查詢資料庫時發生錯誤' });
     }
 });
 
-// [優化] 地圖專用精簡 API - 只回傳地圖需要的欄位，減少約 70% 傳輸量
-router.get('/map', async (req, res) => {
+// [優化] 地圖專用精簡 API (依使用者權限過濾)
+router.get('/map', projectAuthFilter, async (req, res) => {
     try {
-        const sql = `
+        let sql = `
             SELECT 
                 id,
                 project_location AS "專案區位",
@@ -109,9 +146,21 @@ router.get('/map', async (req, res) => {
               AND x_coord != 0 
               AND y_coord != 0
               AND (is_placeholder IS NULL OR is_placeholder = false)
-            ORDER BY id ASC
         `;
-        const { rows } = await db.query(sql);
+        const params = [];
+        let paramIdx = 1;
+
+        if (req.projectFilter) {
+            if (req.projectFilter.length === 0) {
+                return res.json({ success: true, data: [] });
+            }
+            sql += ` AND project_code = ANY($${paramIdx}::text[])`;
+            params.push(req.projectFilter);
+            paramIdx++;
+        }
+
+        sql += ` ORDER BY id ASC`;
+        const { rows } = await db.query(sql, params);
         res.json({ success: true, data: rows });
     } catch (err) {
         console.error('獲取地圖樹木資料錯誤:', err);
@@ -119,11 +168,11 @@ router.get('/map', async (req, res) => {
     }
 });
 
-// [V2 NEW] 根據 ID 獲取單筆樹木資料
-router.get('/by_id/:id', async (req, res) => {
+// [V2 NEW] 根據 ID 獲取單筆樹木資料 (依使用者權限過濾)
+router.get('/by_id/:id', projectAuthFilter, async (req, res) => {
     const { id } = req.params;
     try {
-        const sql = `
+        let sql = `
             SELECT 
                 id,
                 project_location AS "專案區位",
@@ -147,7 +196,19 @@ router.get('/by_id/:id', async (req, res) => {
             FROM tree_survey 
             WHERE id = $1
         `;
-        const { rows } = await db.query(sql, [id]);
+        const params = [id];
+        let paramIdx = 2;
+
+        // 依使用者權限過濾
+        if (req.projectFilter) {
+            if (req.projectFilter.length === 0) {
+                return res.status(403).json({ success: false, message: '無權限查看此資料' });
+            }
+            sql += ` AND project_code = ANY($${paramIdx}::text[])`;
+            params.push(req.projectFilter);
+        }
+
+        const { rows } = await db.query(sql, params);
         if (rows.length > 0) {
             res.json({ success: true, data: rows[0] });
         } else {
@@ -159,11 +220,11 @@ router.get('/by_id/:id', async (req, res) => {
     }
 });
 
-// 根據專案名稱獲取樹木
-router.get('/by_project/:projectName', async (req, res) => {
+// 根據專案名稱獲取樹木 (依使用者權限過濾)
+router.get('/by_project/:projectName', projectAuthFilter, async (req, res) => {
     const { projectName } = req.params;
     try {
-        const sql = `
+        let sql = `
             SELECT 
                 id,
                 project_location AS "專案區位",
@@ -185,10 +246,21 @@ router.get('/by_project/:projectName', async (req, res) => {
                 carbon_storage AS "碳儲存量",
                 carbon_sequestration_per_year AS "推估年碳吸存量"
             FROM tree_survey 
-            WHERE project_name = $1 
-            ORDER BY project_tree_id ASC
+            WHERE project_name = $1
         `;
-        const { rows } = await db.query(sql, [projectName]);
+        const params = [projectName];
+        let paramIdx = 2;
+
+        if (req.projectFilter) {
+            if (req.projectFilter.length === 0) {
+                return res.json({ success: true, data: [] });
+            }
+            sql += ` AND project_code = ANY($${paramIdx}::text[])`;
+            params.push(req.projectFilter);
+        }
+
+        sql += ` ORDER BY project_tree_id ASC`;
+        const { rows } = await db.query(sql, params);
         // 將回應包裹在標準格式中
         res.json({ success: true, data: rows });
     } catch (err) {
@@ -197,11 +269,11 @@ router.get('/by_project/:projectName', async (req, res) => {
     }
 });
 
-// 根據區位名稱獲取樹木
-router.get('/by_area/:areaName', async (req, res) => {
+// 根據區位名稱獲取樹木 (依使用者權限過濾)
+router.get('/by_area/:areaName', projectAuthFilter, async (req, res) => {
     const { areaName } = req.params;
     try {
-        const sql = `
+        let sql = `
             SELECT 
                 id,
                 project_location AS "專案區位",
@@ -223,10 +295,21 @@ router.get('/by_area/:areaName', async (req, res) => {
                 carbon_storage AS "碳儲存量",
                 carbon_sequestration_per_year AS "推估年碳吸存量"
             FROM tree_survey 
-            WHERE project_location = $1 
-            ORDER BY system_tree_id ASC
+            WHERE project_location = $1
         `;
-        const { rows } = await db.query(sql, [areaName]);
+        const params = [areaName];
+        let paramIdx = 2;
+
+        if (req.projectFilter) {
+            if (req.projectFilter.length === 0) {
+                return res.json({ success: true, data: [] });
+            }
+            sql += ` AND project_code = ANY($${paramIdx}::text[])`;
+            params.push(req.projectFilter);
+        }
+
+        sql += ` ORDER BY system_tree_id ASC`;
+        const { rows } = await db.query(sql, params);
         // 將回應包裹在標準格式中
         res.json({ success: true, data: rows });
     } catch (err) {
@@ -236,14 +319,13 @@ router.get('/by_area/:areaName', async (req, res) => {
 });
 
 // --- Batch Import Route (v2) ---
-router.post('/batch_import', projectAuth, treeSurveyBatchController.batchImportTrees);
+router.post('/batch_import', requireRole('調查管理員'), projectAuth, treeSurveyBatchController.batchImportTrees);
 
 // --- Single Create Route (v2) - For manual input with server-side ID generation ---
-router.post('/create_v2', projectAuth, treeSurveyCreateController.createTreeV2);
+router.post('/create_v2', requireRole('調查管理員'), projectAuth, treeSurveyCreateController.createTreeV2);
 
-// 新增樹木資料
-// 需要專案權限驗證
-router.post('/', projectAuth, async (req, res) => {
+// 新增樹木資料 (調查管理員以上 + 專案權限)
+router.post('/', requireRole('調查管理員'), projectAuth, async (req, res) => {
     const {
         '專案區位': project_location, '專案代碼': project_code, '專案名稱': project_name, 
         '系統樹木': system_tree_id, '專案樹木': project_tree_id, '樹種編號': species_id, 
@@ -305,11 +387,10 @@ router.post('/', projectAuth, async (req, res) => {
 });
 
 // --- Single Update Route (v2) ---
-router.put('/update_v2/:id', projectAuth, treeSurveyUpdateController.updateTreeV2);
+router.put('/update_v2/:id', requireRole('調查管理員'), projectAuth, treeSurveyUpdateController.updateTreeV2);
 
-// 編輯樹木資料
-// 需要專案權限驗證（會自動查詢該樹木的 project_code）
-router.put('/:id', projectAuth, async (req, res) => {
+// 編輯樹木資料 (調查管理員以上 + 專案權限)
+router.put('/:id', requireRole('調查管理員'), projectAuth, async (req, res) => {
     const { id } = req.params;
 
     // 中文鍵名到資料庫欄位的映射
@@ -375,14 +456,14 @@ router.put('/:id', projectAuth, async (req, res) => {
 });
 
 
-// [NEW] 刪除指定的佔位樹木記錄
-router.delete('/placeholder/:id', async (req, res) => {
+// [NEW] 刪除指定的佔位樹木記錄 — 專案管理員以上 + 專案權限
+router.delete('/placeholder/:id', requireRole('專案管理員'), projectAuth, async (req, res) => {
     const { id } = req.params;
     try {
-        // 增加一層額外的安全檢查，確保只刪除真的是'預設樹種'的紀錄
+        // 使用 is_placeholder 欄位而非 species_name 來判斷佔位記錄
         const sql = `
             DELETE FROM tree_survey 
-            WHERE id = $1 AND species_name = '預設樹種'
+            WHERE id = $1 AND (is_placeholder = true OR species_name = '__PLACEHOLDER__' OR species_name = '預設樹種')
         `;
         const { rowCount } = await db.query(sql, [id]);
         
@@ -398,9 +479,8 @@ router.delete('/placeholder/:id', async (req, res) => {
     }
 });
 
-// 刪除樹木資料
-// 需要專案權限驗證
-router.delete('/:id', projectAuth, async (req, res) => {
+// 刪除樹木資料 (專案管理員以上 + 專案權限)
+router.delete('/:id', requireRole('專案管理員'), projectAuth, async (req, res) => {
     const { id } = req.params;
     try {
         const { rowCount } = await db.query('DELETE FROM tree_survey WHERE id = $1', [id]);
@@ -496,8 +576,8 @@ router.get('/common_species/:projectCode', async (req, res) => {
 });
 
 
-// 批量匯入 (從 index_4.js 遷移並重構)
-router.post('/import', upload.single('file'), async (req, res) => {
+// 批量匯入 (調查管理員以上)
+router.post('/import', requireRole('調查管理員'), upload.single('file'), async (req, res) => {
     if (!req.file) {
       return res.status(400).json({ success: false, message: '請選擇要上傳的文件' });
     }

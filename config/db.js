@@ -1,23 +1,31 @@
 const { Pool } = require('pg');
 require('dotenv').config();
 
+// SSL 設定：生產環境應設定 DB_SSL_REJECT_UNAUTHORIZED=true（預設 false 以相容 Render）
+const sslConfig = process.env.DATABASE_URL
+  ? {
+      rejectUnauthorized: process.env.DB_SSL_REJECT_UNAUTHORIZED === 'true',
+    }
+  : false;
+
 const pool = new Pool({
   connectionString: process.env.DATABASE_URL,
-  ssl: {
-    rejectUnauthorized: false
-  },
-  max: 10, // 最大連接數
-  idleTimeoutMillis: 30000, // 連接閒置 30 秒後關閉
-  connectionTimeoutMillis: 10000 // 連接超時 10 秒
+  ssl: sslConfig,
+  max: 10,
+  idleTimeoutMillis: 30000,
+  connectionTimeoutMillis: 10000,
 });
 
 pool.on('connect', () => {
-  console.log('成功連接到 PostgreSQL 資料庫！');
+  console.log('成功連接到 PostgreSQL 資料庫');
 });
 
 pool.on('error', (err) => {
   console.error('資料庫連接發生非預期錯誤:', err);
-  process.exit(-1);
+  // 優雅關閉而非強制退出
+  if (err.message && err.message.includes('Connection terminated unexpectedly')) {
+    console.error('資料庫連接異常中斷，pool 將自動重連');
+  }
 });
 
 module.exports = {

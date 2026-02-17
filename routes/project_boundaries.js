@@ -12,6 +12,8 @@ const express = require('express');
 const router = express.Router();
 const db = require('../config/db');
 const turf = require('@turf/turf');
+const { requireRole } = require('../middleware/roleAuth');
+const { projectAuthFilter } = require('../middleware/projectAuth');
 
 /**
  * 初始化資料表 (如果不存在)
@@ -43,16 +45,30 @@ async function initializeTable() {
 initializeTable();
 
 /**
- * 取得所有專案邊界
+ * 取得所有專案邊界 (依使用者權限過濾)
  * GET /api/project_boundaries
  */
-router.get('/', async (req, res) => {
+router.get('/', projectAuthFilter, async (req, res) => {
     try {
-        const { rows } = await db.query(`
+        let query = `
             SELECT id, project_name, project_code, boundary_coordinates, created_at, updated_at
             FROM project_boundaries
-            ORDER BY project_name ASC
-        `);
+        `;
+        const params = [];
+        let paramIdx = 1;
+
+        // 依使用者權限過濾
+        if (req.projectFilter) {
+            if (req.projectFilter.length === 0) {
+                return res.json({ success: true, data: [] });
+            }
+            query += ` WHERE project_code = ANY($${paramIdx}::text[])`;
+            params.push(req.projectFilter);
+            paramIdx++;
+        }
+
+        query += ` ORDER BY project_name ASC`;
+        const { rows } = await db.query(query, params);
         
         res.json({ 
             success: true, 
@@ -119,7 +135,7 @@ router.get('/:projectName', async (req, res) => {
  *   coordinates: [[lat, lng], [lat, lng], ...] // 多邊形頂點
  * }
  */
-router.post('/', async (req, res) => {
+router.post('/', requireRole('專案管理員'), async (req, res) => {
     const { projectName, projectCode, coordinates } = req.body;
     
     // 驗證輸入
@@ -223,10 +239,10 @@ router.post('/', async (req, res) => {
 });
 
 /**
- * 刪除專案邊界
+ * 刪除專案邊界 — 專案管理員以上
  * DELETE /api/project_boundaries/:projectName
  */
-router.delete('/:projectName', async (req, res) => {
+router.delete('/:projectName', requireRole('專案管理員'), async (req, res) => {
     const { projectName } = req.params;
     
     try {

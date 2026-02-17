@@ -8,19 +8,14 @@ const reportController = require('../controllers/reportController');
 const aiReportController = require('../controllers/aiReportController');
 const openaiController = require('../controllers/openaiController');
 const format = require('pg-format');
-const { exec } = require('child_process');
+const { exec, execFile } = require('child_process');
 const fs = require('fs');
 const path = require('path');
 const apiKeys = require('../config/apiKeys');
-const adminAuth = require('../middleware/adminAuth'); // Import auth middleware
-
-// Script runners
-// const populateKnowledgeFromSurvey = require('../scripts/populate_knowledge_from_survey');
-// const populateSpeciesRegionScore = require('../scripts/populateSpeciesRegionScore');
-// const generateEmbeddings = require('../scripts/generateEmbeddings');
+const { requireRole } = require('../middleware/roleAuth');
 
 // --- Admin Script Execution Endpoint ---
-router.post('/run-script', adminAuth, async (req, res) => {
+router.post('/run-script', requireRole('系統管理員'), async (req, res) => {
     const { scriptName } = req.body;
 
     if (!scriptName) {
@@ -143,8 +138,8 @@ const aiLimiter = rateLimit({
 });
 
 
-// Chat API — 需要 adminAuth 保護（防止未授權使用付費 AI API）
-router.post('/chat', adminAuth, aiLimiter, async (req, res) => {
+// Chat API — 需要調查管理員以上保護（防止未授權使用付費 AI API）
+router.post('/chat', requireRole('調查管理員'), aiLimiter, async (req, res) => {
     try {
         const { message, projectAreas, userId, model_preference = 'gpt-4.1-mini' } = req.body;
     
@@ -248,9 +243,9 @@ router.post('/chat', adminAuth, aiLimiter, async (req, res) => {
   }
 });
 
-// AI報告相關路由 — 全部加上 adminAuth
-router.get('/reports/ai-sustainability', adminAuth, aiLimiter, aiReportController.generateAIReport);
-router.get('/reports/ai-sustainability/pdf', adminAuth, aiLimiter, async (req, res) => {
+// AI報告相關路由 — 調查管理員以上
+router.get('/reports/ai-sustainability', requireRole('調查管理員'), aiLimiter, aiReportController.generateAIReport);
+router.get('/reports/ai-sustainability/pdf', requireRole('調查管理員'), aiLimiter, async (req, res) => {
     // 此路由較複雜，暫時保持原樣，待確認 controller 內部邏輯
     try {
         const originalJson = res.json;
@@ -277,17 +272,17 @@ router.get('/reports/ai-sustainability/pdf', adminAuth, aiLimiter, async (req, r
     }
 });
 
-// 其他 AI 相關路由 — 全部加上 adminAuth
-router.post('/sustainability-policy', adminAuth, aiLimiter, openaiController.generateSustainabilityPolicyRecommendations);
-router.get('/carbon-education/:topic', adminAuth, aiLimiter, openaiController.generateCarbonEducationContent);
-router.post('/carbon-footprint/advice', adminAuth, aiLimiter, openaiController.generateCarbonFootprintAdvice);
-router.post('/species-comparison', adminAuth, aiLimiter, openaiController.generateSpeciesCarbonComparison);
+// 其他 AI 相關路由 — 調查管理員以上
+router.post('/sustainability-policy', requireRole('調查管理員'), aiLimiter, openaiController.generateSustainabilityPolicyRecommendations);
+router.get('/carbon-education/:topic', requireRole('調查管理員'), aiLimiter, openaiController.generateCarbonEducationContent);
+router.post('/carbon-footprint/advice', requireRole('調查管理員'), aiLimiter, openaiController.generateCarbonFootprintAdvice);
+router.post('/species-comparison', requireRole('調查管理員'), aiLimiter, openaiController.generateSpeciesCarbonComparison);
 
 
 // --- 備份與還原 (使用 pg_dump 和 pg_restore) ---
 
 // 備份資料庫
-router.post('/backup', adminAuth, (req, res) => {
+router.post('/backup', requireRole('系統管理員'), (req, res) => {
     const backupDir = path.join(__dirname, '..', 'backups');
     if (!fs.existsSync(backupDir)) {
         fs.mkdirSync(backupDir, { recursive: true });
@@ -304,11 +299,10 @@ router.post('/backup', adminAuth, (req, res) => {
     const host = dbUrl.hostname;
     const port = dbUrl.port;
 
-    // 構建 pg_dump 命令
-    // 使用環境變數傳遞密碼，避免在命令行中暴露
-    const command = `pg_dump -h ${host} -p ${port} -U ${user} -d ${dbName} -F c -b -v -f "${backupFile}"`;
+    // 構建 pg_dump 命令 — 使用 execFile 避免命令注入
+    const args = ['-h', host, '-p', port, '-U', user, '-d', dbName, '-F', 'c', '-b', '-v', '-f', backupFile];
 
-    exec(command, { env: { ...process.env, PGPASSWORD: password } }, (error, stdout, stderr) => {
+    execFile('pg_dump', args, { env: { ...process.env, PGPASSWORD: password } }, (error, stdout, stderr) => {
         if (error) {
             console.error('PostgreSQL 備份錯誤:', stderr);
             return res.status(500).json({
@@ -326,7 +320,7 @@ router.post('/backup', adminAuth, (req, res) => {
 });
 
 // 還原資料庫
-router.post('/restore', adminAuth, (req, res) => {
+router.post('/restore', requireRole('系統管理員'), (req, res) => {
     const { backupFile } = req.body;
     
     // 防止路徑遍歷和命令注入
@@ -351,10 +345,10 @@ router.post('/restore', adminAuth, (req, res) => {
     const host = dbUrl.hostname;
     const port = dbUrl.port;
 
-    // 構建 pg_restore 命令 — 使用 resolvedPath 而非用戶輸入
-    const command = `pg_restore -h ${host} -p ${port} -U ${user} -d ${dbName} --clean --if-exists -v "${resolvedPath}"`;
+    // 構建 pg_restore 命令 — 使用 execFile 避免命令注入
+    const args = ['-h', host, '-p', port, '-U', user, '-d', dbName, '--clean', '--if-exists', '-v', resolvedPath];
 
-    exec(command, { env: { ...process.env, PGPASSWORD: password } }, (error, stdout, stderr) => {
+    execFile('pg_restore', args, { env: { ...process.env, PGPASSWORD: password } }, (error, stdout, stderr) => {
         if (error) {
             console.error('PostgreSQL 還原錯誤:', stderr);
             return res.status(500).json({
@@ -373,15 +367,14 @@ router.post('/restore', adminAuth, (req, res) => {
 
 // --- API 密鑰管理 ---
 
-router.post('/apikeys', adminAuth, (req, res) => {
+router.post('/apikeys', requireRole('系統管理員'), (req, res) => {
     try {
-        const { name, key } = req.body;
-        if (!name || !key) {
-            return res.status(400).json({ success: false, message: 'API Key 名稱和金鑰不能為空' });
+        const { name, permissions } = req.body;
+        if (!name) {
+            return res.status(400).json({ success: false, message: 'API Key 名稱不能為空' });
         }
-        const newKey = { name, key };
-        apiKeys.push(newKey);
-        res.json({ success: true, data: newKey });
+        const key = apiKeys.generateApiKey(name, permissions || ['read']);
+        res.json({ success: true, data: { name, key, permissions: permissions || ['read'] } });
     } catch (error) {
         console.error('創建 API 密鑰錯誤:', error);
         res.status(500).json({
@@ -392,9 +385,10 @@ router.post('/apikeys', adminAuth, (req, res) => {
     }
 });
 
-router.get('/apikeys', adminAuth, (req, res) => {
+router.get('/apikeys', requireRole('系統管理員'), (req, res) => {
     try {
-        res.json({ success: true, data: apiKeys });
+        const keys = apiKeys.listApiKeys();
+        res.json({ success: true, data: keys });
     } catch (error) {
         console.error('獲取 API 密鑰列表錯誤:', error);
         res.status(500).json({
@@ -405,13 +399,12 @@ router.get('/apikeys', adminAuth, (req, res) => {
     }
 });
 
-router.delete('/apikeys/:id', adminAuth, (req, res) => {
+router.delete('/apikeys/:id', requireRole('系統管理員'), (req, res) => {
     const { id } = req.params;
     
     try {
-        const initialLength = apiKeys.length;
-        apiKeys = apiKeys.filter((_, index) => index !== parseInt(id));
-        if (apiKeys.length < initialLength) {
+        const deleted = apiKeys.deleteApiKey(id);
+        if (deleted) {
             res.json({ success: true, message: 'API Key 已刪除' });
         } else {
             res.status(404).json({ success: false, message: 'API Key 未找到' });

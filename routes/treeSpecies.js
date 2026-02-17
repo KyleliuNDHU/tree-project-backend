@@ -1,6 +1,7 @@
 const express = require('express');
 const router = express.Router();
 const db = require('../config/db');
+const { requireRole } = require('../middleware/roleAuth');
 
 // 取得樹種列表 (從 tree_species 表或 tree_survey 表)
 router.get('/', async (req, res) => {
@@ -193,8 +194,8 @@ router.get('/synonyms/report', async (req, res) => {
     }
 });
 
-// 手動觸發同義詞合併
-router.post('/synonyms/merge', async (req, res) => {
+// 手動觸發同義詞合併 — 需要管理員權限
+router.post('/synonyms/merge', requireRole('系統管理員'), async (req, res) => {
     try {
         const speciesSynonymService = require('../services/speciesSynonymService');
         const result = await speciesSynonymService.runSynonymMerge();

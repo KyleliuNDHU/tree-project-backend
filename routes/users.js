@@ -6,18 +6,7 @@ const { loginLimiter } = require('../middleware/rateLimiter');
 const { signJwt } = require('../middleware/jwtAuth');
 const AuditLogService = require('../services/auditLogService');
 const { checkAccountLocked, recordLoginFailure, resetLoginAttempts } = require('../middleware/loginAttemptMonitor');
-
-// RBAC 中介軟體：只允許管理員角色操作使用者管理
-const requireAdmin = (req, res, next) => {
-    const adminRoles = ['系統管理員', '業務管理員', '專案管理員', '調查管理員'];
-    if (!req.user || !adminRoles.includes(req.user.role)) {
-        return res.status(403).json({
-            success: false,
-            message: '權限不足：只有管理員可以執行此操作'
-        });
-    }
-    next();
-};
+const { requireRole, getRoleLevel } = require('../middleware/roleAuth');
 
 // 使用者管理相關 API
 // 登入路由
@@ -146,12 +135,13 @@ router.post('/login', loginLimiter, async (req, res) => {
             }
         }
 
-        // ML Service 設定（自架 ML 透過環境變數提供，登入後自動下發給 App）
+        // ML Service 設定（僅管理員角色可取得 API Key）
         const mlConfig = {};
         if (process.env.ML_SERVICE_URL) {
             mlConfig.url = process.env.ML_SERVICE_URL;
         }
-        if (process.env.ML_API_KEY) {
+        const adminRolesForMl = ['系統管理員', '業務管理員', '專案管理員', '調查管理員'];
+        if (process.env.ML_API_KEY && adminRolesForMl.includes(user.role)) {
             mlConfig.apiKey = process.env.ML_API_KEY;
         }
 
@@ -180,8 +170,8 @@ router.post('/login', loginLimiter, async (req, res) => {
 });
 
 
-// 取得使用者列表 (管理員專用)
-router.get('/users', requireAdmin, async (req, res) => {
+// 取得使用者列表 (業務管理員以上)
+router.get('/users', requireRole('業務管理員'), async (req, res) => {
     try {
         // [FIX] 明確轉換 is_active 為布林值 (true/false)，避免前端混淆
         const { rows } = await db.query('SELECT user_id, username, display_name, role, is_active FROM users ORDER BY user_id ASC');
@@ -205,8 +195,28 @@ router.get('/users', requireAdmin, async (req, res) => {
     }
 });
 
-// 新增使用者 (管理員專用)
-router.post('/users', requireAdmin, async (req, res) => {
+/**
+ * 密碼強度驗證
+ * 要求：至少 8 字元，包含大小寫字母和數字
+ */
+function validatePasswordStrength(password) {
+    if (!password || password.length < 8) {
+        return '密碼長度至少 8 個字元';
+    }
+    if (!/[A-Z]/.test(password)) {
+        return '密碼需包含至少一個大寫字母';
+    }
+    if (!/[a-z]/.test(password)) {
+        return '密碼需包含至少一個小寫字母';
+    }
+    if (!/[0-9]/.test(password)) {
+        return '密碼需包含至少一個數字';
+    }
+    return null;
+}
+
+// 新增使用者 (業務管理員以上)
+router.post('/users', requireRole('業務管理員'), async (req, res) => {
     const { username, password, display_name, role } = req.body;
     const isActive = req.body.is_active === undefined ? true : (req.body.is_active ? true : false);
 
@@ -214,6 +224,23 @@ router.post('/users', requireAdmin, async (req, res) => {
         return res.status(400).json({
             success: false,
             message: '請提供使用者名稱和密碼'
+        });
+    }
+
+    const passwordError = validatePasswordStrength(password);
+    if (passwordError) {
+        return res.status(400).json({
+            success: false,
+            message: passwordError
+        });
+    }
+
+    // 角色階層檢查：不能建立比自己角色更高的使用者
+    const targetRole = role || '一般使用者';
+    if (getRoleLevel(targetRole) >= getRoleLevel(req.user.role)) {
+        return res.status(403).json({
+            success: false,
+            message: '權限不足：不能建立與自己同等或更高權限的使用者'
         });
     }
 
@@ -250,12 +277,30 @@ router.post('/users', requireAdmin, async (req, res) => {
     }
 });
 
-// 修改使用者 (管理員專用)
-router.put('/users/:id', requireAdmin, async (req, res) => {
+// 修改使用者 (業務管理員以上)
+router.put('/users/:id', requireRole('業務管理員'), async (req, res) => {
     const { id } = req.params;
     const { display_name, role, password, is_active } = req.body;
 
     try {
+        // 查詢目標使用者的角色，確保不能修改同等或更高權限的使用者
+        const { rows: targetUser } = await db.query('SELECT role FROM users WHERE user_id = $1', [id]);
+        if (targetUser.length === 0) {
+            return res.status(404).json({ success: false, message: '找不到指定的使用者' });
+        }
+        if (getRoleLevel(targetUser[0].role) >= getRoleLevel(req.user.role)) {
+            return res.status(403).json({
+                success: false,
+                message: '權限不足：不能修改與自己同等或更高權限的使用者'
+            });
+        }
+        // 如果要修改角色，新角色也不能 >= 操作者
+        if (role !== undefined && getRoleLevel(role) >= getRoleLevel(req.user.role)) {
+            return res.status(403).json({
+                success: false,
+                message: '權限不足：不能將使用者提升至與自己同等或更高的角色'
+            });
+        }
         const fieldsToUpdate = [];
         const values = [];
         let queryIndex = 1;
@@ -273,6 +318,10 @@ router.put('/users/:id', requireAdmin, async (req, res) => {
             values.push(is_active);
         }
         if (password) {
+            const pwdError = validatePasswordStrength(password);
+            if (pwdError) {
+                return res.status(400).json({ success: false, message: pwdError });
+            }
             const hashedPassword = await bcrypt.hash(password, 10);
             fieldsToUpdate.push(`password_hash = $${queryIndex++}`);
             values.push(hashedPassword);
@@ -317,8 +366,8 @@ router.put('/users/:id', requireAdmin, async (req, res) => {
     }
 });
 
-// 切換使用者啟用狀態 (管理員專用)
-router.put('/users/:id/status', requireAdmin, async (req, res) => {
+// 切換使用者啟用狀態 (業務管理員以上)
+router.put('/users/:id/status', requireRole('業務管理員'), async (req, res) => {
     const { id } = req.params;
     const { isActive } = req.body;
 
@@ -362,11 +411,19 @@ router.put('/users/:id/status', requireAdmin, async (req, res) => {
     }
 });
 
-// 刪除使用者 (管理員專用)
-router.delete('/users/:id', requireAdmin, async (req, res) => {
+// 刪除使用者 (業務管理員以上)
+router.delete('/users/:id', requireRole('業務管理員'), async (req, res) => {
     const { id } = req.params;
 
     try {
+        // 檢查目標使用者角色，不能刪除同等或更高權限的使用者
+        const { rows: targetUser } = await db.query('SELECT role FROM users WHERE user_id = $1', [id]);
+        if (targetUser.length > 0 && getRoleLevel(targetUser[0].role) >= getRoleLevel(req.user.role)) {
+            return res.status(403).json({
+                success: false,
+                message: '權限不足：不能刪除與自己同等或更高權限的使用者'
+            });
+        }
         const { rowCount } = await db.query('DELETE FROM users WHERE user_id = $1', [id]);
         if (rowCount > 0) {
             await AuditLogService.log({
@@ -394,8 +451,8 @@ router.delete('/users/:id', requireAdmin, async (req, res) => {
     }
 });
 
-// 獲取使用者關聯專案 (管理員專用)
-router.get('/users/:userId/projects', requireAdmin, async (req, res) => {
+// 獲取使用者關聯專案 (業務管理員以上)
+router.get('/users/:userId/projects', requireRole('業務管理員'), async (req, res) => {
     const { userId } = req.params;
 
     try {
@@ -437,8 +494,8 @@ router.get('/users/:userId/projects', requireAdmin, async (req, res) => {
     }
 });
 
-// 更新使用者關聯專案 (管理員專用)
-router.put('/users/:userId/projects', requireAdmin, async (req, res) => {
+// 更新使用者關聯專案 (業務管理員以上)
+router.put('/users/:userId/projects', requireRole('業務管理員'), async (req, res) => {
     const { userId } = req.params;
     const { projects } = req.body; // 專案代碼陣列
 

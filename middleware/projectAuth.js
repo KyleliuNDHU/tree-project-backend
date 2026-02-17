@@ -10,7 +10,7 @@
  *   router.put('/tree/:id', jwtAuth, projectAuth, updateTreeController);
  */
 
-const pool = require('../config/database');
+const db = require('../config/db');
 
 /**
  * 檢查使用者是否有專案權限
@@ -26,7 +26,8 @@ function hasProjectPermission(userId, projectCode, userRole, associatedProjects)
         return true;
     }
     
-    // 如果沒有專案代碼，允許（例如查詢全部資料）
+    // 如果沒有專案代碼，由 projectAuthFilter 在查詢時過濾
+    // 這裡允許通過，因為查詢型 API 會由 filter 處理
     if (!projectCode) {
         return true;
     }
@@ -98,7 +99,7 @@ async function projectAuth(req, res, next) {
             
             if (resourceId) {
                 try {
-                    const result = await pool.query(
+                    const result = await db.query(
                         'SELECT project_code FROM tree_survey WHERE id = $1',
                         [resourceId]
                     );

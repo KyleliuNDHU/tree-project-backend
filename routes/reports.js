@@ -7,19 +7,41 @@ const fs = require('fs');
 const path = require('path');
 const format = require('pg-format');
 const reportController = require('../controllers/reportController');
+const { projectAuthFilter } = require('../middleware/projectAuth');
+const { requireRole } = require('../middleware/roleAuth');
 
-// 匯出 Excel
-router.get('/export/excel', async (req, res) => {
+// 匯出 Excel (依使用者權限過濾專案)
+router.get('/export/excel', requireRole('調查管理員'), projectAuthFilter, async (req, res) => {
     const { project_codes } = req.query;
     let sql = 'SELECT * FROM tree_survey';
     const params = [];
+    const conditions = [];
 
-    if (project_codes) {
+    // 依使用者權限過濾
+    if (req.projectFilter) {
+        if (req.projectFilter.length === 0) {
+            return res.status(200).json({ success: true, data: [] });
+        }
+        // 如果使用者指定了 project_codes，取交集
+        if (project_codes) {
+            const requestedCodes = project_codes.split(',').map(code => code.trim()).filter(code => code);
+            const allowedCodes = requestedCodes.filter(code => req.projectFilter.includes(code));
+            if (allowedCodes.length === 0) {
+                return res.status(200).json({ success: true, data: [] });
+            }
+            conditions.push(format('project_code IN (%L)', allowedCodes));
+        } else {
+            conditions.push(format('project_code IN (%L)', req.projectFilter));
+        }
+    } else if (project_codes) {
         const codesArray = project_codes.split(',').map(code => code.trim()).filter(code => code);
         if (codesArray.length > 0) {
-            // 使用 pg-format 安全地處理 IN 子句
-            sql += format(' WHERE project_code IN (%L)', codesArray);
+            conditions.push(format('project_code IN (%L)', codesArray));
         }
+    }
+
+    if (conditions.length > 0) {
+        sql += ' WHERE ' + conditions.join(' AND ');
     }
 
     try {
@@ -65,16 +87,36 @@ router.get('/export/excel', async (req, res) => {
     }
 });
 
-// 匯出 PDF
-router.get('/export/pdf', async (req, res) => {
+// 匯出 PDF (依使用者權限過濾專案)
+router.get('/export/pdf', requireRole('調查管理員'), projectAuthFilter, async (req, res) => {
     const { project_codes } = req.query;
     let sql = 'SELECT * FROM tree_survey';
+    const conditions = [];
 
-    if (project_codes) {
+    // 依使用者權限過濾
+    if (req.projectFilter) {
+        if (req.projectFilter.length === 0) {
+            return res.status(200).json({ success: true, data: [] });
+        }
+        if (project_codes) {
+            const requestedCodes = project_codes.split(',').map(code => code.trim()).filter(code => code);
+            const allowedCodes = requestedCodes.filter(code => req.projectFilter.includes(code));
+            if (allowedCodes.length === 0) {
+                return res.status(200).json({ success: true, data: [] });
+            }
+            conditions.push(format('project_code IN (%L)', allowedCodes));
+        } else {
+            conditions.push(format('project_code IN (%L)', req.projectFilter));
+        }
+    } else if (project_codes) {
         const codesArray = project_codes.split(',').map(code => code.trim()).filter(code => code);
         if (codesArray.length > 0) {
-            sql += format(' WHERE project_code IN (%L)', codesArray);
+            conditions.push(format('project_code IN (%L)', codesArray));
         }
+    }
+
+    if (conditions.length > 0) {
+        sql += ' WHERE ' + conditions.join(' AND ');
     }
 
     try {
@@ -123,9 +165,8 @@ router.get('/export/pdf', async (req, res) => {
     }
 });
 
-// 新增：遷移自 index_1.js 的簡易永續報告
-// 注意：此為基礎報表，主要功能請參考 /api/reports/ai-sustainability 的 AI 永續報告
-router.get('/sustainability_report', reportController.generateSustainabilityReport);
+// 簡易永續報告 (調查管理員以上)
+router.get('/sustainability_report', requireRole('調查管理員'), reportController.generateSustainabilityReport);
 
 
 // ... (AI 報告路由將在 ai.js 中處理) ...

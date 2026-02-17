@@ -2,17 +2,32 @@ const express = require('express');
 const router = express.Router();
 const db = require('../config/db');
 const format = require('pg-format');
+const { projectAuthFilter } = require('../middleware/projectAuth');
 
-// 樹木資料統計分析
-router.get('/', async (req, res) => {
-    let whereClause = '';
+// 樹木資料統計分析 (依使用者權限過濾專案)
+router.get('/', projectAuthFilter, async (req, res) => {
+    // 建立基礎過濾條件
+    const conditions = [];
     
+    if (req.projectFilter) {
+        if (req.projectFilter.length === 0) {
+            return res.json({
+                success: true,
+                data: { species: [], projects: [], areas: [], sizes: null, carbon: null }
+            });
+        }
+        conditions.push(format('project_code IN (%L)', req.projectFilter));
+    }
+
     if (req.query.areas) {
         const areasList = req.query.areas.split(',').map(area => area.trim()).filter(area => area);
         if (areasList.length > 0) {
-            whereClause = format('WHERE project_location IN (%L)', areasList);
+            conditions.push(format('project_location IN (%L)', areasList));
         }
     }
+
+    const whereClause = conditions.length > 0 ? 'WHERE ' + conditions.join(' AND ') : '';
+    const andClause = conditions.length > 0 ? 'AND ' + conditions.join(' AND ') : '';
 
     const client = await db.pool.connect();
     try {
@@ -27,6 +42,7 @@ router.get('/', async (req, res) => {
         const projectQuery = `
             SELECT project_name AS "專案名稱", COUNT(*) as count 
             FROM tree_survey 
+            ${whereClause}
             GROUP BY "專案名稱" 
             ORDER BY count DESC
         `;
@@ -34,6 +50,7 @@ router.get('/', async (req, res) => {
         const areaQuery = `
             SELECT project_location AS "專案區位", COUNT(*) as count 
             FROM tree_survey 
+            ${whereClause}
             GROUP BY "專案區位" 
             ORDER BY count DESC
         `;
@@ -47,7 +64,7 @@ router.get('/', async (req, res) => {
                 MAX(dbh_cm) as max_dbh,
                 MIN(dbh_cm) as min_dbh
             FROM tree_survey
-            WHERE tree_height_m > 0 AND dbh_cm > 0 ${whereClause.replace('WHERE', 'AND ')}
+            WHERE tree_height_m > 0 AND dbh_cm > 0 ${andClause}
         `;
 
         const carbonQuery = `
@@ -64,7 +81,7 @@ router.get('/', async (req, res) => {
             client.query(speciesQuery),
             client.query(projectQuery),
             client.query(areaQuery),
-            client.query(sizeQuery.replace(/WHERE\s*AND/, 'WHERE')), // 清理可能的語法問題
+            client.query(sizeQuery),
             client.query(carbonQuery)
         ]);
 

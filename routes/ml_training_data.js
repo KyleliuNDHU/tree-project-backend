@@ -11,8 +11,9 @@
 
 const express = require('express');
 const router = express.Router();
-const pool = require('../config/database');
+const { pool } = require('../config/db');
 const { v4: uuidv4 } = require('uuid');
+const { requireRole } = require('../middleware/roleAuth');
 
 // ============================================================================
 // 創建 ML 數據表格 (如果不存在)
@@ -213,7 +214,7 @@ router.post('/batch', async (req, res) => {
  * GET /api/ml-training/statistics
  * 獲取 ML 訓練數據統計
  */
-router.get('/statistics', async (req, res) => {
+router.get('/statistics', requireRole('業務管理員'), async (req, res) => {
     try {
         // 總批次數和記錄數
         const overallStats = await pool.query(`
@@ -279,7 +280,7 @@ router.get('/statistics', async (req, res) => {
  * GET /api/ml-training/export
  * 導出 ML 訓練數據用於模型訓練
  */
-router.get('/export', async (req, res) => {
+router.get('/export', requireRole('業務管理員'), async (req, res) => {
     try {
         const { record_type, limit = 10000, offset = 0 } = req.query;
         
@@ -392,7 +393,7 @@ router.post('/image', async (req, res) => {
  * GET /api/ml-training/analysis
  * 獲取修正模式分析報告
  */
-router.get('/analysis', async (req, res) => {
+router.get('/analysis', requireRole('業務管理員'), async (req, res) => {
     try {
         // AR 測量誤差分析
         const arAnalysis = await pool.query(`

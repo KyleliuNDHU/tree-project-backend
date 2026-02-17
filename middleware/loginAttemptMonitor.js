@@ -1,25 +1,25 @@
 /**
- * Phase 4.4: 登入失敗監控中間件
+ * Phase 4.4: ?�入失�???��中�?�?
  * 
- * 功能：
- * 1. 記錄登入失敗次數
- * 2. 超過閾值時鎖定帳號
- * 3. 記錄異常登入行為到審計日誌
+ * ?�能�?
+ * 1. 記�??�入失�?次數
+ * 2. 超�??�值�??��?帳�?
+ * 3. 記�??�常?�入行為?�審計日�?
  */
 
-const pool = require('../config/database');
+const db = require('../config/db');
 const AuditLogService = require('../services/auditLogService');
 
-// 設定
+// 設�?
 const MAX_LOGIN_ATTEMPTS = 5;
 const LOCKOUT_DURATION_MINUTES = 30;
 
 /**
- * 記錄登入失敗
+ * 記�??�入失�?
  */
 async function recordLoginFailure(username, req) {
     try {
-        const result = await pool.query(
+        const result = await db.query(
             `UPDATE users 
              SET login_attempts = login_attempts + 1,
                  last_attempt_time = CURRENT_TIMESTAMP
@@ -34,14 +34,14 @@ async function recordLoginFailure(username, req) {
         
         const { login_attempts, is_active } = result.rows[0];
         
-        // 如果達到最大嘗試次數，停用帳號
+        // 如�??�到?�大�?試次?��??�用帳�?
         if (login_attempts >= MAX_LOGIN_ATTEMPTS && is_active) {
-            await pool.query(
+            await db.query(
                 'UPDATE users SET is_active = false WHERE username = $1',
                 [username]
             );
             
-            // 記錄到審計日誌
+            // 記�??�審計日�?
             await AuditLogService.log({
                 username: username,
                 action: 'ACCOUNT_LOCKED',
@@ -67,11 +67,11 @@ async function recordLoginFailure(username, req) {
 }
 
 /**
- * 重置登入失敗次數（成功登入後）
+ * ?�置?�入失�?次數（�??�登?��?�?
  */
 async function resetLoginAttempts(username) {
     try {
-        await pool.query(
+        await db.query(
             `UPDATE users 
              SET login_attempts = 0,
                  last_attempt_time = NULL
@@ -84,11 +84,11 @@ async function resetLoginAttempts(username) {
 }
 
 /**
- * 檢查帳號是否被鎖定
+ * 檢查帳�??�否被�?�?
  */
 async function checkAccountLocked(username) {
     try {
-        const result = await pool.query(
+        const result = await db.query(
             `SELECT is_active, login_attempts, last_attempt_time
              FROM users
              WHERE username = $1`,
@@ -101,16 +101,16 @@ async function checkAccountLocked(username) {
         
         const { is_active, login_attempts, last_attempt_time } = result.rows[0];
         
-        // 如果帳號被停用且有登入失敗記錄
+        // 如�?帳�?被�??��??�登?�失?��???
         if (!is_active && login_attempts >= MAX_LOGIN_ATTEMPTS) {
-            // 檢查是否已過鎖定時間
+            // 檢查?�否已�??��??��?
             if (last_attempt_time) {
                 const lockoutEnd = new Date(last_attempt_time);
                 lockoutEnd.setMinutes(lockoutEnd.getMinutes() + LOCKOUT_DURATION_MINUTES);
                 
                 if (new Date() > lockoutEnd) {
-                    // 鎖定時間已過，自動解鎖
-                    await pool.query(
+                    // ?��??��?已�?，自?�解??
+                    await db.query(
                         `UPDATE users 
                          SET is_active = true, 
                              login_attempts = 0,
@@ -126,13 +126,13 @@ async function checkAccountLocked(username) {
                 const remainingMinutes = Math.ceil((lockoutEnd - new Date()) / 60000);
                 return { 
                     locked: true, 
-                    message: `帳號已被鎖定，請在 ${remainingMinutes} 分鐘後再試`
+                    message: `帳�?已被?��?，�???${remainingMinutes} ?��?後�?試`
                 };
             }
             
             return { 
                 locked: true, 
-                message: `帳號已被鎖定，請聯繫管理員或等待 ${LOCKOUT_DURATION_MINUTES} 分鐘`
+                message: `帳�?已被?��?，�??�繫管�??��?等�? ${LOCKOUT_DURATION_MINUTES} ?��?`
             };
         }
         
@@ -144,13 +144,13 @@ async function checkAccountLocked(username) {
 }
 
 /**
- * 取得異常登入統計（管理員用）
+ * ?��??�常?�入統�?（管?�員?��?
  */
 async function getLoginFailureStats(hours = 24) {
     try {
-        // 參數化查詢，避免 SQL 注入
+        // ?�數?�查詢�??��? SQL 注入
         const safeHours = Math.max(1, Math.min(8760, parseInt(hours, 10) || 24));
-        const result = await pool.query(
+        const result = await db.query(
             `SELECT 
                 username,
                 COUNT(*) as failure_count,

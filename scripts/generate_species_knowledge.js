@@ -1,5 +1,5 @@
 require('dotenv').config({ path: '../.env' });
-const db = require('../config/database');
+const db = require('../config/db');
 const { getEmbedding } = require('../services/knowledgeEmbeddingService');
 
 // 引入 OpenAI SDK 用於文本生成 和 SiliconFlow 兼容API
