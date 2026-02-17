@@ -158,8 +158,8 @@ router.post('/batch', async (req, res) => {
         m.azimuth,
         m.pitch,
         m.altitude,
-        m.status || 'pending',
-        m.priority || 3
+        m.status ?? 'pending',
+        m.priority ?? 3
       ]);
       
       insertedIds.push(result.rows[0].id);
@@ -407,6 +407,11 @@ function buildSurveyNotes(p) {
 /**
  * POST /api/pending-measurements/transfer
  * 將已完成的測量轉移到 tree_survey 表
+ * 
+ * 修正：
+ * - 生成 system_tree_id (NOT NULL) 和 project_tree_id
+ * - 使用 advisory lock 確保 ID 不碰撞
+ * - 使用 ?? 取代 || 避免 falsy 值被覆蓋 (例如 dbh=0)
  */
 router.post('/transfer', async (req, res) => {
   const { session_id } = req.body;
@@ -437,9 +442,49 @@ router.post('/transfer', async (req, res) => {
       });
     }
     
+    // 鎖定 ID 序列（與 create/batch controller 共用 key 1）
+    await client.query('SELECT pg_advisory_xact_lock(1)');
+    
+    // 取得目前最大 system_tree_id
+    const sysIdRes = await client.query(`
+      SELECT MAX(CAST(regexp_replace(system_tree_id, '[^0-9]', '', 'g') AS INTEGER)) as max_id 
+      FROM tree_survey 
+      WHERE (system_tree_id ~ '^ST-[0-9]+$')
+      AND (is_placeholder IS NULL OR is_placeholder = false)
+    `);
+    let nextSysId = (sysIdRes.rows[0].max_id ?? 0) + 1;
+    
+    // 快取各專案的 project_tree_id 最大值（避免重複查詢）
+    const projectMaxIds = {};
+    
     const transferredIds = [];
     
     for (const p of pendingResult.rows) {
+      // 生成 system_tree_id
+      const systemTreeId = `ST-${nextSysId}`;
+      nextSysId++;
+      
+      // 生成 project_tree_id（按專案分開計數）
+      const projCode = p.project_code ?? null;
+      let projectTreeId;
+      if (projCode) {
+        if (!(projCode in projectMaxIds)) {
+          const prjIdRes = await client.query(`
+            SELECT MAX(CAST(regexp_replace(project_tree_id, '[^0-9]', '', 'g') AS INTEGER)) as max_id 
+            FROM tree_survey 
+            WHERE project_code = $1 
+            AND (project_tree_id ~ '^PT-[0-9]+$' OR project_tree_id ~ '^[0-9]+$')
+            AND project_tree_id != 'PT-0'
+            AND (is_placeholder IS NULL OR is_placeholder = false)
+          `, [projCode]);
+          projectMaxIds[projCode] = (prjIdRes.rows[0].max_id ?? 0);
+        }
+        projectMaxIds[projCode]++;
+        projectTreeId = `PT-${projectMaxIds[projCode]}`;
+      } else {
+        projectTreeId = `PT-${Date.now()}`;
+      }
+      
       // 嘗試查找 species_id
       let speciesId = null;
       if (p.species_name) {
@@ -452,58 +497,70 @@ router.post('/transfer', async (req, res) => {
             speciesId = speciesRes.rows[0].id;
           }
         } catch (err) {
-          console.warn(`[Transfer] Species lookup failed for ${p.species_name}:`, err);
+          console.warn(`[Transfer] Species lookup failed for ${p.species_name}:`, err.message);
         }
       }
+      
+      // 決定最終 DBH（?? 避免 0 被當成 falsy）
+      const finalDbh = p.measured_dbh_cm ?? p.dbh_cm ?? 0;
+      const finalStatus = p.measurement_notes ?? '良好';
 
-      // 插入到 tree_survey
+      // 插入到 tree_survey（含必要的 system_tree_id, project_tree_id）
       const insertResult = await client.query(`
         INSERT INTO tree_survey (
+          system_tree_id, project_tree_id,
           project_location, project_code, project_name,
           species_name, species_id, tree_height_m, dbh_cm,
           x_coord, y_coord,
-          survey_notes, survey_time
-        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+          status, survey_notes, survey_time
+        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
         RETURNING id
       `, [
+        systemTreeId,
+        projectTreeId,
         p.project_area,
-        p.project_code,
+        projCode,
         p.project_name,
-        p.species_name || '待辨識',
+        p.species_name ?? '待辨識',
         speciesId,
         p.tree_height,
-        p.measured_dbh_cm || p.dbh_cm,
-        p.tree_longitude,  // x_coord = lon
-        p.tree_latitude,   // y_coord = lat
+        finalDbh,
+        p.tree_longitude,
+        p.tree_latitude,
+        finalStatus,
         buildSurveyNotes(p),
-        p.completed_at || new Date()
+        p.completed_at ?? new Date()
       ]);
       
       transferredIds.push(insertResult.rows[0].id);
       
-      // 同時插入 tree_measurement_raw (保留儀器數據)
-      await client.query(`
-        INSERT INTO tree_measurement_raw (
-          tree_id, instrument_type,
-          horizontal_dist, slope_dist, vertical_angle, azimuth,
-          raw_lat, raw_lon, altitude,
-          measured_at
-        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
-      `, [
-        insertResult.rows[0].id,
-        'VLGEO2+AR',
-        p.horizontal_distance,
-        p.slope_distance,
-        p.pitch,
-        p.azimuth,
-        p.tree_latitude,
-        p.tree_longitude,
-        p.altitude,
-        p.completed_at || new Date()
-      ]);
+      // 同時插入 tree_measurement_raw（保留儀器數據）
+      try {
+        await client.query(`
+          INSERT INTO tree_measurement_raw (
+            tree_id, instrument_type,
+            horizontal_dist, slope_dist, vertical_angle, azimuth,
+            raw_lat, raw_lon, altitude,
+            measured_at
+          ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+        `, [
+          insertResult.rows[0].id,
+          'VLGEO2+Vision',
+          p.horizontal_distance,
+          p.slope_distance,
+          p.pitch,
+          p.azimuth,
+          p.tree_latitude,
+          p.tree_longitude,
+          p.altitude,
+          p.completed_at ?? new Date()
+        ]);
+      } catch (rawErr) {
+        console.warn('[Transfer] tree_measurement_raw insert skipped:', rawErr.message);
+      }
     }
     
-    // 標記為已轉移 (或刪除)
+    // 標記為已轉移
     await client.query(`
       UPDATE pending_tree_measurements 
       SET status = 'transferred'

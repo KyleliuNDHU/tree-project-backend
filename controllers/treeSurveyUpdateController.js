@@ -67,6 +67,44 @@ exports.updateTreeV2 = async (req, res) => {
         }
 
 
+        // 欄位別名容錯（相容 V1/V2 不同命名）
+        const finalX = x_coord ?? req.body.lon;
+        const finalY = y_coord ?? req.body.lat;
+        const finalHeight = tree_height_m ?? req.body.height;
+        const finalDbh = dbh_cm ?? req.body.dbh;
+        const finalSurveyNotes = survey_notes ?? req.body.survey_remark;
+
+        // 如果 project_tree_id 有提供且專案已變更，需要驗證唯一性
+        let finalProjectTreeId = req.body.project_tree_id;
+        const targetProjectCode = project_code ?? existingTree.project_code;
+        if (finalProjectTreeId && targetProjectCode) {
+            try {
+                const dupCheck = await client.query(
+                    `SELECT id FROM tree_survey 
+                     WHERE project_code = $1 AND project_tree_id = $2 AND id != $3
+                     AND (is_placeholder IS NULL OR is_placeholder = false)`,
+                    [targetProjectCode, finalProjectTreeId, id]
+                );
+                if (dupCheck.rows.length > 0) {
+                    // 編號已被佔用，用 advisory lock 生成新的
+                    await client.query('SELECT pg_advisory_xact_lock(1)');
+                    const prjIdRes = await client.query(`
+                        SELECT MAX(CAST(regexp_replace(project_tree_id, '[^0-9]', '', 'g') AS INTEGER)) as max_id 
+                        FROM tree_survey 
+                        WHERE project_code = $1 
+                        AND (project_tree_id ~ '^PT-[0-9]+$' OR project_tree_id ~ '^[0-9]+$')
+                        AND project_tree_id != 'PT-0'
+                        AND (is_placeholder IS NULL OR is_placeholder = false)
+                    `, [targetProjectCode]);
+                    const nextPrjId = (prjIdRes.rows[0].max_id ?? 0) + 1;
+                    finalProjectTreeId = `PT-${nextPrjId}`;
+                    console.log(`[UpdateV2] project_tree_id collision resolved: ${req.body.project_tree_id} -> ${finalProjectTreeId}`);
+                }
+            } catch (err) {
+                console.warn('[UpdateV2] project_tree_id validation skipped:', err.message);
+            }
+        }
+
         // 動態構建 SET 子句
         const updates = [];
         const values = [];
@@ -78,19 +116,19 @@ exports.updateTreeV2 = async (req, res) => {
             project_name: project_name,
             species_id: species_id,
             species_name: species_name,
-            x_coord: x_coord,
-            y_coord: y_coord,
+            x_coord: finalX,
+            y_coord: finalY,
             status: status,
-            notes: note, // v1 'note' -> v2 'notes'
-            tree_notes: tree_remark, // v1 'tree_remark' -> v2 'tree_notes'
-            tree_height_m: tree_height_m,
-            dbh_cm: dbh_cm,
-            survey_notes: survey_notes,
+            notes: note,
+            tree_notes: tree_remark,
+            tree_height_m: finalHeight,
+            dbh_cm: finalDbh,
+            survey_notes: finalSurveyNotes,
             survey_time: survey_time,
             carbon_storage: carbon_storage,
             carbon_sequestration_per_year: carbon_sequestration_per_year,
-            project_id: projectId, // 新增 project_id 的更新
-            project_tree_id: req.body.project_tree_id // [FIX] 允許更新專案樹木編號
+            project_id: projectId,
+            project_tree_id: finalProjectTreeId
         };
         
         for (const [dbField, value] of Object.entries(fieldMapping)) {
