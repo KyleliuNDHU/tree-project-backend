@@ -65,7 +65,7 @@ async function initTable() {
       measurement_notes TEXT,
       
       -- 索引
-      CONSTRAINT valid_status CHECK (status IN ('pending', 'in_progress', 'completed', 'skipped', 'failed'))
+      CONSTRAINT valid_status CHECK (status IN ('pending', 'in_progress', 'completed', 'skipped', 'failed', 'transferred'))
     );
     
     -- 創建索引
@@ -84,6 +84,28 @@ async function initTable() {
 
 // 啟動時初始化資料表
 initTable();
+
+// 修正已存在的 CHECK constraint（加入 'transferred' 狀態）
+(async () => {
+  try {
+    await pool.query(`
+      DO $$
+      BEGIN
+        IF EXISTS (
+          SELECT 1 FROM information_schema.table_constraints
+          WHERE constraint_name = 'valid_status'
+          AND table_name = 'pending_tree_measurements'
+        ) THEN
+          ALTER TABLE pending_tree_measurements DROP CONSTRAINT valid_status;
+          ALTER TABLE pending_tree_measurements ADD CONSTRAINT valid_status
+            CHECK (status IN ('pending', 'in_progress', 'completed', 'skipped', 'failed', 'transferred'));
+        END IF;
+      END $$;
+    `);
+  } catch (e) {
+    console.warn('[pending-measurements] Constraint migration skipped:', e.message);
+  }
+})();
 
 /**
  * POST /api/pending-measurements/batch
@@ -237,6 +259,37 @@ router.get('/trees', async (req, res) => {
 });
 
 /**
+ * GET /api/pending-measurements/stats/overview
+ * 獲取統計資訊（必須在 /:id 之前，否則 'stats' 會被當作 id）
+ */
+router.get('/stats/overview', async (req, res) => {
+  try {
+    const result = await pool.query(`
+      SELECT 
+        COUNT(*) as total,
+        COUNT(*) FILTER (WHERE status = 'pending') as pending,
+        COUNT(*) FILTER (WHERE status = 'in_progress') as in_progress,
+        COUNT(*) FILTER (WHERE status = 'completed') as completed,
+        COUNT(*) FILTER (WHERE status = 'skipped') as skipped,
+        COUNT(*) FILTER (WHERE status = 'failed') as failed,
+        COUNT(*) FILTER (WHERE status = 'transferred') as transferred,
+        COUNT(DISTINCT session_id) as total_sessions
+      FROM pending_tree_measurements
+    `);
+    
+    res.json(result.rows[0]);
+    
+  } catch (error) {
+    console.error('[pending-measurements] 獲取統計失敗:', error);
+    res.status(500).json({ 
+      success: false, 
+      message: '獲取失敗',
+      error: error.message 
+    });
+  }
+});
+
+/**
  * GET /api/pending-measurements/:id
  * 獲取單筆待測量記錄
  */
@@ -335,6 +388,23 @@ router.patch('/:id', async (req, res) => {
 });
 
 /**
+ * 建構 survey_notes 字串，安全處理 null 值
+ */
+function buildSurveyNotes(p) {
+  const parts = ['VLGEO2+Vision測量'];
+  if (p.measurement_method) {
+    parts.push(`方法: ${p.measurement_method}`);
+  }
+  if (p.measurement_confidence != null) {
+    parts.push(`信心度: ${(p.measurement_confidence * 100).toFixed(0)}%`);
+  }
+  if (p.measurement_notes) {
+    parts.push(p.measurement_notes);
+  }
+  return parts.join(' | ');
+}
+
+/**
  * POST /api/pending-measurements/transfer
  * 將已完成的測量轉移到 tree_survey 表
  */
@@ -400,12 +470,12 @@ router.post('/transfer', async (req, res) => {
         p.project_code,
         p.project_name,
         p.species_name || '待辨識',
-        speciesId, // 加入 species_id
+        speciesId,
         p.tree_height,
         p.measured_dbh_cm || p.dbh_cm,
         p.tree_longitude,  // x_coord = lon
         p.tree_latitude,   // y_coord = lat
-        `VLGEO2+AR測量 | 方法: ${p.measurement_method} | 信心度: ${(p.measurement_confidence * 100).toFixed(0)}%`,
+        buildSurveyNotes(p),
         p.completed_at || new Date()
       ]);
       
@@ -485,36 +555,6 @@ router.delete('/session/:sessionId', async (req, res) => {
     res.status(500).json({ 
       success: false, 
       message: '刪除失敗',
-      error: error.message 
-    });
-  }
-});
-
-/**
- * GET /api/pending-measurements/stats
- * 獲取統計資訊
- */
-router.get('/stats/overview', async (req, res) => {
-  try {
-    const result = await pool.query(`
-      SELECT 
-        COUNT(*) as total,
-        COUNT(*) FILTER (WHERE status = 'pending') as pending,
-        COUNT(*) FILTER (WHERE status = 'in_progress') as in_progress,
-        COUNT(*) FILTER (WHERE status = 'completed') as completed,
-        COUNT(*) FILTER (WHERE status = 'skipped') as skipped,
-        COUNT(*) FILTER (WHERE status = 'failed') as failed,
-        COUNT(DISTINCT session_id) as total_sessions
-      FROM pending_tree_measurements
-    `);
-    
-    res.json(result.rows[0]);
-    
-  } catch (error) {
-    console.error('[pending-measurements] 獲取統計失敗:', error);
-    res.status(500).json({ 
-      success: false, 
-      message: '獲取失敗',
       error: error.message 
     });
   }
