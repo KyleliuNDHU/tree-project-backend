@@ -88,6 +88,7 @@ const pendingMeasurementsRoutes = require('./routes/pending_measurements'); // �
 const projectBoundariesRoutes = require('./routes/project_boundaries'); // V3 專案邊界路由
 const mlTrainingDataRoutes = require('./routes/ml_training_data'); // V3 ML 訓練數據收集路由
 const treeImagesRoutes = require('./routes/tree_images'); // 樹木影像路由
+const mlServiceRoutes = require('./routes/ml_service'); // ML Service 代理路由
 // const testRoutes = require('./routes/test'); // 引入測試路由
 
 apiRouter.use('/', usersRoutes); // 包含 /login
@@ -110,6 +111,7 @@ apiRouter.use('/pending-measurements', pendingMeasurementsRoutes); // 掛載待�
 apiRouter.use('/project-boundaries', projectBoundariesRoutes); // 掛載專案邊界路由
 apiRouter.use('/ml-training', mlTrainingDataRoutes); // 掛載 ML 訓練數據路由
 apiRouter.use('/tree-images', treeImagesRoutes); // 掛載樹木影像路由
+apiRouter.use('/ml-service', mlServiceRoutes); // 掛載 ML Service 代理路由
 
 
 // 將所有 API 路由應用速率限制並掛載到 /api
