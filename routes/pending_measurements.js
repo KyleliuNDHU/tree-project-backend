@@ -51,6 +51,8 @@ async function initTable() {
       azimuth DOUBLE PRECISION NOT NULL,
       pitch DOUBLE PRECISION NOT NULL,
       altitude DOUBLE PRECISION,
+      measurement_type VARCHAR(10),
+      has_gps BOOLEAN DEFAULT true,
       
       -- 狀態資訊
       status VARCHAR(20) DEFAULT 'pending',
@@ -103,6 +105,24 @@ initTable();
         END IF;
       END $$;
     `);
+    // 添加 measurement_type 和 has_gps 欄位（如果表已存在但缺少這些欄位）
+    await pool.query(`
+      DO $$
+      BEGIN
+        IF NOT EXISTS (
+          SELECT 1 FROM information_schema.columns
+          WHERE table_name = 'pending_tree_measurements' AND column_name = 'measurement_type'
+        ) THEN
+          ALTER TABLE pending_tree_measurements ADD COLUMN measurement_type VARCHAR(10);
+        END IF;
+        IF NOT EXISTS (
+          SELECT 1 FROM information_schema.columns
+          WHERE table_name = 'pending_tree_measurements' AND column_name = 'has_gps'
+        ) THEN
+          ALTER TABLE pending_tree_measurements ADD COLUMN has_gps BOOLEAN DEFAULT true;
+        END IF;
+      END $$;
+    `);
   } catch (e) {
     console.warn('[pending-measurements] Constraint migration skipped:', e.message);
   }
@@ -138,8 +158,9 @@ router.post('/batch', async (req, res) => {
           tree_latitude, tree_longitude,
           station_latitude, station_longitude,
           horizontal_distance, slope_distance, azimuth, pitch, altitude,
+          measurement_type, has_gps,
           status, priority
-        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19)
+        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21)
         RETURNING id
       `, [
         m.session_id,
@@ -159,6 +180,8 @@ router.post('/batch', async (req, res) => {
         m.azimuth,
         m.pitch,
         m.altitude,
+        m.measurement_type || null,
+        m.has_gps !== undefined ? m.has_gps : true,
         m.status ?? 'pending',
         m.priority ?? 3
       ]);

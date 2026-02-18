@@ -36,6 +36,8 @@ CREATE TABLE IF NOT EXISTS pending_tree_measurements (
     azimuth DOUBLE PRECISION NOT NULL,
     pitch DOUBLE PRECISION NOT NULL,
     altitude DOUBLE PRECISION,
+    measurement_type VARCHAR(10),         -- VLGEO2 TYPE: 1P, 3P, 3D, DME
+    has_gps BOOLEAN DEFAULT true,         -- 是否有 GPS 座標
     
     -- 狀態資訊
     status VARCHAR(20) DEFAULT 'pending',
