@@ -15,6 +15,7 @@ Pipeline:
   5. Return DBH in centimeters with confidence score
 """
 
+import os
 import math
 import numpy as np
 from dataclasses import dataclass
@@ -74,6 +75,7 @@ def estimate_focal_length_from_fov(image_width_px: int,
     Most smartphone main cameras have FOV ≈ 65-80 degrees.
     Default 70° is a reasonable fallback.
     """
+    fov_degrees = max(10.0, min(170.0, fov_degrees))
     fov_rad = math.radians(fov_degrees)
     f_px = image_width_px / (2.0 * math.tan(fov_rad / 2.0))
     return f_px
@@ -400,8 +402,8 @@ def _threshold_clustering(row_depths: np.ndarray,
     return float(width), mask
 
 
-def _longest_contiguous_true(mask: np.ndarray) -> Tuple[int, int]:
-    """Find the longest contiguous run of True values."""
+def _longest_contiguous_true_original(mask: np.ndarray) -> Tuple[int, int]:
+    """Original loop-based implementation kept for verification."""
     max_len = 0
     max_start = 0
     current_len = 0
@@ -419,6 +421,30 @@ def _longest_contiguous_true(mask: np.ndarray) -> Tuple[int, int]:
             current_len = 0
 
     return max_len, max_start
+
+
+def _longest_contiguous_true(mask: np.ndarray) -> Tuple[int, int]:
+    """Find the longest contiguous run of True values (numpy vectorized)."""
+    if mask.size == 0 or not np.any(mask):
+        return 0, 0
+    padded = np.concatenate(([False], mask, [False]))
+    diffs = np.diff(padded.astype(int))
+    starts = np.where(diffs == 1)[0]
+    ends = np.where(diffs == -1)[0]
+    if len(starts) == 0:
+        return 0, 0
+    lengths = ends - starts
+    best = np.argmax(lengths)
+    result = (int(lengths[best]), int(starts[best]))
+
+    if os.environ.get('ML_VERIFY_NUMPY', 'false').lower() == 'true':
+        result_original = _longest_contiguous_true_original(mask)
+        if result != result_original:
+            print(f"[VERIFY] _longest_contiguous_true mismatch: numpy={result} vs original={result_original}")
+        else:
+            print("[VERIFY] _longest_contiguous_true matches original perfectly")
+
+    return result
 
 
 def pixel_width_to_metric(pixel_width: float,
@@ -465,32 +491,6 @@ def cylindrical_correction(chord_length_m: float,
 
     if p <= 0:
         return chord_length_m
-
-    # Full formula
-    diameter = (l * l * p) / (l * l + 4 * p * p)
-
-    # The formula above gives the *radius offset*, not the diameter.
-    # Let me re-derive correctly:
-    #
-    # For a cylinder of diameter d at distance p from camera:
-    # The visible chord length l relates to diameter by:
-    #   l = d * sqrt(1 - (d/(2p))^2) * 2p / d  [simplified]
-    #
-    # Actually, the simpler approach:
-    # The chord the camera sees is shorter than the diameter.
-    # For a circle of radius r, the chord at distance p from center:
-    #   half_chord = r * p / sqrt(r² + p²)
-    #   chord = 2 * half_chord
-    #   chord = 2rp / sqrt(r² + p²)
-    #
-    # Solving for d = 2r from l (chord) and p:
-    #   l = dp / sqrt((d/2)² + p²)
-    #   l² = d²p² / (d²/4 + p²)
-    #   l²(d²/4 + p²) = d²p²
-    #   l²d²/4 + l²p² = d²p²
-    #   l²p² = d²(p² - l²/4)
-    #   d² = l²p² / (p² - l²/4)
-    #   d = lp / sqrt(p² - l²/4)
 
     # Check if chord is physically possible (l < 2p for the geometry to work)
     if l >= 2 * p:

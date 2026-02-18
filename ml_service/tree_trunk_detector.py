@@ -20,6 +20,7 @@ References:
   - Holcomb et al. (2023): foreground extraction for tree measurement
 """
 
+import os
 import numpy as np
 from dataclasses import dataclass, field
 from typing import List, Optional, Tuple
@@ -192,18 +193,10 @@ def _extract_foreground(depth_map: np.ndarray,
     return fg_mask
 
 
-def _enhance_vertical_structures(fg_mask: np.ndarray,
-                                  depth_map: np.ndarray,
-                                  H: int, W: int) -> np.ndarray:
-    """
-    Enhance vertically-continuous structures (tree trunks).
-
-    Uses vectorized column-wise run-length encoding to find vertically
-    consistent foreground regions. Tree trunks have high vertical continuity
-    and relatively uniform depth.
-    """
-    # Vectorized run-length analysis: for each column, compute the length
-    # of the consecutive foreground run each pixel belongs to.
+def _enhance_vertical_structures_original(fg_mask: np.ndarray,
+                                           depth_map: np.ndarray,
+                                           H: int, W: int) -> np.ndarray:
+    """Original loop-based implementation kept for verification."""
     vertical_score = np.zeros((H, W), dtype=np.float32)
     fg_float = fg_mask.astype(np.float32)
 
@@ -211,38 +204,96 @@ def _enhance_vertical_structures(fg_mask: np.ndarray,
         col_data = fg_float[:, col]
         if col_data.sum() == 0:
             continue
-
-        # Find run-length of each consecutive segment using diff
-        # Pad with 0 at both ends to detect start/end of runs
         padded = np.concatenate(([0], col_data, [0]))
         diffs = np.diff(padded)
-        run_starts = np.where(diffs > 0)[0]   # start indices of True runs
-        run_ends = np.where(diffs < 0)[0]      # end indices (exclusive)
-
-        # Assign each pixel in a run the length of that run
+        run_starts = np.where(diffs > 0)[0]
+        run_ends = np.where(diffs < 0)[0]
         for start, end in zip(run_starts, run_ends):
             run_len = end - start
             vertical_score[start:end, col] = run_len
 
-    # Threshold: pixels with strong vertical continuity
-    min_vertical_run = max(H * 0.1, 20)  # At least 10% of image height
+    min_vertical_run = max(H * 0.1, 20)
     enhanced = vertical_score >= min_vertical_run
 
-    # Depth consistency filter: vectorized per-column check
     for col in range(W):
         col_mask = enhanced[:, col]
         n_true = np.sum(col_mask)
         if n_true < min_vertical_run:
             continue
-
         col_depths = depth_map[col_mask, col]
         mean_d = np.mean(col_depths)
         if mean_d < 0.01:
             enhanced[:, col] = False
             continue
         cv = np.std(col_depths) / mean_d
-        if cv > 0.3:  # Too much depth variation → probably not a trunk
+        if cv > 0.3:
             enhanced[:, col] = False
+
+    return enhanced
+
+
+def _enhance_vertical_structures(fg_mask: np.ndarray,
+                                  depth_map: np.ndarray,
+                                  H: int, W: int) -> np.ndarray:
+    """
+    Enhance vertically-continuous structures (tree trunks).
+
+    Uses numpy vectorization instead of per-column Python loops for speed.
+    Finds vertically consistent foreground regions with uniform depth.
+    """
+    fg_int = fg_mask.astype(np.int8)
+
+    # Vectorized vertical run-length: use cumulative sum reset at each gap.
+    # For each column simultaneously: cumsum of fg, reset when fg==0.
+    # cumsum trick: cumsum of fg minus cumsum-at-last-zero gives current run length.
+    vertical_score = np.zeros((H, W), dtype=np.float32)
+
+    # Process all columns at once row by row using cumulative approach
+    # A run-length matrix: for each True pixel, how long is the contiguous True run it belongs to
+    # Step 1: compute forward run lengths (how many consecutive True ending at this row)
+    forward_run = np.zeros((H, W), dtype=np.int32)
+    forward_run[0, :] = fg_int[0, :]
+    for r in range(1, H):
+        forward_run[r, :] = np.where(fg_int[r, :], forward_run[r - 1, :] + 1, 0)
+
+    # Step 2: assign each pixel the total run length it belongs to (backward pass)
+    # The last row of each run has the full run length in forward_run
+    # Propagate backwards
+    vertical_score[H - 1, :] = forward_run[H - 1, :].astype(np.float32)
+    for r in range(H - 2, -1, -1):
+        # If fg and next row is part of same run, copy the max from below
+        same_run = (fg_int[r, :] == 1) & (fg_int[r + 1, :] == 1)
+        vertical_score[r, :] = np.where(
+            same_run,
+            vertical_score[r + 1, :],
+            forward_run[r, :].astype(np.float32)
+        )
+
+    min_vertical_run = max(H * 0.1, 20)
+    enhanced = vertical_score >= min_vertical_run
+
+    # Depth consistency filter: vectorized per-column
+    col_sums = np.sum(enhanced, axis=0)
+    valid_cols = col_sums >= min_vertical_run
+
+    for col_idx in np.where(valid_cols)[0]:
+        col_mask = enhanced[:, col_idx]
+        col_depths = depth_map[col_mask, col_idx]
+        mean_d = np.mean(col_depths)
+        if mean_d < 0.01:
+            enhanced[:, col_idx] = False
+            continue
+        cv = np.std(col_depths) / mean_d
+        if cv > 0.3:
+            enhanced[:, col_idx] = False
+
+    if os.environ.get('ML_VERIFY_NUMPY', 'false').lower() == 'true':
+        result_original = _enhance_vertical_structures_original(fg_mask, depth_map, H, W)
+        if not np.array_equal(enhanced, result_original):
+            diff_count = np.sum(enhanced != result_original)
+            print(f"[VERIFY] numpy vs original mismatch: {diff_count} pixels differ")
+        else:
+            print("[VERIFY] numpy implementation matches original perfectly")
 
     return enhanced
 

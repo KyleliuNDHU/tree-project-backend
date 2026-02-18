@@ -84,11 +84,10 @@ async function initTable() {
   }
 }
 
-// 啟動時初始化資料表
-initTable();
-
-// 修正已存在的 CHECK constraint（加入 'transferred' 狀態）
+// 啟動時依序初始化資料表及執行 migrations
 (async () => {
+  await initTable();
+
   try {
     await pool.query(`
       DO $$
@@ -107,10 +106,7 @@ initTable();
   } catch (e) {
     console.warn('[pending-measurements] Constraint migration skipped:', e.message);
   }
-})();
 
-// 自動 migration：加入 measurement_type 欄位（如果表已存在但沒有此欄位）
-(async () => {
   try {
     await pool.query(`
       DO $$
@@ -142,6 +138,10 @@ router.post('/batch', async (req, res) => {
       success: false, 
       message: '請提供測量記錄陣列' 
     });
+  }
+
+  if (measurements.length > 500) {
+    return res.status(400).json({ success: false, message: '批次上限 500 筆' });
   }
   
   const client = await pool.connect();
@@ -204,7 +204,7 @@ router.post('/batch', async (req, res) => {
     res.status(500).json({ 
       success: false, 
       message: '創建失敗',
-      error: error.message 
+      error: '操作失敗，請稍後再試' 
     });
   } finally {
     client.release();
@@ -239,7 +239,7 @@ router.get('/sessions', async (req, res) => {
     res.status(500).json({ 
       success: false, 
       message: '獲取失敗',
-      error: error.message 
+      error: '操作失敗，請稍後再試' 
     });
   }
 });
@@ -277,7 +277,7 @@ router.get('/trees', async (req, res) => {
     res.status(500).json({ 
       success: false, 
       message: '獲取失敗',
-      error: error.message 
+      error: '操作失敗，請稍後再試' 
     });
   }
 });
@@ -308,7 +308,7 @@ router.get('/stats/overview', async (req, res) => {
     res.status(500).json({ 
       success: false, 
       message: '獲取失敗',
-      error: error.message 
+      error: '操作失敗，請稍後再試' 
     });
   }
 });
@@ -340,7 +340,7 @@ router.get('/:id', async (req, res) => {
     res.status(500).json({ 
       success: false, 
       message: '獲取失敗',
-      error: error.message 
+      error: '操作失敗，請稍後再試' 
     });
   }
 });
@@ -406,7 +406,7 @@ router.patch('/:id', async (req, res) => {
     res.status(500).json({ 
       success: false, 
       message: '更新失敗',
-      error: error.message 
+      error: '操作失敗，請稍後再試' 
     });
   }
 });
@@ -605,7 +605,7 @@ router.post('/transfer', async (req, res) => {
     res.status(500).json({ 
       success: false, 
       message: '轉移失敗',
-      error: error.message 
+      error: '操作失敗，請稍後再試' 
     });
   } finally {
     client.release();
@@ -625,6 +625,14 @@ router.delete('/session/:sessionId', async (req, res) => {
       [sessionId]
     );
     
+    if (result.rows.length === 0) {
+      return res.status(404).json({
+        success: false,
+        message: '找不到該批次的記錄',
+        deleted_count: 0
+      });
+    }
+
     res.json({
       success: true,
       message: `已刪除 ${result.rows.length} 筆記錄`,
@@ -636,7 +644,7 @@ router.delete('/session/:sessionId', async (req, res) => {
     res.status(500).json({ 
       success: false, 
       message: '刪除失敗',
-      error: error.message 
+      error: '操作失敗，請稍後再試' 
     });
   }
 });

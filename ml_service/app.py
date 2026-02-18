@@ -19,6 +19,7 @@ import time
 import hmac
 import base64
 import hashlib
+import asyncio
 import traceback
 from typing import Optional, List
 from collections import defaultdict
@@ -104,6 +105,8 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
         response = await call_next(request)
         return response
 
+_model_load_lock = asyncio.Lock()
+
 from depth_estimation import (
     estimate_depth, estimate_depth_rich, estimate_depth_with_info,
     load_model, get_backend_info, DepthResult,
@@ -185,7 +188,8 @@ async def startup_event():
     print_config_summary()
     print("[Startup] Pre-loading depth model...")
     try:
-        load_model()
+        async with _model_load_lock:
+            load_model()
         print("[Startup] Model ready!")
     except Exception as e:
         print(f"[Startup] Warning: Could not pre-load model: {e}")
@@ -266,7 +270,7 @@ async def estimate_depth_endpoint(
 
     except Exception as e:
         traceback.print_exc()
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail="處理過程中發生內部錯誤，請稍後再試")
 
 
 # ============================================================
@@ -309,9 +313,17 @@ async def measure_dbh_endpoint(
     The bounding box should tightly surround the tree trunk.
     """
     try:
-        # Read image and resize for performance
+        # Input validation
+        if image.content_type and not image.content_type.startswith('image/'):
+            raise HTTPException(status_code=400, detail="上傳的檔案不是圖片格式")
+
         img_bytes = await image.read()
-        pil_image_orig = Image.open(io.BytesIO(img_bytes)).convert("RGB")
+        if len(img_bytes) > 20 * 1024 * 1024:
+            raise HTTPException(status_code=413, detail="圖片大小超過 20MB 限制")
+        try:
+            pil_image_orig = Image.open(io.BytesIO(img_bytes)).convert("RGB")
+        except Exception:
+            raise HTTPException(status_code=400, detail="無法解析圖片，請確認檔案格式正確")
         W_orig, H_orig = pil_image_orig.size
         pil_image, scale = _resize_for_processing(pil_image_orig)
         W, H = pil_image.size
@@ -422,7 +434,7 @@ async def measure_dbh_endpoint(
         raise
     except Exception as e:
         traceback.print_exc()
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail="處理過程中發生內部錯誤，請稍後再試")
 
 
 # ============================================================
@@ -486,9 +498,20 @@ async def auto_measure_dbh_endpoint(
     Like Tesla's vision system: point the camera, AI does everything.
     """
     try:
-        # Read image and resize for performance
+        # Input validation
+        if image.content_type and not image.content_type.startswith('image/'):
+            raise HTTPException(status_code=400, detail="上傳的檔案不是圖片格式")
+        
+        if mode is not None and mode not in ('fast', 'balanced', 'accurate'):
+            raise HTTPException(status_code=400, detail=f"無效的精度模式: {mode}，請使用 fast/balanced/accurate")
+
         img_bytes = await image.read()
-        pil_image_orig = Image.open(io.BytesIO(img_bytes)).convert("RGB")
+        if len(img_bytes) > 20 * 1024 * 1024:
+            raise HTTPException(status_code=413, detail="圖片大小超過 20MB 限制")
+        try:
+            pil_image_orig = Image.open(io.BytesIO(img_bytes)).convert("RGB")
+        except Exception:
+            raise HTTPException(status_code=400, detail="無法解析圖片，請確認檔案格式正確")
         W_orig, H_orig = pil_image_orig.size
         pil_image, scale = _resize_for_processing(pil_image_orig)
         W, H = pil_image.size
@@ -788,7 +811,7 @@ async def auto_measure_dbh_endpoint(
         raise
     except Exception as e:
         traceback.print_exc()
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail="處理過程中發生內部錯誤，請稍後再試")
 
 
 # ============================================================
@@ -881,7 +904,7 @@ async def depth_at_point(
         raise
     except Exception as e:
         traceback.print_exc()
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail="處理過程中發生內部錯誤，請稍後再試")
 
 
 # ============================================================
@@ -1013,7 +1036,7 @@ async def auto_measure_dbh_multi_endpoint(
         raise
     except Exception as e:
         traceback.print_exc()
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail="處理過程中發生內部錯誤，請稍後再試")
 
 
 # ============================================================
