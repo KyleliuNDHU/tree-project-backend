@@ -356,7 +356,8 @@ router.patch('/:id', async (req, res) => {
   const allowedFields = [
     'status', 'measured_dbh_cm', 'measurement_confidence',
     'measurement_method', 'measurement_notes', 'completed_at',
-    'assigned_to', 'species_name', 'measurement_type'
+    'assigned_to', 'species_name', 'measurement_type',
+    'project_area', 'project_code', 'project_name'
   ];
   
   const setClauses = [];
