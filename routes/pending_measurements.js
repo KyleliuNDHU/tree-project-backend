@@ -14,7 +14,8 @@
 
 const express = require('express');
 const router = express.Router();
-const pool = require('../config/db');
+const db = require('../config/db');
+const pool = db.pool;
 
 /**
  * 初始化資料表 (如果不存在)
