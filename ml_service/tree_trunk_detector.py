@@ -58,10 +58,10 @@ class DetectionResult:
 
 
 def detect_trunks(depth_map: np.ndarray,
-                  min_trunk_width_ratio: float = 0.02,
-                  max_trunk_width_ratio: float = 0.5,
-                  min_trunk_height_ratio: float = 0.15,
-                  center_bias: float = 0.3,
+                  min_trunk_width_ratio: float = 0.01,
+                  max_trunk_width_ratio: float = 0.7,
+                  min_trunk_height_ratio: float = 0.10,
+                  center_bias: float = 0.25,
                   max_trunks: int = 5) -> DetectionResult:
     """
     Automatically detect tree trunks from a depth map.

@@ -64,9 +64,7 @@ _sam_predictor = None
 
 def _load_sam_model():
     """
-    Load SAM 2.1 model (lazy singleton).
-    
-    This function is a NO-OP if SAM 2.1 is not installed.
+    Load SAM 2.1 model via HuggingFace transformers (lazy singleton).
     Enable with: ML_ENABLE_SAM=true environment variable.
     """
     global _sam_model, _sam_predictor
@@ -79,34 +77,31 @@ def _load_sam_model():
         return None
     
     try:
-        # ── SAM 2.1 Loading ─────────────────────────────────
-        # Uncomment the appropriate import once SAM 2.1 is installed:
+        from transformers import Sam2Model, Sam2Processor
+        import torch
         
-        # Option A: pip install sam2
-        # from sam2.build_sam import build_sam2
-        # from sam2.sam2_image_predictor import SAM2ImagePredictor
-        #
-        # config = get_seg_config()
-        # checkpoint = f"checkpoints/{config.model_id.split('/')[-1]}.pt"
-        # _sam_model = build_sam2(config.model_id, checkpoint)
-        # _sam_predictor = SAM2ImagePredictor(_sam_model)
+        config = get_seg_config()
+        model_id = config.model_id
+        print(f"[SAM] Loading SAM 2.1 from {model_id}...")
         
-        # Option B: HuggingFace transformers (when available)
-        # from transformers import SamModel, SamProcessor
-        # config = get_seg_config()
-        # _sam_model = SamModel.from_pretrained(config.model_id)
-        # _sam_predictor = SamProcessor.from_pretrained(config.model_id)
+        _sam_model = Sam2Model.from_pretrained(model_id)
+        _sam_predictor = Sam2Processor.from_pretrained(model_id)
         
-        print("[SAM] SAM 2.1 is not yet installed. Using placeholder.")
-        print("[SAM] To install: pip install sam2")
-        return None
+        _sam_model.eval()
+        if hasattr(torch, 'inference_mode'):
+            _sam_model = torch.no_grad()
+        
+        print(f"[SAM] SAM 2.1 loaded successfully ({config.params_m}M params)")
+        return _sam_predictor
         
     except ImportError as e:
-        print(f"[SAM] SAM 2.1 not installed: {e}")
-        print("[SAM] Install with: pip install sam2")
+        print(f"[SAM] transformers version too old for Sam2Model: {e}")
+        print("[SAM] Upgrade: pip install --upgrade transformers>=4.45.0")
         return None
     except Exception as e:
         print(f"[SAM] Failed to load SAM model: {e}")
+        import traceback
+        traceback.print_exc()
         return None
 
 
@@ -157,32 +152,29 @@ def segment_trunk_auto(
             )
     
     # ── SAM 2.1: Auto-prompt from depth ──────────────────────
-    # Find the center of the closest foreground object
     prompt_point = _find_foreground_center(depth_map)
     
-    # TODO: Uncomment when SAM 2.1 is installed
-    # predictor.set_image(image)
-    # masks, scores, _ = predictor.predict(
-    #     point_coords=np.array([prompt_point]),
-    #     point_labels=np.array([1]),  # 1 = foreground
-    #     multimask_output=True,
-    # )
-    # # Pick the mask with highest score
-    # best_idx = np.argmax(scores)
-    # best_mask = masks[best_idx]
-    # best_score = float(scores[best_idx])
-    
-    # Placeholder until SAM is installed:
-    best_mask = _simple_depth_foreground(depth_map)
-    best_score = 0.3
-    
-    return SegmentationResult(
-        mask=best_mask,
-        confidence=best_score,
-        method="sam2_auto",
-        prompt_point=prompt_point,
-        notes=[f"Auto-prompt at ({prompt_point[0]}, {prompt_point[1]})"],
-    )
+    try:
+        best_mask, best_score = _run_sam_point_prompt(
+            image, [prompt_point], [1]
+        )
+        return SegmentationResult(
+            mask=best_mask,
+            confidence=best_score,
+            method="sam2_auto",
+            prompt_point=prompt_point,
+            notes=[f"SAM 2.1 auto-prompt at ({prompt_point[0]}, {prompt_point[1]})"],
+        )
+    except Exception as e:
+        print(f"[SAM] Inference failed, falling back to heuristic: {e}")
+        mask = _simple_depth_foreground(depth_map)
+        return SegmentationResult(
+            mask=mask,
+            confidence=0.3,
+            method="heuristic",
+            prompt_point=prompt_point,
+            notes=[f"SAM inference failed: {e}, using heuristic fallback"],
+        )
 
 
 def segment_trunk_with_tap(
@@ -208,7 +200,6 @@ def segment_trunk_with_tap(
     predictor = _load_sam_model()
     
     if predictor is None:
-        # Fallback: create a depth-based mask centered around the tap point
         mask = _depth_mask_near_point(depth_map, tap_x, tap_y)
         return SegmentationResult(
             mask=mask,
@@ -218,27 +209,27 @@ def segment_trunk_with_tap(
             notes=["SAM not available, using depth-based mask around tap point"],
         )
     
-    # TODO: Uncomment when SAM 2.1 is installed
-    # predictor.set_image(image)
-    # masks, scores, _ = predictor.predict(
-    #     point_coords=np.array([[tap_x, tap_y]]),
-    #     point_labels=np.array([1]),  # 1 = foreground
-    #     multimask_output=True,
-    # )
-    # best_idx = np.argmax(scores)
-    # best_mask = masks[best_idx]
-    # best_score = float(scores[best_idx])
-    
-    best_mask = _depth_mask_near_point(depth_map, tap_x, tap_y)
-    best_score = 0.4
-    
-    return SegmentationResult(
-        mask=best_mask,
-        confidence=best_score,
-        method="sam2_tap",
-        prompt_point=(tap_x, tap_y),
-        notes=[f"User tap prompt at ({tap_x}, {tap_y})"],
-    )
+    try:
+        best_mask, best_score = _run_sam_point_prompt(
+            image, [(tap_x, tap_y)], [1]
+        )
+        return SegmentationResult(
+            mask=best_mask,
+            confidence=best_score,
+            method="sam2_tap",
+            prompt_point=(tap_x, tap_y),
+            notes=[f"SAM 2.1 user tap at ({tap_x}, {tap_y})"],
+        )
+    except Exception as e:
+        print(f"[SAM] Tap inference failed: {e}")
+        mask = _depth_mask_near_point(depth_map, tap_x, tap_y)
+        return SegmentationResult(
+            mask=mask,
+            confidence=0.4,
+            method="heuristic",
+            prompt_point=(tap_x, tap_y),
+            notes=[f"SAM tap failed: {e}, using heuristic"],
+        )
 
 
 def segment_trunk_with_bbox(
@@ -299,6 +290,52 @@ def segment_trunk_with_bbox(
 # ============================================================
 # Helper: Depth-based Fallback Masks
 # ============================================================
+
+def _run_sam_point_prompt(
+    image: np.ndarray,
+    points: List[Tuple[int, int]],
+    labels: List[int],
+) -> Tuple[np.ndarray, float]:
+    """
+    Run SAM 2.1 inference with point prompts via HuggingFace transformers.
+    Returns (mask, score).
+    """
+    import torch
+    
+    global _sam_model, _sam_predictor
+    processor = _sam_predictor
+    model = _sam_model
+    
+    pil_image = Image.fromarray(image) if isinstance(image, np.ndarray) else image
+    
+    input_points = [[[p[0], p[1]] for p in points]]
+    input_labels = [labels]
+    
+    inputs = processor(
+        pil_image,
+        input_points=input_points,
+        input_labels=input_labels,
+        return_tensors="pt",
+    )
+    
+    with torch.no_grad():
+        outputs = model(**inputs)
+    
+    masks = processor.post_process_masks(
+        outputs.pred_masks,
+        inputs["original_sizes"],
+        inputs["reshaped_input_sizes"],
+    )
+    
+    scores = outputs.iou_scores[0][0]
+    mask_tensors = masks[0][0]
+    
+    best_idx = torch.argmax(scores).item()
+    best_mask = mask_tensors[best_idx].cpu().numpy().astype(np.uint8)
+    best_score = float(scores[best_idx].cpu())
+    
+    return best_mask, best_score
+
 
 def _find_foreground_center(depth_map: np.ndarray) -> Tuple[int, int]:
     """

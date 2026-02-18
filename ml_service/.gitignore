@@ -3,7 +3,9 @@ __pycache__/
 .hf_cache/
 *.egg-info/
 .env
+self_host/.env
 venv/
+logs/
 
 # ONNX exported models (large binary files)
 onnx_models/

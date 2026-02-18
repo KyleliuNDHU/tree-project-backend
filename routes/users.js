@@ -168,13 +168,12 @@ router.post('/login', loginLimiter, async (req, res) => {
             }
         }
 
-        // ML Service 設定（僅管理員角色可取得 API Key）
+        // ML Service 設定（所有已登入使用者都可取得，確保 App 無需手動設定）
         const mlConfig = {};
         if (process.env.ML_SERVICE_URL) {
             mlConfig.url = process.env.ML_SERVICE_URL;
         }
-        const adminRolesForMl = ['系統管理員', '業務管理員', '專案管理員', '調查管理員'];
-        if (process.env.ML_API_KEY && adminRolesForMl.includes(user.role)) {
+        if (process.env.ML_API_KEY) {
             mlConfig.apiKey = process.env.ML_API_KEY;
         }
 

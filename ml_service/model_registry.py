@@ -83,6 +83,24 @@ DEPTH_MODELS: Dict[str, DepthModelConfig] = {
         notes="Largest DA V2. Very slow on CPU. Only use with ONNX optimization.",
     ),
     
+    # ── Apple Depth Pro (SOTA) ────────────────────────────────
+    "depth_pro": DepthModelConfig(
+        model_id="apple/DepthPro-hf",
+        display_name="Apple Depth Pro",
+        params_m=350.0,
+        license="Apple Sample Code License",
+        expected_cpu_time_s=25.0,
+        input_size=1536,
+        output_type="metric",
+        backend="depth_pro",
+        notes=(
+            "ICLR 2025 SOTA. Sharp boundaries (+40% vs DA V2). "
+            "Auto focal length + FOV estimation. "
+            "0.3s on GPU, ~5-8s on Intel Arc iGPU via OpenVINO, ~25s on CPU. "
+            "Uses DepthProForDepthEstimation + DepthProImageProcessorFast."
+        ),
+    ),
+    
     # ── Phase 3: Next Generation ───────────────────────────────
     # TODO: Uncomment when DA3 is tested on this hardware
     # "da3_metric_large": DepthModelConfig(
@@ -230,6 +248,11 @@ INPUT_SIZE_OVERRIDE = int(os.environ.get("ML_INPUT_SIZE", "0"))  # 0 = use model
 # 👇 Phase 2: Enable SAM segmentation (requires sam2 to be installed)
 ENABLE_SAM_SEGMENTATION = os.environ.get("ML_ENABLE_SAM", "false").lower() == "true"
 
+# 👇 OpenVINO acceleration for Intel Arc iGPU / NPU / CPU
+#    Gives 2-3x speedup on Intel hardware. Auto-detects best device.
+#    Steps: pip install optimum[openvino] openvino
+ENABLE_OPENVINO = os.environ.get("ML_USE_OPENVINO", "false").lower() == "true"
+
 
 # ============================================================
 # Accuracy Mode Presets
@@ -259,22 +282,22 @@ ACCURACY_PRESETS: Dict[str, AccuracyPreset] = {
         description="快速模式 (~1.5s): 野外大量調查快速篩檢",
     ),
     "balanced": AccuracyPreset(
-        depth_model="da_v2_small",     # 👈 Phase 1: 改成 "da_v2_base"
-        seg_model="depth_heuristic",   # 👈 Phase 2: 改成 "sam2_tiny"
-        input_size=0,                  # Model default (518)
+        depth_model="depth_pro",
+        seg_model="sam2_tiny",
+        input_size=0,
         use_multi_row=True,
-        use_subpixel=False,            # 👈 Phase 3: 改成 True
-        use_ellipse_fit=False,         # 👈 Phase 3: 改成 True
-        description="平衡模式 (~3-6s): 日常使用推薦",
+        use_subpixel=True,
+        use_ellipse_fit=False,
+        description="平衡模式 (~8-11s): Depth Pro + SAM 2.1 + 亞像素邊緣",
     ),
     "accurate": AccuracyPreset(
-        depth_model="da_v2_small",     # 👈 Phase 1: 改成 "da_v2_base"
-        seg_model="depth_heuristic",   # 👈 Phase 2: 改成 "sam2_tiny"
-        input_size=0,                  # Full resolution
+        depth_model="depth_pro",
+        seg_model="sam2_tiny",
+        input_size=0,
         use_multi_row=True,
-        use_subpixel=False,            # 👈 Phase 3: 改成 True
-        use_ellipse_fit=False,         # 👈 Phase 3: 改成 True
-        description="精確模式 (~5-10s): 研究級精密量測",
+        use_subpixel=True,
+        use_ellipse_fit=True,
+        description="精確模式 (~10-15s): Depth Pro + SAM 2.1 + 亞像素 + 橢圓擬合",
     ),
 }
 
@@ -323,6 +346,7 @@ def print_config_summary():
     print(f"  Est. Time:    ~{depth.expected_cpu_time_s}s on CPU")
     print(f"  Segmentation: {seg.display_name}")
     print(f"  ONNX Runtime: {'Enabled' if USE_ONNX_RUNTIME else 'Disabled'}")
+    print(f"  OpenVINO:     {'Enabled' if ENABLE_OPENVINO else 'Disabled'}")
     print(f"  CPU Threads:  {CPU_THREADS}")
     print(f"  Input Size:   {INPUT_SIZE_OVERRIDE if INPUT_SIZE_OVERRIDE else 'model default'}")
     print(f"  SAM Enabled:  {ENABLE_SAM_SEGMENTATION}")

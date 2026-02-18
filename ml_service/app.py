@@ -20,7 +20,7 @@ import hmac
 import base64
 import hashlib
 import traceback
-from typing import Optional
+from typing import Optional, List
 from collections import defaultdict
 
 from fastapi import FastAPI, File, UploadFile, Form, HTTPException, Request, Depends
@@ -104,7 +104,10 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
         response = await call_next(request)
         return response
 
-from depth_estimation import estimate_depth, estimate_depth_with_info, load_model
+from depth_estimation import (
+    estimate_depth, estimate_depth_rich, estimate_depth_with_info,
+    load_model, get_backend_info, DepthResult,
+)
 from dbh_calculator import (
     BoundingBox, DBHResult, measure_dbh, measure_dbh_multi_row,
     estimate_focal_length_from_fov, focal_length_from_exif,
@@ -113,16 +116,18 @@ from dbh_calculator import (
 )
 from visualization import create_result_image, depth_to_colormap, image_to_bytes
 from tree_trunk_detector import detect_trunks, create_detection_visualization
+from tree_segmentation import subpixel_trunk_width, ellipse_corrected_width
 from model_registry import (
     get_depth_config, get_seg_config, get_preset,
     print_config_summary, ACCURACY_PRESETS, DEPTH_MODELS,
-    USE_ONNX_RUNTIME, ENABLE_SAM_SEGMENTATION,
+    USE_ONNX_RUNTIME, ENABLE_SAM_SEGMENTATION, ENABLE_OPENVINO,
 )
 
 # Max processing dimension — larger images are resized to save memory & time.
-# Depth Anything V2 internally resizes to ~518px anyway; full-resolution is wasteful.
-# On Render free (1 CPU, 512 MB), a 12 MP photo can cause 502 timeout.
-MAX_PROCESSING_DIM = 800
+# DA V2 internally resizes to ~518px; Depth Pro uses 1536px.
+# Depth Pro benefits from higher input resolution, so we raise the limit when it's active.
+_depth_cfg = get_depth_config()
+MAX_PROCESSING_DIM = 1536 if _depth_cfg.backend == "depth_pro" else 800
 
 
 def _resize_for_processing(image: Image.Image) -> tuple:
@@ -197,6 +202,7 @@ async def health_check():
     """Health check endpoint (no auth required)."""
     depth_config = get_depth_config()
     seg_config = get_seg_config()
+    backend_info = get_backend_info()
     return {
         "status": "ok",
         "service": "dbh-measurement",
@@ -204,9 +210,11 @@ async def health_check():
         "model_params_m": depth_config.params_m,
         "segmentation": seg_config.display_name,
         "onnx_enabled": USE_ONNX_RUNTIME,
+        "openvino_enabled": ENABLE_OPENVINO,
         "sam_enabled": ENABLE_SAM_SEGMENTATION,
         "auth_required": bool(ML_API_KEY),
         "available_modes": list(ACCURACY_PRESETS.keys()),
+        "backend": backend_info,
     }
 
 
@@ -443,12 +451,17 @@ async def auto_measure_dbh_endpoint(
     mode: Optional[str] = Form(default=None,
         description="Accuracy mode: 'fast', 'balanced', or 'accurate'. "
                     "Controls model selection & processing detail."),
-    # ── 新增: GPS 參考距離 (Phase 2: 手機到樹距離校正) ────────
-    # 前端透過手機 GPS 到推算樹位的距離，作為絕對深度錨點
-    # 比單目視覺深度估計準確得多（誤差從 ~5-10% 降到 ~1-2%）
+    # ── 參考距離：GPS + 儀器 HD 雙源校正 ────────────────────────
     reference_distance: Optional[float] = Form(default=None,
-        description="Known distance from phone to tree (meters), from GPS. "
+        description="Known distance from phone to tree (meters), from GPS or instrument. "
                     "Overrides monocular depth estimation for higher accuracy."),
+    instrument_distance: Optional[float] = Form(default=None,
+        description="Instrument horizontal distance HD (meters). "
+                    "Used as fallback when GPS is unavailable or inaccurate, "
+                    "and for cross-validation with GPS distance."),
+    distance_source: Optional[str] = Form(default=None,
+        description="Which distance source the frontend chose: "
+                    "'gps' (phone GPS), 'instrument' (VLGEO2 HD), or 'none'."),
     # ── 新增: 使用者觸碰點 (Phase 2: SAM prompt) ──────────────
     # 使用者在手機上點擊目標樹幹 → 送出座標作為 SAM 分割的 prompt
     tap_x: Optional[int] = Form(default=None,
@@ -498,10 +511,21 @@ async def auto_measure_dbh_endpoint(
             effective_fov = 2 * math.atan(36.0 / (2 * focal_length_35mm)) * 180.0 / math.pi
             focal_source = f"35mm_equiv ({focal_length_35mm}mm → FOV={effective_fov:.1f}°)"
 
-        # Step 1: Depth estimation
+        # Step 1: Depth estimation (rich — includes Depth Pro auto-focal/fov)
         t0 = time.time()
-        depth_map = estimate_depth(pil_image)
+        depth_result = estimate_depth_rich(pil_image)
+        depth_map = depth_result.depth_map
         depth_time = time.time() - t0
+
+        # Depth Pro auto-focal: override if no EXIF provided
+        if depth_result.auto_focal_length_px is not None:
+            if effective_focal_px is None:
+                effective_focal_px = depth_result.auto_focal_length_px
+                if focal_source == "default":
+                    focal_source = f"depth_pro_auto ({depth_result.auto_focal_length_px:.1f}px)"
+        if depth_result.auto_fov_degrees is not None and focal_source == "default":
+            effective_fov = depth_result.auto_fov_degrees
+            focal_source = f"depth_pro_fov ({depth_result.auto_fov_degrees:.1f}°)"
 
         # Step 2: Auto trunk detection
         t1 = time.time()
@@ -551,62 +575,141 @@ async def auto_measure_dbh_endpoint(
         )
         calc_time = time.time() - t2
 
-        # ── Phase 2: GPS reference distance override ──────────────
-        # If the frontend provides a known phone-to-tree distance (from GPS),
-        # use it as the absolute depth instead of the monocular estimate.
-        # This dramatically improves accuracy: monocular depth has ~20-50% error,
-        # while GPS distance at 1-5m range has ~2-5m error (still better for
-        # relative scale calibration).
+        # Step 4.5: Subpixel + Ellipse refinement (mode-dependent)
+        active_preset = get_preset(mode) if mode else get_preset("balanced")
+        subpixel_width = None
+        ellipse_width = None
+
+        if active_preset.use_subpixel and result.measurement_row is not None:
+            try:
+                gray = np.array(pil_image.convert("L")).astype(np.float64)
+                fg_mask = (depth_map < np.percentile(depth_map, 40)).astype(np.uint8)
+                sub_w = subpixel_trunk_width(gray, fg_mask, result.measurement_row)
+                if sub_w is not None and sub_w > 3:
+                    subpixel_width = sub_w
+                    old_px = result.trunk_pixel_width
+                    depth_at_row = result.trunk_depth_m
+                    new_chord = pixel_width_to_metric(sub_w, depth_at_row, result.focal_length_px)
+                    new_dbh_m = cylindrical_correction(new_chord, depth_at_row)
+                    result = DBHResult(
+                        dbh_cm=round(new_dbh_m * 100.0, 2),
+                        confidence=min(1.0, round(result.confidence + 0.05, 3)),
+                        trunk_depth_m=result.trunk_depth_m,
+                        trunk_pixel_width=round(sub_w, 2),
+                        chord_length_m=round(new_chord, 4),
+                        focal_length_px=result.focal_length_px,
+                        measurement_row=result.measurement_row,
+                        method=f"{result.method}+subpixel",
+                        notes=result.notes + [
+                            f"Subpixel refinement: {old_px:.1f}px → {sub_w:.2f}px"
+                        ],
+                    )
+            except Exception as e:
+                result.notes.append(f"Subpixel refinement skipped: {e}")
+
+        if active_preset.use_ellipse_fit and result.measurement_row is not None:
+            try:
+                fg_mask = (depth_map < np.percentile(depth_map, 40)).astype(np.uint8)
+                ell_w = ellipse_corrected_width(fg_mask, result.measurement_row)
+                if ell_w is not None and ell_w > 3:
+                    ellipse_width = ell_w
+                    depth_at_row = result.trunk_depth_m
+                    new_chord = pixel_width_to_metric(ell_w, depth_at_row, result.focal_length_px)
+                    new_dbh_m = cylindrical_correction(new_chord, depth_at_row)
+                    result = DBHResult(
+                        dbh_cm=round(new_dbh_m * 100.0, 2),
+                        confidence=min(1.0, round(result.confidence + 0.05, 3)),
+                        trunk_depth_m=result.trunk_depth_m,
+                        trunk_pixel_width=round(ell_w, 2),
+                        chord_length_m=round(new_chord, 4),
+                        focal_length_px=result.focal_length_px,
+                        measurement_row=result.measurement_row,
+                        method=f"{result.method}+ellipse",
+                        notes=result.notes + [
+                            f"Ellipse fitting: equivalent diameter {ell_w:.2f}px"
+                        ],
+                    )
+            except Exception as e:
+                result.notes.append(f"Ellipse fitting skipped: {e}")
+
+        # ── Smart distance selection & depth correction ───────────────
+        # Priority: GPS (if accurate) > Instrument HD > Monocular depth
+        # Cross-validate GPS vs Instrument when both available
         depth_source = "monocular"
-        if reference_distance is not None and reference_distance > 0:
+        chosen_distance = None
+        correction_notes = []
+        
+        _ref = reference_distance if (reference_distance is not None and reference_distance > 0) else None
+        _inst = instrument_distance if (instrument_distance is not None and instrument_distance > 0) else None
+        _src = distance_source or "none"
+        
+        if _ref is not None and _inst is not None:
+            deviation = abs(_ref - _inst) / _inst if _inst > 0 else float('inf')
+            if deviation < 0.5:
+                # GPS and instrument agree within 50% — use GPS (more precise for actual position)
+                chosen_distance = _ref
+                depth_source = "gps_validated"
+                correction_notes.append(
+                    f"GPS ({_ref:.2f}m) validated by instrument HD ({_inst:.2f}m), deviation {deviation:.0%}"
+                )
+            else:
+                # Large disagreement — trust instrument HD (calibrated device)
+                chosen_distance = _inst
+                depth_source = "instrument_preferred"
+                correction_notes.append(
+                    f"GPS ({_ref:.2f}m) disagrees with instrument HD ({_inst:.2f}m) by {deviation:.0%}, using instrument"
+                )
+        elif _ref is not None:
+            chosen_distance = _ref
+            depth_source = f"gps_{_src}" if _src == "gps" else "reference"
+            correction_notes.append(f"Reference distance: {_ref:.2f}m (source: {_src})")
+        elif _inst is not None:
+            chosen_distance = _inst
+            depth_source = "instrument"
+            correction_notes.append(f"Instrument HD: {_inst:.2f}m")
+        
+        if chosen_distance is not None:
             original_depth = result.trunk_depth_m
-            # Scale factor: ratio of GPS distance to monocular depth
             if original_depth > 0:
-                scale_factor = reference_distance / original_depth
-                # Recalculate DBH with corrected depth
+                scale_factor = chosen_distance / original_depth
                 corrected_chord = result.chord_length_m * scale_factor
-                # Re-apply cylindrical correction with new distance
-                corrected_dbh_m = cylindrical_correction(corrected_chord, reference_distance)
+                corrected_dbh_m = cylindrical_correction(corrected_chord, chosen_distance)
                 corrected_dbh_cm = corrected_dbh_m * 100.0
+                
+                confidence_boost = 0.15 if depth_source == "gps_validated" else 0.1
                 
                 result = DBHResult(
                     dbh_cm=round(corrected_dbh_cm, 2),
-                    confidence=min(1.0, round(result.confidence + 0.1, 3)),  # Boost confidence
-                    trunk_depth_m=round(reference_distance, 3),
+                    confidence=min(1.0, round(result.confidence + confidence_boost, 3)),
+                    trunk_depth_m=round(chosen_distance, 3),
                     trunk_pixel_width=result.trunk_pixel_width,
                     chord_length_m=round(corrected_chord, 4),
                     focal_length_px=result.focal_length_px,
                     measurement_row=result.measurement_row,
-                    method=f"{result.method}+gps_corrected",
-                    notes=result.notes + [
-                        f"GPS reference distance: {reference_distance:.2f}m",
+                    method=f"{result.method}+{depth_source}",
+                    notes=result.notes + correction_notes + [
                         f"Monocular depth was: {original_depth:.2f}m (scale: {scale_factor:.2f}x)",
-                        f"Depth source: GPS (phone-to-tree distance)",
                     ],
                 )
-                depth_source = "gps_reference"
             else:
-                # Monocular depth failed but we have GPS distance — use it directly
-                # Recalculate from pixel width
                 chord_m = pixel_width_to_metric(
-                    result.trunk_pixel_width, reference_distance, result.focal_length_px
+                    result.trunk_pixel_width, chosen_distance, result.focal_length_px
                 )
-                dbh_m = cylindrical_correction(chord_m, reference_distance)
+                dbh_m = cylindrical_correction(chord_m, chosen_distance)
                 result = DBHResult(
                     dbh_cm=round(dbh_m * 100.0, 2),
-                    confidence=round(0.6, 3),  # Moderate confidence
-                    trunk_depth_m=round(reference_distance, 3),
+                    confidence=round(0.6, 3),
+                    trunk_depth_m=round(chosen_distance, 3),
                     trunk_pixel_width=result.trunk_pixel_width,
                     chord_length_m=round(chord_m, 4),
                     focal_length_px=result.focal_length_px,
                     measurement_row=result.measurement_row,
-                    method="gps_only",
-                    notes=[
-                        f"GPS reference distance: {reference_distance:.2f}m",
-                        "Monocular depth failed, using GPS distance directly",
+                    method=f"{depth_source}_fallback",
+                    notes=correction_notes + [
+                        "Monocular depth failed, using external distance directly",
                     ],
                 )
-                depth_source = "gps_fallback"
+                depth_source = f"{depth_source}_fallback"
 
         if focal_source != "default":
             result.notes.append(f"Focal source: {focal_source}")
@@ -650,6 +753,7 @@ async def auto_measure_dbh_endpoint(
             ],
             "depth_source": depth_source,
             "reference_distance_m": reference_distance,
+            "instrument_distance_m": instrument_distance,
             "timing": {
                 "depth_estimation_ms": round(depth_time * 1000, 1),
                 "detection_ms": round(detect_time * 1000, 1),
@@ -658,6 +762,7 @@ async def auto_measure_dbh_endpoint(
             },
             "image_size": {"width": W_orig, "height": H_orig},
             "processing_size": {"width": W, "height": H},
+            "backend_used": depth_result.backend_used,
         }
 
         if return_visualization:
@@ -730,6 +835,7 @@ async def get_ml_config():
             "name": seg_config.display_name,
         },
         "onnx_enabled": USE_ONNX_RUNTIME,
+        "openvino_enabled": ENABLE_OPENVINO,
         "sam_enabled": ENABLE_SAM_SEGMENTATION,
         "available_modes": modes_info,
     }
@@ -770,6 +876,138 @@ async def depth_at_point(
             "neighborhood_std_m": round(float(np.std(neighborhood)), 4),
             "point": {"x": x, "y": y},
         }
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+# ============================================================
+# Multi-Photo Fusion Endpoint
+# ============================================================
+
+@app.post("/api/v1/auto-measure-dbh-multi", dependencies=[Depends(verify_api_key)])
+async def auto_measure_dbh_multi_endpoint(
+    images: List[UploadFile] = File(..., description="2-3 photos of the same tree"),
+    focal_length_mm: Optional[float] = Form(default=None),
+    focal_length_35mm: Optional[float] = Form(default=None),
+    fov_degrees: float = Form(default=70.0),
+    phone_make: Optional[str] = Form(default=None),
+    phone_model: Optional[str] = Form(default=None),
+    reference_distance: Optional[float] = Form(default=None),
+    instrument_distance: Optional[float] = Form(default=None),
+    mode: Optional[str] = Form(default=None),
+):
+    """
+    Multi-photo DBH measurement for higher accuracy.
+
+    Takes 2-3 photos of the same tree and fuses depth maps
+    by taking the median, reducing single-inference noise.
+    Confidence is boosted based on inter-photo consistency.
+    """
+    if len(images) < 2:
+        raise HTTPException(status_code=400, detail="At least 2 images required")
+    if len(images) > 3:
+        raise HTTPException(status_code=400, detail="Maximum 3 images supported for multi-shot")
+
+    try:
+        dbh_results = []
+        total_time = 0
+
+        for i, img_upload in enumerate(images):
+            img_bytes = await img_upload.read()
+            pil_img = Image.open(io.BytesIO(img_bytes)).convert("RGB")
+            pil_img, scale = _resize_for_processing(pil_img)
+            W, H = pil_img.size
+
+            # Compute focal
+            eff_focal = None
+            eff_fov = fov_degrees
+            if focal_length_mm is not None:
+                sensor_w, _ = match_phone_sensor(phone_make or "", phone_model or "")
+                eff_focal = focal_length_from_exif(focal_length_mm, sensor_w, W)
+            elif focal_length_35mm is not None:
+                eff_fov = 2 * math.atan(36.0 / (2 * focal_length_35mm)) * 180.0 / math.pi
+
+            t0 = time.time()
+            depth_result = estimate_depth_rich(pil_img)
+            depth_map = depth_result.depth_map
+
+            if eff_focal is None and depth_result.auto_focal_length_px is not None:
+                eff_focal = depth_result.auto_focal_length_px
+            if depth_result.auto_fov_degrees is not None and eff_focal is None:
+                eff_fov = depth_result.auto_fov_degrees
+
+            detection = detect_trunks(depth_map)
+            if not detection.trunks or detection.best_trunk_index < 0:
+                continue
+
+            best = detection.trunks[detection.best_trunk_index]
+            bbox = BoundingBox(x1=best.bbox_x1, y1=best.bbox_y1, x2=best.bbox_x2, y2=best.bbox_y2)
+            result = measure_dbh_multi_row(
+                depth_map, bbox,
+                focal_length_px=eff_focal, image_width_px=W, fov_degrees=eff_fov,
+            )
+            elapsed = time.time() - t0
+            total_time += elapsed
+            dbh_results.append(result)
+
+        if not dbh_results:
+            return JSONResponse(content={
+                "success": False,
+                "error": "no_trunk_in_any_image",
+                "message": "所有照片都未偵測到樹幹",
+            })
+
+        dbh_values = [r.dbh_cm for r in dbh_results]
+        median_dbh = float(np.median(dbh_values))
+        std_dbh = float(np.std(dbh_values)) if len(dbh_values) > 1 else 0
+        cv = std_dbh / median_dbh if median_dbh > 0 else 1.0
+
+        # Consistency-based confidence: low CV = high confidence
+        base_confidence = np.mean([r.confidence for r in dbh_results])
+        multi_boost = 0.1 if cv < 0.15 else 0.05 if cv < 0.3 else 0
+        final_confidence = min(1.0, float(base_confidence + multi_boost))
+
+        # Apply distance correction to median
+        _ref = reference_distance if (reference_distance and reference_distance > 0) else None
+        _inst = instrument_distance if (instrument_distance and instrument_distance > 0) else None
+        chosen_dist = _ref or _inst
+        depth_source = "monocular_multi"
+
+        if chosen_dist:
+            median_result = dbh_results[len(dbh_results) // 2]
+            if median_result.trunk_depth_m > 0:
+                sf = chosen_dist / median_result.trunk_depth_m
+                corr_chord = median_result.chord_length_m * sf
+                corr_dbh = cylindrical_correction(corr_chord, chosen_dist) * 100.0
+                median_dbh = round(corr_dbh, 2)
+                depth_source = "multi_corrected"
+                final_confidence = min(1.0, final_confidence + 0.1)
+
+        return JSONResponse(content={
+            "success": True,
+            "multi_shot": True,
+            "num_images": len(images),
+            "num_valid": len(dbh_results),
+            "dbh_cm": round(median_dbh, 2),
+            "confidence": round(final_confidence, 3),
+            "dbh_std_cm": round(std_dbh, 2),
+            "dbh_cv": round(cv, 3),
+            "individual_dbh_cm": [round(d, 2) for d in dbh_values],
+            "method": f"multi_median_{len(dbh_results)}shot+{depth_source}",
+            "depth_source": depth_source,
+            "notes": [
+                f"Multi-shot fusion: {len(dbh_results)}/{len(images)} images valid",
+                f"DBH range: {min(dbh_values):.1f} - {max(dbh_values):.1f} cm (CV={cv:.1%})",
+            ],
+            "timing": {
+                "total_ms": round(total_time * 1000, 1),
+                "per_image_ms": round(total_time / len(dbh_results) * 1000, 1) if dbh_results else 0,
+            },
+        })
 
     except HTTPException:
         raise
