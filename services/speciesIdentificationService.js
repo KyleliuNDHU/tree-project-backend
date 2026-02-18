@@ -386,7 +386,7 @@ async function autoAddSpeciesFromIdentification(primaryResult) {
         // 再次確認不存在（防止並發）
         const { rows: existing } = await client.query(
             `SELECT id, name, scientific_name FROM tree_species 
-             WHERE name = $1 OR ($2 IS NOT NULL AND LOWER(scientific_name) = LOWER($2))`,
+             WHERE name = $1 OR ($2::text IS NOT NULL AND LOWER(scientific_name) = LOWER($2::text))`,
             [displayName, scientificName]
         );
         if (existing.length > 0) {
