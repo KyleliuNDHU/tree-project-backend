@@ -19,9 +19,22 @@ const upload = multer({
     }
 });
 
+// Multer 錯誤處理包裝
+function handleMulterUpload(req, res, next) {
+    upload.single('file')(req, res, (err) => {
+        if (err) {
+            const message = err.code === 'LIMIT_FILE_SIZE'
+                ? '檔案大小超過限制 (最大 50MB)'
+                : err.message || '檔案上傳失敗';
+            return res.status(400).json({ success: false, message });
+        }
+        next();
+    });
+}
+
 // POST /api/admin/import-csv/preview — 上傳 CSV，回傳分析結果（不寫入）
 // 限業務管理員以上
-router.post('/preview', requireRole('業務管理員'), upload.single('file'), csvImportController.preview);
+router.post('/preview', requireRole('業務管理員'), handleMulterUpload, csvImportController.preview);
 
 // POST /api/admin/import-csv/execute — 確認後執行匯入
 // 限業務管理員以上
