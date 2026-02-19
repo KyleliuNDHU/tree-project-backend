@@ -34,7 +34,9 @@ async function fetchFromMlService(path) {
     }
 
     const url = `${baseUrl}${path}`;
-    const headers = {};
+    const headers = {
+        'ngrok-skip-browser-warning': 'true',
+    };
 
     const mlApiKey = process.env.ML_API_KEY;
     if (mlApiKey) {
