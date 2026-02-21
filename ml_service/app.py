@@ -4,9 +4,10 @@ DBH Pure Vision ML Service
 FastAPI server providing DBH measurement from a single RGB image.
 
 Endpoints:
-  POST /api/v1/measure-dbh       - Full DBH measurement pipeline
-  POST /api/v1/estimate-depth    - Depth estimation only
-  GET  /api/v1/health            - Health check
+  POST     /api/v1/measure-dbh       - Full DBH measurement pipeline
+  POST     /api/v1/estimate-depth    - Depth estimation only
+  GET      /api/v1/health            - Health check
+  WebSocket /ws/scan                 - Real-time live scan (frames → DBH + mask)
 
 Usage:
   uvicorn app:app --host 0.0.0.0 --port 8100 --reload
@@ -15,6 +16,7 @@ Usage:
 import io
 import os
 import math
+import json
 import time
 import hmac
 import base64
@@ -24,9 +26,10 @@ import traceback
 from typing import Optional, List
 from collections import defaultdict
 
-from fastapi import FastAPI, File, UploadFile, Form, HTTPException, Request, Depends
+from fastapi import FastAPI, File, UploadFile, Form, HTTPException, Request, Depends, WebSocket, WebSocketDisconnect
 from fastapi.responses import JSONResponse, StreamingResponse
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.staticfiles import StaticFiles
 from starlette.middleware.base import BaseHTTPMiddleware
 from PIL import Image
 import numpy as np
@@ -37,14 +40,14 @@ import numpy as np
 
 ML_API_KEY = os.environ.get("ML_API_KEY", "")
 
-# Allowed origins (restrict CORS)
-# Add your frontend domains, ngrok domains, and localhost for dev
-ALLOWED_ORIGINS = [
-    o.strip() for o in os.environ.get(
-        "ML_CORS_ORIGINS",
-        "http://localhost:3000,http://localhost:8080,https://tree-app-backend-prod.onrender.com"
-    ).split(",") if o.strip()
-]
+    # Allowed origins (restrict CORS)
+    # Add your frontend domains, ngrok domains, and localhost for dev
+    ALLOWED_ORIGINS = [
+        o.strip() for o in os.environ.get(
+            "ML_CORS_ORIGINS",
+            "http://localhost:3000,http://localhost:8080,https://tree-app-backend-prod.onrender.com,*"
+        ).split(",") if o.strip()
+    ]
 
 
 def verify_api_key(request: Request):
@@ -115,15 +118,17 @@ from dbh_calculator import (
     BoundingBox, DBHResult, measure_dbh, measure_dbh_multi_row,
     estimate_focal_length_from_fov, focal_length_from_exif,
     pixel_width_to_metric, cylindrical_correction,
-    PHONE_SENSORS, match_phone_sensor
+    PHONE_SENSORS, match_phone_sensor,
 )
 from visualization import create_result_image, depth_to_colormap, image_to_bytes
 from tree_trunk_detector import detect_trunks, create_detection_visualization
+from tree_segmentation import segment_trunk_auto
 from tree_segmentation import subpixel_trunk_width, ellipse_corrected_width
 from model_registry import (
     get_depth_config, get_seg_config, get_preset,
     print_config_summary, ACCURACY_PRESETS, DEPTH_MODELS,
     USE_ONNX_RUNTIME, ENABLE_SAM_SEGMENTATION, ENABLE_OPENVINO,
+    get_registry,
 )
 
 # Max processing dimension — larger images are resized to save memory & time.
@@ -131,6 +136,46 @@ from model_registry import (
 # Depth Pro benefits from higher input resolution, so we raise the limit when it's active.
 _depth_cfg = get_depth_config()
 MAX_PROCESSING_DIM = 1536 if _depth_cfg.backend == "depth_pro" else 800
+
+
+# ============================================================
+# WebSocket: Motion check & mask visualization
+# ============================================================
+
+def _motion_check(current: np.ndarray, last: Optional[np.ndarray], 
+                   downscale: int = 8, threshold: float = 0.02) -> bool:
+    """
+    Return True if frame has significant motion (should process).
+    Return False if frame is similar to last (skip).
+    """
+    if last is None:
+        return True
+    if current.shape != last.shape:
+        return True
+    ds = downscale
+    c_small = current[::ds, ::ds]
+    l_small = last[::ds, ::ds]
+    if c_small.ndim == 3:
+        c_small = c_small.astype(np.float32).mean(axis=2)
+        l_small = l_small.astype(np.float32).mean(axis=2)
+    diff = np.abs(c_small.astype(np.float32) - l_small.astype(np.float32))
+    change_ratio = float(np.mean(diff)) / 255.0 if np.max(c_small) > 0 else 0
+    return change_ratio >= threshold
+
+
+def _mask_to_overlay_base64(image: Image.Image, mask: np.ndarray) -> str:
+    """Create green overlay on trunk mask, return base64 PNG."""
+    overlay = np.array(image.convert("RGB"))
+    green = np.array([0, 255, 0], dtype=np.uint8)
+    mask_bool = (mask > 0).astype(np.uint8)
+    for c in range(3):
+        overlay[:, :, c] = np.where(
+            mask_bool,
+            (overlay[:, :, c].astype(np.uint32) * 0.4 + green[c] * 0.6).astype(np.uint8),
+            overlay[:, :, c],
+        )
+    out = Image.fromarray(overlay)
+    return base64.b64encode(image_to_bytes(out, "PNG")).decode()
 
 
 def _resize_for_processing(image: Image.Image) -> tuple:
@@ -184,16 +229,27 @@ app.add_middleware(
 
 @app.on_event("startup")
 async def startup_event():
-    """Pre-load model on startup."""
+    """Pre-load models on startup (using model_registry)."""
     print_config_summary()
-    print("[Startup] Pre-loading depth model...")
+    registry = get_registry()
+    print("[Startup] Pre-loading depth model via model_registry...")
     try:
         async with _model_load_lock:
-            load_model()
-        print("[Startup] Model ready!")
+            registry.get_depth_model()
+        print("[Startup] Depth model ready!")
     except Exception as e:
-        print(f"[Startup] Warning: Could not pre-load model: {e}")
-        print("[Startup] Model will be loaded on first request.")
+        print(f"[Startup] Warning: Could not pre-load depth model: {e}")
+        print("[Startup] Depth model will be loaded on first request.")
+    if ENABLE_SAM_SEGMENTATION:
+        print("[Startup] Pre-loading SAM model...")
+        try:
+            sam_model, _ = registry.get_sam_model()
+            if sam_model is not None:
+                print("[Startup] SAM model ready!")
+            else:
+                print("[Startup] SAM model not available (using heuristic fallback).")
+        except Exception as e:
+            print(f"[Startup] Warning: Could not pre-load SAM: {e}")
 
 
 # ============================================================
@@ -220,6 +276,201 @@ async def health_check():
         "available_modes": list(ACCURACY_PRESETS.keys()),
         "backend": backend_info,
     }
+
+
+# ============================================================
+# WebSocket Live Scan — Decoupled Viewfinder and Capture Pipeline
+# ============================================================
+#
+# DECOUPLED PIPELINE DESIGN:
+# --------------------------
+# The live scan separates two stages to balance responsiveness and accuracy:
+#
+#   1. VIEWFINDER (preview): Fast, responsive feedback while user aims the camera.
+#      - Uses da_v2_small (~1.5s) when depth_pro would be too slow (>2s on frame 1).
+#      - User sees real-time DBH preview and mask overlay without long waits.
+#
+#   2. CAPTURE (final): High-accuracy measurement when user confirms.
+#      - On "lock", we switch back to depth_pro for the final frame.
+#      - Client sends "lock" then the next frame; that frame uses depth_pro for SOTA accuracy.
+#
+# This avoids blocking the viewfinder with 5–25s Depth Pro inference while guaranteeing
+# the locked measurement uses the best model available.
+# ============================================================
+
+DEPTH_PRO_SLOW_THRESHOLD_S = 2.0  # If frame 1 depth exceeds this, use da_v2_small for preview
+DA_V2_SMALL_ID = "depth-anything/Depth-Anything-V2-Metric-Outdoor-Small-hf"
+
+
+@app.websocket("/ws/scan")
+async def ws_scan(websocket: WebSocket):
+    """
+    WebSocket endpoint for real-time DBH scanning.
+
+    Protocol:
+    - Client sends: raw frame bytes (JPEG/PNG image) or JSON {"action": "lock"}
+    - Server sends: JSON { mask, dbh, confidence, status, ... }
+
+    Status: "scanning" | "locked" | "no_trunk" | "skipped" (motion check)
+
+    Decoupled fallback: If frame 1 depth takes > 2s, switch to da_v2_small for preview;
+    on "lock", switch back to depth_pro for the final capture frame.
+    """
+    if ML_API_KEY:
+        provided_key = websocket.query_params.get("api_key") or websocket.headers.get("x-ml-api-key")
+        if not provided_key or not hmac.compare_digest(provided_key, ML_API_KEY):
+            await websocket.close(code=1008)
+            return
+
+    await websocket.accept()
+    last_frame: Optional[np.ndarray] = None
+    last_result: Optional[dict] = None
+    # Decoupled pipeline: use_fast_depth=True → da_v2_small for responsive preview
+    use_fast_depth = False
+    first_frame_done = False
+
+    try:
+        while True:
+            # Receive frame bytes (binary) or control message (text)
+            try:
+                data = await websocket.receive()
+            except WebSocketDisconnect:
+                break
+
+            # Handle "lock" command: switch back to depth_pro for final capture
+            if "text" in data:
+                try:
+                    msg = json.loads(data["text"])
+                    if msg.get("action") == "lock":
+                        use_fast_depth = False
+                        load_model(None)  # Reset to DEFAULT_DEPTH_MODEL (depth_pro)
+                        continue
+                    b64 = msg.get("frame") or msg.get("image")
+                    if b64:
+                        frame_bytes = base64.b64decode(b64)
+                    else:
+                        continue
+                except (json.JSONDecodeError, TypeError):
+                    continue
+            elif "bytes" in data:
+                frame_bytes = data["bytes"]
+            else:
+                continue
+
+            if len(frame_bytes) < 100:
+                continue
+
+            try:
+                pil_image = Image.open(io.BytesIO(frame_bytes)).convert("RGB")
+            except Exception:
+                continue
+
+            img_np = np.array(pil_image)
+            pil_image, scale = _resize_for_processing(pil_image)
+            W, H = pil_image.size
+
+            # Motion check: skip if similar to last frame
+            if not _motion_check(img_np, last_frame):
+                if last_result:
+                    last_result["status"] = "skipped"
+                    await websocket.send_text(json.dumps(last_result))
+                last_frame = img_np
+                continue
+
+            last_frame = img_np
+
+            # Run depth estimation with decoupled fallback
+            # Preview path: if frame 1 took >2s, use da_v2_small for responsive viewfinder
+            # Capture path: after "lock", use depth_pro for final SOTA accuracy
+            t0 = time.time()
+            if use_fast_depth:
+                load_model(DA_V2_SMALL_ID)  # da_v2_small for preview (~1.5s)
+            depth_result = estimate_depth_rich(pil_image)
+            depth_time = time.time() - t0
+
+            # After frame 1: if depth_pro exceeded threshold, switch to da_v2 for preview
+            if not first_frame_done:
+                first_frame_done = True
+                if depth_time > DEPTH_PRO_SLOW_THRESHOLD_S:
+                    use_fast_depth = True
+                    load_model(DA_V2_SMALL_ID)  # Next frames use fast model
+
+            depth_map = depth_result.depth_map
+            effective_focal_px = depth_result.auto_focal_length_px
+            effective_fov = depth_result.auto_fov_degrees or 70.0
+            if effective_focal_px is None:
+                effective_focal_px = estimate_focal_length_from_fov(W, effective_fov)
+
+            # Detect trunk
+            detection = detect_trunks(depth_map)
+            if not detection.trunks or detection.best_trunk_index < 0:
+                await websocket.send_text(json.dumps({
+                    "mask": "",
+                    "dbh": 0.0,
+                    "confidence": 0.0,
+                    "status": "no_trunk",
+                    "message": "未偵測到樹幹",
+                }))
+                continue
+
+            best_trunk = detection.trunks[detection.best_trunk_index]
+            bbox = BoundingBox(
+                x1=best_trunk.bbox_x1,
+                y1=best_trunk.bbox_y1,
+                x2=best_trunk.bbox_x2,
+                y2=best_trunk.bbox_y2,
+            )
+
+            # SAM segmentation (auto-prompt center)
+            seg_result = segment_trunk_auto(
+                np.array(pil_image), depth_map,
+                existing_mask=best_trunk.mask.astype(np.uint8) if best_trunk.mask is not None else None,
+            )
+
+            # DBH calculation
+            result = measure_dbh_multi_row(
+                depth_map, bbox,
+                focal_length_px=effective_focal_px,
+                image_width_px=W,
+                fov_degrees=effective_fov,
+            )
+
+            mask_b64 = _mask_to_overlay_base64(pil_image, seg_result.mask)
+
+            # Quality gates: flag poor measurements
+            is_poor_quality = (
+                result.confidence < 0.45
+                or result.dbh_cm > 200
+                or result.dbh_cm < 2
+            )
+
+            payload = {
+                "mask": mask_b64,
+                "dbh": round(result.dbh_cm, 1),
+                "confidence": round(result.confidence, 2),
+                "status": "poor_quality" if is_poor_quality else "locked",
+                "trunk_depth_m": round(result.trunk_depth_m, 2),
+            }
+            if is_poor_quality:
+                payload["message"] = "請靠近或在白天測量"
+
+            last_result = payload
+            await websocket.send_text(json.dumps(payload))
+
+    except WebSocketDisconnect:
+        pass
+    except Exception as e:
+        traceback.print_exc()
+        try:
+            await websocket.send_text(json.dumps({
+                "mask": "",
+                "dbh": 0.0,
+                "confidence": 0.0,
+                "status": "error",
+                "message": str(e),
+            }))
+        except Exception:
+            pass
 
 
 # ============================================================
@@ -607,7 +858,10 @@ async def auto_measure_dbh_endpoint(
             try:
                 gray = np.array(pil_image.convert("L")).astype(np.float64)
                 fg_mask = (depth_map < np.percentile(depth_map, 40)).astype(np.uint8)
-                sub_w = subpixel_trunk_width(gray, fg_mask, result.measurement_row)
+                sub_w = subpixel_trunk_width(
+                    gray, fg_mask, result.measurement_row,
+                    initial_width_px=result.trunk_pixel_width,
+                )
                 if sub_w is not None and sub_w > 3:
                     subpixel_width = sub_w
                     old_px = result.trunk_pixel_width
@@ -738,10 +992,21 @@ async def auto_measure_dbh_endpoint(
             result.notes.append(f"Focal source: {focal_source}")
         result.notes.append(f"Auto-detected trunk (confidence: {best_trunk.confidence:.0%})")
 
+        # Quality gate: add warning for low-confidence or unrealistic DBH
+        is_poor_quality = (
+            result.confidence < 0.45
+            or result.dbh_cm > 200
+            or result.dbh_cm < 2
+        )
+        if is_poor_quality:
+            result.notes.append("⚠️ 測量品質偏低，建議靠近樹幹或在白天測量")
+
         # Build response
         response = {
             "success": True,
             "auto_detected": True,
+            "quality_warning": is_poor_quality,
+            "quality_message": "請靠近或在白天測量" if is_poor_quality else None,
             "dbh_cm": result.dbh_cm,
             "confidence": result.confidence,
             "trunk_depth_m": result.trunk_depth_m,
@@ -848,7 +1113,7 @@ async def get_ml_config():
     
     return {
         "active_depth_model": {
-            "key": os.environ.get("ML_DEPTH_MODEL", "da_v2_small"),
+            "key": os.environ.get("ML_DEPTH_MODEL", "depth_pro"),
             "name": depth_config.display_name,
             "params_m": depth_config.params_m,
             "license": depth_config.license,
@@ -1037,6 +1302,14 @@ async def auto_measure_dbh_multi_endpoint(
     except Exception as e:
         traceback.print_exc()
         raise HTTPException(status_code=500, detail="處理過程中發生內部錯誤，請稍後再試")
+
+
+# ============================================================
+# Static Files (scanner.html for mobile testing)
+# ============================================================
+
+_STATIC_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "static")
+app.mount("/static", StaticFiles(directory=_STATIC_DIR), name="static")
 
 
 # ============================================================

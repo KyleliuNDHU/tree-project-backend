@@ -21,6 +21,8 @@ CREATE TABLE IF NOT EXISTS pending_tree_measurements (
     species_name VARCHAR(100),
     tree_height DOUBLE PRECISION NOT NULL,
     dbh_cm DOUBLE PRECISION,
+    instrument_dbh_cm DOUBLE PRECISION,
+    dbh_source VARCHAR(30),
     
     -- 樹木位置
     tree_latitude DOUBLE PRECISION NOT NULL,
@@ -52,7 +54,7 @@ CREATE TABLE IF NOT EXISTS pending_tree_measurements (
     measurement_notes TEXT,
     
     -- 狀態檢查約束
-    CONSTRAINT valid_status CHECK (status IN ('pending', 'in_progress', 'completed', 'skipped', 'failed'))
+    CONSTRAINT valid_status CHECK (status IN ('pending', 'in_progress', 'completed', 'skipped', 'failed', 'transferred'))
 );
 
 -- 索引優化 (與 routes/pending_measurements.js 一致)
@@ -68,3 +70,5 @@ COMMENT ON COLUMN pending_tree_measurements.azimuth IS 'VLGEO2 測量方位角 (
 COMMENT ON COLUMN pending_tree_measurements.pitch IS 'VLGEO2 測量俯仰角 (度)';
 COMMENT ON COLUMN pending_tree_measurements.measured_dbh_cm IS 'AR 測量的胸徑 (cm)';
 COMMENT ON COLUMN pending_tree_measurements.measurement_method IS 'DBH 測量方法 (ar_reference, manual, etc)';
+COMMENT ON COLUMN pending_tree_measurements.instrument_dbh_cm IS 'VLGEO2 Remote Diameter 量測值 (cm)';
+COMMENT ON COLUMN pending_tree_measurements.dbh_source IS 'DBH 來源: remote_diameter, vision, manual';

@@ -99,4 +99,11 @@ Write-Host ""
 
 # --- 啟動 ---
 Set-Location $ScriptDir
-python -m uvicorn app:app --host 0.0.0.0 --port $env:PORT --workers $Workers
+if ($env:VIRTUAL_ENV) {
+    $PythonExe = "python"
+} elseif (Test-Path "$ScriptDir\venv\Scripts\python.exe") {
+    $PythonExe = "$ScriptDir\venv\Scripts\python.exe"
+} else {
+    $PythonExe = "python"
+}
+& $PythonExe -m uvicorn app:app --host 0.0.0.0 --port $env:PORT --workers $Workers

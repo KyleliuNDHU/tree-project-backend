@@ -365,11 +365,19 @@ cd tree-project-backend
 # 2. 安裝依賴
 npm install
 
-# 3. 設定環境變數
+# 3. 機器學習模型設定 (ML Service)
+# 因為模型檔案較大，我們不會將它們放進 Git 版本控制中。
+# 請執行以下腳本來自動下載並轉換模型：
+cd ml_service
+pip install -r requirements.txt
+python setup_models.py
+cd ..
+
+# 4. 設定環境變數
 cp .env.example .env
 # 編輯 .env 檔案，填入必要的設定值
 
-# 4. 啟動開發伺服器
+# 5. 啟動開發伺服器
 npm run dev
 
 # 伺服器會在 http://localhost:3000 啟動

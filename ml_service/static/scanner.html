@@ -1,0 +1,312 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
+  <meta name="theme-color" content="#0a0a0a">
+  <title>DBH Live Scanner</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    html, body { height: 100%; overflow: hidden; background: #0a0a0a; font-family: system-ui, -apple-system, sans-serif; color: #fff; }
+    .container {
+      position: relative;
+      width: 100%;
+      height: 100%;
+      display: flex;
+      flex-direction: column;
+    }
+    .video-wrap {
+      position: relative;
+      flex: 1;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      overflow: hidden;
+    }
+    #video {
+      width: 100%;
+      height: 100%;
+      object-fit: cover;
+      transform: scaleX(-1);
+    }
+    #maskOverlay {
+      position: absolute;
+      top: 50%;
+      left: 50%;
+      transform: translate(-50%, -50%) scaleX(-1);
+      max-width: 100%;
+      max-height: 100%;
+      object-fit: contain;
+      opacity: 0.5;
+      pointer-events: none;
+    }
+    .hud {
+      position: absolute;
+      top: env(safe-area-inset-top, 16px);
+      left: 16px;
+      right: 16px;
+      padding: 12px 16px;
+      background: rgba(0,0,0,0.65);
+      border-radius: 12px;
+      backdrop-filter: blur(8px);
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      font-size: 18px;
+      font-weight: 600;
+      z-index: 10;
+    }
+    .hud-item { display: flex; align-items: center; gap: 8px; }
+    .hud-label { font-size: 12px; font-weight: 500; color: #999; text-transform: uppercase; }
+    .hud-value { color: #4ade80; }
+    .hud-value.low { color: #fbbf24; }
+    .hud-value.none { color: #f87171; }
+    .status-bar {
+      position: absolute;
+      bottom: env(safe-area-inset-bottom, 20px);
+      left: 16px;
+      right: 16px;
+      padding: 10px 14px;
+      background: rgba(0,0,0,0.5);
+      border-radius: 8px;
+      font-size: 13px;
+      color: #aaa;
+      text-align: center;
+      z-index: 10;
+    }
+    .status-bar.connected { color: #4ade80; }
+    .status-bar.error { color: #f87171; }
+    .start-btn {
+      position: absolute;
+      bottom: calc(env(safe-area-inset-bottom, 20px) + 50px);
+      left: 50%;
+      transform: translateX(-50%);
+      padding: 16px 40px;
+      font-size: 18px;
+      font-weight: 600;
+      border: none;
+      border-radius: 12px;
+      background: #22c55e;
+      color: #fff;
+      cursor: pointer;
+      z-index: 20;
+      box-shadow: 0 4px 14px rgba(34, 197, 94, 0.4);
+    }
+    .start-btn:active { transform: translateX(-50%) scale(0.98); }
+    .start-btn:disabled {
+      background: #334155;
+      cursor: not-allowed;
+      box-shadow: none;
+    }
+    .error-msg {
+      position: absolute;
+      top: 50%;
+      left: 50%;
+      transform: translate(-50%, -50%);
+      padding: 24px;
+      text-align: center;
+      color: #f87171;
+      font-size: 15px;
+      max-width: 90%;
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <div class="video-wrap">
+      <video id="video" autoplay playsinline muted></video>
+      <img id="maskOverlay" alt="" style="display:none;">
+    </div>
+    <div class="hud" id="hud" style="display:none;">
+      <div class="hud-item">
+        <span class="hud-label">DBH</span>
+        <span class="hud-value" id="dbhVal">— cm</span>
+      </div>
+      <div class="hud-item">
+        <span class="hud-label">Confidence</span>
+        <span class="hud-value" id="confVal">—%</span>
+      </div>
+    </div>
+    <div class="status-bar" id="statusBar">Tap Start to begin scanning</div>
+    <button class="start-btn" id="startBtn">Start Scan</button>
+    <div class="error-msg" id="errorMsg" style="display:none;"></div>
+  </div>
+  <script>
+    const VIDEO_WIDTH = 640;
+    const VIDEO_HEIGHT = 480;
+    const FRAME_INTERVAL_MS = 300;
+    const JPEG_QUALITY = 0.7;
+
+    const video = document.getElementById('video');
+    const maskOverlay = document.getElementById('maskOverlay');
+    const hud = document.getElementById('hud');
+    const dbhVal = document.getElementById('dbhVal');
+    const confVal = document.getElementById('confVal');
+    const statusBar = document.getElementById('statusBar');
+    const startBtn = document.getElementById('startBtn');
+    const errorMsg = document.getElementById('errorMsg');
+
+    let stream = null;
+    let ws = null;
+    let canvas = null;
+    let ctx = null;
+    let sendInterval = null;
+    let isScanning = false;
+
+    function hideError() {
+      errorMsg.style.display = 'none';
+    }
+
+    function showError(msg) {
+      errorMsg.textContent = msg;
+      errorMsg.style.display = 'block';
+    }
+
+    function setStatus(text, type) {
+      statusBar.textContent = text;
+      statusBar.className = 'status-bar ' + (type || '');
+    }
+
+    function buildWsUrl() {
+      const proto = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+      const host = window.location.host;
+      return `${proto}//${host}/ws/scan`;
+    }
+
+    async function startCamera() {
+      const constraints = {
+        video: {
+          width: { ideal: VIDEO_WIDTH },
+          height: { ideal: VIDEO_HEIGHT },
+          facingMode: { ideal: 'environment' }
+        },
+        audio: false
+      };
+      try {
+        stream = await navigator.mediaDevices.getUserMedia(constraints);
+        video.srcObject = stream;
+        await video.play();
+        return true;
+      } catch (e) {
+        showError('Camera access denied: ' + (e.message || 'unknown error'));
+        return false;
+      }
+    }
+
+    function initCanvas() {
+      if (!canvas) {
+        canvas = document.createElement('canvas');
+        canvas.width = VIDEO_WIDTH;
+        canvas.height = VIDEO_HEIGHT;
+        ctx = canvas.getContext('2d');
+      }
+    }
+
+    function captureFrame() {
+      if (!ctx || !video.videoWidth || !stream) return null;
+      ctx.drawImage(video, 0, 0, VIDEO_WIDTH, VIDEO_HEIGHT);
+      return canvas.toDataURL('image/jpeg', JPEG_QUALITY).split(',')[1];
+    }
+
+    function connectWs() {
+      const url = buildWsUrl();
+      ws = new WebSocket(url);
+      ws.onopen = () => {
+        setStatus('Connected — scanning...', 'connected');
+        startSendLoop();
+      };
+      ws.onclose = () => {
+        stopSendLoop();
+        ws = null;
+        if (isScanning) setStatus('Disconnected', 'error');
+      };
+      ws.onerror = () => setStatus('WebSocket error', 'error');
+      ws.onmessage = (ev) => {
+        try {
+          const data = JSON.parse(ev.data);
+          updateUI(data);
+        } catch (_) {}
+      };
+    }
+
+    function startSendLoop() {
+      if (sendInterval) return;
+      sendInterval = setInterval(() => {
+        if (!ws || ws.readyState !== WebSocket.OPEN) return;
+        const b64 = captureFrame();
+        if (b64) ws.send(JSON.stringify({ frame: b64 }));
+      }, FRAME_INTERVAL_MS);
+    }
+
+    function stopSendLoop() {
+      if (sendInterval) {
+        clearInterval(sendInterval);
+        sendInterval = null;
+      }
+    }
+
+    function updateUI(data) {
+      if (data.mask) {
+        maskOverlay.src = 'data:image/png;base64,' + data.mask;
+        maskOverlay.style.display = 'block';
+      } else {
+        maskOverlay.style.display = 'none';
+      }
+      const dbh = data.dbh ?? 0;
+      const conf = (data.confidence ?? 0) * 100;
+      dbhVal.textContent = dbh > 0 ? `${dbh} cm` : '— cm';
+      dbhVal.className = 'hud-value' + (dbh > 0 ? '' : ' none');
+      confVal.textContent = conf > 0 ? `${Math.round(conf)}%` : '—%';
+      confVal.className = 'hud-value' + (conf >= 70 ? '' : conf >= 40 ? ' low' : ' none');
+      hud.style.display = 'block';
+    }
+
+    async function startScan() {
+      hideError();
+      startBtn.disabled = true;
+      startBtn.textContent = 'Starting...';
+      setStatus('Starting camera...');
+      if (!(await startCamera())) {
+        startBtn.disabled = false;
+        startBtn.textContent = 'Start Scan';
+        return;
+      }
+      initCanvas();
+      setStatus('Connecting WebSocket...');
+      connectWs();
+      isScanning = true;
+      startBtn.disabled = false;
+      startBtn.textContent = 'Stop Scan';
+    }
+
+    async function stopScan() {
+      isScanning = false;
+      stopSendLoop();
+      if (ws) {
+        ws.close();
+        ws = null;
+      }
+      if (stream) {
+        stream.getTracks().forEach(t => t.stop());
+        stream = null;
+      }
+      maskOverlay.src = '';
+      maskOverlay.style.display = 'none';
+      hud.style.display = 'none';
+      startBtn.disabled = false;
+      startBtn.textContent = 'Start Scan';
+      setStatus('Tap Start to begin scanning');
+    }
+
+    startBtn.addEventListener('click', () => {
+      if (isScanning) stopScan();
+      else startScan();
+    });
+
+    window.addEventListener('beforeunload', () => {
+      if (stream) stream.getTracks().forEach(t => t.stop());
+      if (ws) ws.close();
+    });
+  </script>
+</body>
+</html>

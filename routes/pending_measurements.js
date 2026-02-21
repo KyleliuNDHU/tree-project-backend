@@ -124,6 +124,28 @@ async function initTable() {
   } catch (e) {
     console.warn('[pending-measurements] measurement_type migration skipped:', e.message);
   }
+
+  // Migration: instrument_dbh_cm + dbh_source columns
+  try {
+    await pool.query(`
+      DO $$
+      BEGIN
+        IF NOT EXISTS (
+          SELECT 1 FROM information_schema.columns
+          WHERE table_name = 'pending_tree_measurements'
+          AND column_name = 'instrument_dbh_cm'
+        ) THEN
+          ALTER TABLE pending_tree_measurements ADD COLUMN instrument_dbh_cm DOUBLE PRECISION;
+          ALTER TABLE pending_tree_measurements ADD COLUMN dbh_source VARCHAR(30);
+          COMMENT ON COLUMN pending_tree_measurements.instrument_dbh_cm IS 'VLGEO2 Remote Diameter 量測值 (cm)';
+          COMMENT ON COLUMN pending_tree_measurements.dbh_source IS 'DBH 來源: remote_diameter, vision, manual';
+        END IF;
+      END $$;
+    `);
+    console.log('[pending-measurements] instrument_dbh_cm 欄位確認完成');
+  } catch (e) {
+    console.warn('[pending-measurements] instrument_dbh migration skipped:', e.message);
+  }
 })();
 
 /**
@@ -160,8 +182,9 @@ router.post('/batch', async (req, res) => {
           tree_latitude, tree_longitude,
           station_latitude, station_longitude,
           horizontal_distance, slope_distance, azimuth, pitch, altitude,
-          measurement_type, status, priority
-        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20)
+          measurement_type, status, priority,
+          instrument_dbh_cm, dbh_source
+        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22)
         RETURNING id
       `, [
         m.session_id,
@@ -183,7 +206,9 @@ router.post('/batch', async (req, res) => {
         m.altitude,
         m.measurement_type || null,
         m.status ?? 'pending',
-        m.priority ?? 3
+        m.priority ?? 3,
+        m.instrument_dbh_cm ?? null,
+        m.dbh_source ?? null
       ]);
       
       insertedIds.push(result.rows[0].id);

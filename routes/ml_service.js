@@ -73,12 +73,13 @@ async function fetchFromMlService(path) {
 
 // ============================================================
 // GET /api/ml-service/status
-// 取得 ML Service 健康狀態
+// 取得 ML Service 健康狀態與連線設定 (App 自動抓取)
 // ============================================================
 
 router.get('/status', async (req, res) => {
     try {
         const mlUrl = process.env.ML_SERVICE_URL;
+        const mlApiKey = process.env.ML_API_KEY;
 
         if (!mlUrl) {
             return res.json({
@@ -88,22 +89,13 @@ router.get('/status', async (req, res) => {
             });
         }
 
-        const health = await fetchFromMlService('/health');
-
-        if (!health) {
-            return res.json({
-                success: true,
-                configured: true,
-                online: false,
-                message: 'ML Service 無法連線',
-            });
-        }
-
+        // 把 Render 上的環境變數派發給前端 App
         return res.json({
             success: true,
             configured: true,
-            online: true,
-            health,
+            ml_service_url: mlUrl,
+            ml_api_key: mlApiKey, // 前端會拿到這個 key 去連線家裡的電腦
+            online: true,         // 前端拿到網址後自己去測
         });
     } catch (err) {
         console.error('[ML Proxy] /status error:', err);

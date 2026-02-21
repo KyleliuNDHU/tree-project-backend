@@ -36,7 +36,13 @@ from PIL import Image
 from typing import Optional, Tuple, List, Dict
 from dataclasses import dataclass
 
-from model_registry import ENABLE_SAM_SEGMENTATION, get_seg_config
+from model_registry import (
+    ENABLE_SAM_SEGMENTATION,
+    get_seg_config,
+    get_registry,
+    _is_sam2_predictor_style,
+    ENABLE_OPENVINO,
+)
 
 
 @dataclass
@@ -64,36 +70,50 @@ _sam_predictor = None
 
 def _load_sam_model():
     """
-    Load SAM 2.1 model via HuggingFace transformers (lazy singleton).
+    Load SAM 2.1 model (lazy singleton).
+    Prefers OpenVINO/Hybrid from registry when available, else HuggingFace.
     Enable with: ML_ENABLE_SAM=true environment variable.
     """
     global _sam_model, _sam_predictor
-    
-    if _sam_predictor is not None:
-        return _sam_predictor
-    
+
+    if _sam_predictor is not None or (_sam_model is not None and _is_sam2_predictor_style(_sam_model)):
+        return _sam_predictor if _sam_predictor is not None else _sam_model
+
     if not ENABLE_SAM_SEGMENTATION:
         print("[SAM] SAM segmentation is disabled. Set ML_ENABLE_SAM=true to enable.")
         return None
-    
+
+    # Try registry first (OpenVINO full or Hybrid mode)
+    if ENABLE_OPENVINO:
+        try:
+            enc, pred = get_registry().get_sam_model()
+            if pred is not None and _is_sam2_predictor_style(pred):
+                _sam_model = pred
+                _sam_predictor = None
+                print("[SAM] SAM 2.1 loaded via registry (OpenVINO/Hybrid)")
+                return _sam_model
+        except Exception as e:
+            print(f"[SAM] Registry load attempt: {e}")
+
+    # Fallback: HuggingFace transformers
     try:
         from transformers import Sam2Model, Sam2Processor
         import torch
-        
+
         config = get_seg_config()
         model_id = config.model_id
-        print(f"[SAM] Loading SAM 2.1 from {model_id}...")
-        
+        print(f"[SAM] Loading SAM 2.1 from {model_id} (HuggingFace)...")
+
         _sam_model = Sam2Model.from_pretrained(model_id)
         _sam_predictor = Sam2Processor.from_pretrained(model_id)
-        
+
         _sam_model.eval()
-        if hasattr(torch, 'inference_mode'):
+        if hasattr(torch, "inference_mode"):
             _sam_model = torch.no_grad()
-        
+
         print(f"[SAM] SAM 2.1 loaded successfully ({config.params_m}M params)")
         return _sam_predictor
-        
+
     except ImportError as e:
         print(f"[SAM] transformers version too old for Sam2Model: {e}")
         print("[SAM] Upgrade: pip install --upgrade transformers>=4.45.0")
@@ -101,6 +121,7 @@ def _load_sam_model():
     except Exception as e:
         print(f"[SAM] Failed to load SAM model: {e}")
         import traceback
+
         traceback.print_exc()
         return None
 
@@ -297,43 +318,66 @@ def _run_sam_point_prompt(
     labels: List[int],
 ) -> Tuple[np.ndarray, float]:
     """
-    Run SAM 2.1 inference with point prompts via HuggingFace transformers.
+    Run SAM 2.1 inference with point prompts.
+    Supports: (1) SAM2ImagePredictor / Hybrid (set_image + predict)
+              (2) HuggingFace transformers (processor + model)
     Returns (mask, score).
     """
     import torch
-    
+
     global _sam_model, _sam_predictor
+
+    # SAM2ImagePredictor / Hybrid path (OpenVINO encoder + PyTorch decoder)
+    if _is_sam2_predictor_style(_sam_model):
+        predictor = _sam_model
+        point_coords = np.array([[p[0], p[1]] for p in points], dtype=np.float32)
+        point_labels = np.array(labels, dtype=np.int32)
+        predictor.set_image(image)
+        masks, iou_predictions, _ = predictor.predict(
+            point_coords=point_coords,
+            point_labels=point_labels,
+            multimask_output=True,
+            return_logits=False,
+        )
+        iou_arr = iou_predictions[0]
+        iou_arr = iou_arr.cpu().numpy() if hasattr(iou_arr, "cpu") else np.array(iou_arr)
+        best_idx = int(np.argmax(iou_arr))
+        m = masks[0][best_idx]
+        best_mask = (m.cpu().numpy() if hasattr(m, "cpu") else np.array(m)).astype(np.uint8)
+        best_score = float(iou_arr[best_idx])
+        return best_mask, best_score
+
+    # HuggingFace transformers path
     processor = _sam_predictor
     model = _sam_model
-    
     pil_image = Image.fromarray(image) if isinstance(image, np.ndarray) else image
-    
+
     input_points = [[[p[0], p[1]] for p in points]]
     input_labels = [labels]
-    
+
     inputs = processor(
         pil_image,
         input_points=input_points,
         input_labels=input_labels,
         return_tensors="pt",
     )
-    
+
     with torch.no_grad():
         outputs = model(**inputs)
-    
+
     masks = processor.post_process_masks(
         outputs.pred_masks,
         inputs["original_sizes"],
         inputs["reshaped_input_sizes"],
     )
-    
+
     scores = outputs.iou_scores[0][0]
     mask_tensors = masks[0][0]
-    
+
     best_idx = torch.argmax(scores).item()
     best_mask = mask_tensors[best_idx].cpu().numpy().astype(np.uint8)
     best_score = float(scores[best_idx].cpu())
-    
+
     return best_mask, best_score
 
 
@@ -428,6 +472,7 @@ def subpixel_trunk_width(
     image_gray: np.ndarray,
     mask: np.ndarray,
     measurement_row: int,
+    initial_width_px: Optional[float] = None,
 ) -> Optional[float]:
     """
     Measure trunk width with sub-pixel accuracy using gradient-based edge detection.
@@ -438,10 +483,15 @@ def subpixel_trunk_width(
     Technique borrowed from industrial pipe diameter measurement:
     Uses Sobel gradient peaks + parabolic interpolation for ±0.1 pixel accuracy.
     
+    Uses the center of the mask (rather than first/last index) to avoid expanding
+    across the whole image when background is noisy. If initial_width_px is
+    provided, limits edge search to center ± (initial_width_px * 1.2 / 2).
+    
     Args:
         image_gray: Grayscale image (H, W) as float
         mask: Binary trunk mask (H, W)
         measurement_row: Image row to measure at
+        initial_width_px: Optional initial width estimate to limit search window
         
     Returns:
         Sub-pixel trunk width, or None if edges not found
@@ -453,26 +503,47 @@ def subpixel_trunk_width(
     row = image_gray[measurement_row].astype(np.float64)
     mask_row = mask[measurement_row]
     
-    # Find mask boundaries (integer pixel)
+    # Find mask indices and center (more robust than first/last when mask is noisy)
     mask_indices = np.where(mask_row > 0)[0]
     if len(mask_indices) < 3:
         return None
     
-    left_idx = mask_indices[0]
-    right_idx = mask_indices[-1]
+    center = int(np.median(mask_indices))
+    
+    # Limit search window if initial width provided (prevents expansion across whole image)
+    if initial_width_px is not None and initial_width_px > 0:
+        half_window = initial_width_px * 1.2 / 2
+        left_limit = max(0, int(center - half_window))
+        right_limit = min(W - 1, int(center + half_window))
+    else:
+        left_limit = 0
+        right_limit = W - 1
     
     # Compute gradient magnitude along the row
     grad = np.abs(np.gradient(row))
     
+    # Find gradient peaks within the search window: left half and right half
+    left_region = grad[left_limit : center + 1]
+    right_region = grad[center : right_limit + 1]
+    
+    if len(left_region) < 2 or len(right_region) < 2:
+        return None
+    
+    left_peak_idx = left_limit + int(np.argmax(left_region))
+    right_peak_idx = center + int(np.argmax(right_region))
+    
+    if left_peak_idx >= right_peak_idx:
+        return None
+    
     # Sub-pixel refinement via parabolic interpolation
-    left_sub = _parabolic_peak(grad, left_idx)
-    right_sub = _parabolic_peak(grad, right_idx)
+    left_sub = _parabolic_peak(grad, left_peak_idx)
+    right_sub = _parabolic_peak(grad, right_peak_idx)
     
     if left_sub is not None and right_sub is not None:
         return right_sub - left_sub
     else:
         # Fallback to integer width
-        return float(right_idx - left_idx)
+        return float(right_peak_idx - left_peak_idx)
 
 
 def _parabolic_peak(signal: np.ndarray, index: int) -> Optional[float]:

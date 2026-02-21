@@ -25,6 +25,7 @@ from dataclasses import dataclass, field
 from model_registry import (
     get_depth_config, USE_ONNX_RUNTIME, ONNX_MODEL_DIR,
     CPU_THREADS, INPUT_SIZE_OVERRIDE, ENABLE_OPENVINO,
+    DEPTH_MODELS,
 )
 
 # ============================================================
@@ -126,47 +127,54 @@ def _get_torch_device(backend: str) -> str:
 
 def load_model(model_id_override: str = None):
     """
-    Load depth model (lazy singleton).
-
-    Supports:
-    - Depth Pro via transformers (backend="depth_pro")
-    - OpenVINO acceleration via optimum-intel
-    - ONNX Runtime via optimum
-    - Standard PyTorch transformers
+    Load depth model via ModelRegistry (Pinnacle Mode).
     """
+    from model_registry import get_registry
     global _model, _processor, _device, _model_id, _backend_type
-
+    
+    registry = get_registry()
+    
     config = get_depth_config()
     target_model_id = model_id_override or config.model_id
-
+    
+    # When override is provided, use config for that model
+    if model_id_override:
+        for cfg in DEPTH_MODELS.values():
+            if cfg.model_id == target_model_id:
+                config = cfg
+                break
+                
     if _model is not None and _model_id == target_model_id:
         return _model, _processor
+        
+    _model, _processor = registry.get_depth_model(force_openvino=ENABLE_OPENVINO)
+    
+    # PyTorch fallback if OpenVINO failed
+    if _model is None:
+        backend = detect_best_backend()
+        _device = _get_torch_device(backend)
+        if config.backend == "depth_pro" and ("DepthPro" in target_model_id or "depth_pro" in target_model_id):
+            if not _try_load_depth_pro(target_model_id):
+                print("[DepthEstimation] Depth Pro load failed, trying DA V2 Base fallback")
+                target_model_id = "depth-anything/Depth-Anything-V2-Metric-Outdoor-Base-hf"
+                config = DEPTH_MODELS.get("da_v2_base", config)
+                _load_pytorch_standard(target_model_id, config)
+        else:
+            _load_pytorch_standard(target_model_id, config)
+            
+        return _model, _processor
 
-    backend = detect_best_backend()
-    _device = _get_torch_device(backend)
-    print(f"[DepthEstimation] Loading {target_model_id} on {backend}...")
-
-    # ── OpenVINO Path ─────────────────────────────────────────
-    if backend.startswith("openvino"):
-        if _try_load_openvino(target_model_id, config, backend):
-            return _model, _processor
-        print("[DepthEstimation] OpenVINO load failed, falling back to PyTorch")
-
-    # ── ONNX Runtime Path ─────────────────────────────────────
-    if backend == "onnx":
-        if _try_load_onnx(target_model_id):
-            return _model, _processor
-        print("[DepthEstimation] ONNX load failed, falling back to PyTorch")
-
-    # ── Depth Pro PyTorch Path ────────────────────────────────
-    if config.backend == "depth_pro":
-        if _try_load_depth_pro(target_model_id):
-            return _model, _processor
-        print("[DepthEstimation] Depth Pro load failed, trying DA V2 Base fallback")
-        target_model_id = "depth-anything/Depth-Anything-V2-Metric-Outdoor-Base-hf"
-
-    # ── Standard PyTorch Path (DA V2) ─────────────────────────
-    _load_pytorch_standard(target_model_id, config)
+    _model_id = target_model_id
+    _device = "cpu" if not ENABLE_OPENVINO else "openvino"
+    
+    # Check if it loaded OpenVINO
+    if hasattr(_model, "compile") or type(_model).__name__ == "_OVDepthModelWrapper":
+        _backend_type = "openvino"
+    elif "DepthPro" in _model_id or "depth_pro" in _model_id:
+        _backend_type = "depth_pro"
+    else:
+        _backend_type = "pytorch_cpu"
+        
     return _model, _processor
 
 
@@ -355,7 +363,12 @@ def _infer_depth_pro(
 ) -> DepthResult:
     """Depth Pro inference with auto focal length and FOV extraction."""
     inputs = processor(images=image, return_tensors="pt")
-    inputs = {k: v.to(_device) if hasattr(v, 'to') else v for k, v in inputs.items()}
+    
+    is_ov_or_onnx = _backend_type and (
+        _backend_type.startswith("openvino") or _backend_type == "onnx"
+    )
+    if not is_ov_or_onnx:
+        inputs = {k: v.to(_device) if hasattr(v, 'to') else v for k, v in inputs.items()}
 
     with torch.no_grad():
         outputs = model(**inputs)
@@ -431,8 +444,17 @@ def _infer_standard(
 
     depth_map = prediction.cpu().numpy()
 
+    auto_focal = None
+    auto_fov = None
+    if hasattr(outputs, "focal_length"):
+        auto_focal = float(outputs.focal_length)
+    if hasattr(outputs, "field_of_view"):
+        auto_fov = float(outputs.field_of_view)
+
     return DepthResult(
         depth_map=depth_map,
+        auto_focal_length_px=auto_focal,
+        auto_fov_degrees=auto_fov,
         backend_used=_backend_type or f"pytorch_{_device}",
         model_id=_model_id or config.model_id,
     )

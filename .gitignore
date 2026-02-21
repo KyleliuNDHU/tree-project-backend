@@ -54,3 +54,13 @@ __pycache__/
 venv/
 ml_service/venv/
 ml_service/logs/
+
+# --- ML Models (Too large for Git) ---
+ml_service/models/
+ml_service/openvino_models/
+*.bin
+*.safetensors
+*.pt
+*.pth
+*.xml
+*.onnx
