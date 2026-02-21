@@ -12,6 +12,30 @@
 
 ## 📦 版本紀錄
 
+### v18.4.0 (2026-02-22) - ML Precision Upgrade & Backend Stabilization 🚀
+
+#### 🚀 ML 模型升級與整合
+- **Depth Pro 與 OpenVINO 整合** - 引入 SOTA 深度預測模型
+  - 支援 EXIF 焦距提取與亞像素(subpixel)精度計算
+  - 多鏡頭(multi-shot)融合提升測量穩定度
+  - 新增 `setup_models.py` 自動下載與轉換 OpenVINO 模型
+
+#### 🔧 後端穩定性提升
+- **輸入驗證與錯誤處理** - 全面強化資料處理的強健性
+  - 增強輸入驗證與錯誤清理 (Error Sanitization)
+  - 引入 NumPy 向量化運算提升處理效能
+  - 修正資料表初始化的順序問題 (Table Init Sequencing)
+- **API 與欄位擴充**
+  - `PATCH /api/pending-measurements/:id` 新增 `project_area`, `project_code`, `project_name` 支援
+  - `pending_tree_measurements` 新增 `measurement_type` 與 `has_gps` 欄位
+
+#### 🛠️ 開發與部署工具
+- **ngrok 與啟動腳本**
+  - 支援 ngrok header bypass (跳過 ngrok 警告頁面)
+  - 新增 `start.ps1` 啟動腳本與掃描器工具
+
+---
+
 ### v18.3.2 (2025-12-14) - 清理 API 使用改進與前端整合優化 🔄
 
 #### 🔄 API 使用改進
