@@ -30,6 +30,7 @@ from fastapi import FastAPI, File, UploadFile, Form, HTTPException, Request, Dep
 from fastapi.responses import JSONResponse, StreamingResponse
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
+from fastapi.exceptions import RequestValidationError
 from starlette.middleware.base import BaseHTTPMiddleware
 from PIL import Image
 import numpy as np
@@ -249,6 +250,15 @@ async def startup_event():
         except Exception as e:
             print(f"[Startup] Warning: Could not pre-load SAM: {e}")
 
+@app.exception_handler(RequestValidationError)
+async def validation_exception_handler(request: Request, exc: RequestValidationError):
+    print(f"OMFG Validation Error: {exc.errors()}")
+    print(f"Body: {exc.body}")
+    return JSONResponse(
+        status_code=400,
+        content={"detail": exc.errors(), "body": exc.body},
+    )
+
 
 # ============================================================
 # Health Check
@@ -453,6 +463,7 @@ async def ws_scan(websocket: WebSocket):
                 "confidence": round(result.confidence, 2),
                 "status": "poor_quality" if is_poor_quality else "locked",
                 "trunk_depth_m": round(result.trunk_depth_m, 2),
+                "bbox": {"x1": bbox.x1, "y1": bbox.y1, "x2": bbox.x2, "y2": bbox.y2},
             }
             if is_poor_quality:
                 payload["message"] = "請靠近或在白天測量"
