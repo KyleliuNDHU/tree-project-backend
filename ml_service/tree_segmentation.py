@@ -188,6 +188,8 @@ def segment_trunk_auto(
         )
     except Exception as e:
         print(f"[SAM] Inference failed, falling back to heuristic: {e}")
+        import traceback
+        traceback.print_exc()
         mask = _simple_depth_foreground(depth_map)
         return SegmentationResult(
             mask=mask,
@@ -332,6 +334,9 @@ def _run_sam_point_prompt(
         predictor = _sam_model
         point_coords = np.array([[p[0], p[1]] for p in points], dtype=np.float32)
         point_labels = np.array(labels, dtype=np.int32)
+        # Ensure image is uint8 before passing to SAM
+        if image.dtype != np.uint8:
+            image = image.astype(np.uint8)
         predictor.set_image(image)
         masks, iou_predictions, _ = predictor.predict(
             point_coords=point_coords,

@@ -8,3 +8,8 @@ opencv-python
 pillow
 numpy
 scipy
+fastapi
+uvicorn[standard]
+websockets
+python-multipart
+pydantic

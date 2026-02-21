@@ -40,14 +40,12 @@ import numpy as np
 
 ML_API_KEY = os.environ.get("ML_API_KEY", "")
 
-    # Allowed origins (restrict CORS)
-    # Add your frontend domains, ngrok domains, and localhost for dev
-    ALLOWED_ORIGINS = [
-        o.strip() for o in os.environ.get(
-            "ML_CORS_ORIGINS",
-            "http://localhost:3000,http://localhost:8080,https://tree-app-backend-prod.onrender.com,*"
-        ).split(",") if o.strip()
-    ]
+ALLOWED_ORIGINS = [
+    o.strip() for o in os.environ.get(
+        "ML_CORS_ORIGINS",
+        "http://localhost:3000,http://localhost:8080,https://tree-app-backend-prod.onrender.com,*"
+    ).split(",") if o.strip()
+]
 
 
 def verify_api_key(request: Request):
@@ -318,7 +316,8 @@ async def ws_scan(websocket: WebSocket):
     """
     if ML_API_KEY:
         provided_key = websocket.query_params.get("api_key") or websocket.headers.get("x-ml-api-key")
-        if not provided_key or not hmac.compare_digest(provided_key, ML_API_KEY):
+        if not provided_key or not hmac.compare_digest(provided_key.strip(), ML_API_KEY.strip()):
+            print(f"[WS Auth Failed] Expected: '{ML_API_KEY}', Got: '{provided_key}'")
             await websocket.close(code=1008)
             return
 
@@ -336,6 +335,10 @@ async def ws_scan(websocket: WebSocket):
                 data = await websocket.receive()
             except WebSocketDisconnect:
                 break
+            except RuntimeError as e:
+                if "Cannot call \"receive\" once a disconnect message has been received" in str(e):
+                    break
+                raise
 
             # Handle "lock" command: switch back to depth_pro for final capture
             if "text" in data:
@@ -458,7 +461,13 @@ async def ws_scan(websocket: WebSocket):
             await websocket.send_text(json.dumps(payload))
 
     except WebSocketDisconnect:
+        print("[WebSocket] Client disconnected properly.")
         pass
+    except RuntimeError as e:
+        if "Cannot call \"receive\" once a disconnect message has been received" in str(e):
+            print("[WebSocket] Client already disconnected.")
+        else:
+            traceback.print_exc()
     except Exception as e:
         traceback.print_exc()
         try:
@@ -731,6 +740,11 @@ async def auto_measure_dbh_endpoint(
         description="User tap X coordinate on the tree trunk (for SAM segmentation)"),
     tap_y: Optional[int] = Form(default=None,
         description="User tap Y coordinate on the tree trunk (for SAM segmentation)"),
+    # ── [Edge AI] Local bounding box from ML Kit ──────────────
+    bbox_x1: Optional[float] = Form(default=None),
+    bbox_y1: Optional[float] = Form(default=None),
+    bbox_x2: Optional[float] = Form(default=None),
+    bbox_y2: Optional[float] = Form(default=None),
     return_visualization: bool = Form(default=True,
         description="Return annotated visualization image"),
     return_detection_visualization: bool = Form(default=True,
@@ -806,38 +820,64 @@ async def auto_measure_dbh_endpoint(
         detection = detect_trunks(depth_map)
         detect_time = time.time() - t1
 
-        # Check if any trunk was found
-        if not detection.trunks or detection.best_trunk_index < 0:
-            response = {
-                "success": False,
-                "error": "no_trunk_detected",
-                "message": "未偵測到樹幹 — 請對準樹幹拍攝，保持 1-3 公尺距離",
-                "detection_notes": detection.notes,
-                "depth_stats": detection.depth_stats,
-                "timing": {
-                    "depth_estimation_ms": round(depth_time * 1000, 1),
-                    "detection_ms": round(detect_time * 1000, 1),
-                    "total_ms": round((depth_time + detect_time) * 1000, 1),
-                },
-            }
-
-            if return_detection_visualization:
-                det_viz = create_detection_visualization(
-                    pil_image, depth_map, detection
-                )
-                det_viz_bytes = image_to_bytes(det_viz, "JPEG")
-                response["detection_visualization_base64"] = base64.b64encode(det_viz_bytes).decode()
-
-            return JSONResponse(content=response)
-
         # Step 3: Use the best detected trunk for DBH measurement
-        best_trunk = detection.trunks[detection.best_trunk_index]
-        bbox = BoundingBox(
-            x1=best_trunk.bbox_x1,
-            y1=best_trunk.bbox_y1,
-            x2=best_trunk.bbox_x2,
-            y2=best_trunk.bbox_y2,
-        )
+        # If Edge AI local_bbox is provided, we use that instead of server auto-detection
+        if bbox_x1 is not None and bbox_y1 is not None and bbox_x2 is not None and bbox_y2 is not None:
+            bbox = BoundingBox(
+                x1=int(bbox_x1 * scale),
+                y1=int(bbox_y1 * scale),
+                x2=int(bbox_x2 * scale),
+                y2=int(bbox_y2 * scale),
+            )
+            print(f"[AutoMeasure] Using Edge AI local bbox: {bbox}")
+            # Mock best_trunk for response compatibility
+            class MockTrunk:
+                def __init__(self, b):
+                    self.bbox_x1 = b.x1
+                    self.bbox_y1 = b.y1
+                    self.bbox_x2 = b.x2
+                    self.bbox_y2 = b.y2
+                    self.confidence = 1.0
+                    self.distance_status = "ok"
+                    self.distance_message = "Local tracking used"
+            best_trunk = MockTrunk(bbox)
+            detection.trunks = [best_trunk]
+            detection.best_trunk_index = 0
+            # Also reset error if local bbox provided
+            if "response" in locals() and "error" in response:
+                del response
+        else:
+            # Check if any trunk was found by server auto-detection
+            if not detection.trunks or detection.best_trunk_index < 0:
+                response = {
+                    "success": False,
+                    "error": "no_trunk_detected",
+                    "message": "未偵測到樹幹 — 請對準樹幹拍攝，保持 1-3 公尺距離",
+                    "detection_notes": detection.notes,
+                    "depth_stats": detection.depth_stats,
+                    "timing": {
+                        "depth_estimation_ms": round(depth_time * 1000, 1),
+                        "detection_ms": round(detect_time * 1000, 1),
+                        "total_ms": round((depth_time + detect_time) * 1000, 1),
+                    },
+                }
+
+                if return_detection_visualization:
+                    det_viz = create_detection_visualization(
+                        pil_image, depth_map, detection
+                    )
+                    det_viz_bytes = image_to_bytes(det_viz, "JPEG")
+                    response["detection_visualization_base64"] = base64.b64encode(det_viz_bytes).decode()
+
+                return JSONResponse(content=response)
+                
+            best_trunk = detection.trunks[detection.best_trunk_index]
+            bbox = BoundingBox(
+                x1=best_trunk.bbox_x1,
+                y1=best_trunk.bbox_y1,
+                x2=best_trunk.bbox_x2,
+                y2=best_trunk.bbox_y2,
+            )
 
         # Step 4: Measure DBH using auto-detected bbox
         t2 = time.time()

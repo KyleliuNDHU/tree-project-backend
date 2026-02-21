@@ -97,7 +97,7 @@ Write-Host "  Workers:   $Workers" -ForegroundColor White
 Write-Host "  ========================================" -ForegroundColor DarkCyan
 Write-Host ""
 
-# --- 啟動 ---
+# --- 啟動準備 ---
 Set-Location $ScriptDir
 if ($env:VIRTUAL_ENV) {
     $PythonExe = "python"
@@ -106,4 +106,50 @@ if ($env:VIRTUAL_ENV) {
 } else {
     $PythonExe = "python"
 }
+
+# --- 自動清理殘留的 Process (解決 Port 衝突) ---
+Write-Host "`n  [Cleanup] Checking for ghost processes..." -ForegroundColor DarkGray
+# 關閉可能卡住的 ngrok
+$ngrokProcesses = Get-Process -Name "ngrok" -ErrorAction SilentlyContinue
+if ($ngrokProcesses) {
+    Write-Host "  [Cleanup] Killing ghost ngrok processes..." -ForegroundColor Yellow
+    Stop-Process -Name "ngrok" -Force
+}
+# 檢查是否有其他程式佔用 8100 port
+$portInUse = Get-NetTCPConnection -LocalPort $env:PORT -ErrorAction SilentlyContinue
+if ($portInUse) {
+    Write-Host "  [Cleanup] Port $($env:PORT) is in use. Attempting to kill occupying process..." -ForegroundColor Yellow
+    $pidToKill = $portInUse.OwningProcess
+    if ($pidToKill -ne $PID) {
+        Stop-Process -Id $pidToKill -Force -ErrorAction SilentlyContinue
+    }
+}
+
+# --- 自動檢查套件 (依賴) ---
+Write-Host "`n  [Check] Verifying Python dependencies..." -ForegroundColor DarkGray
+& $PythonExe -c "import fastapi, uvicorn, pydantic, websockets" 2>$null
+if ($LASTEXITCODE -ne 0) {
+    Write-Host "  [Check] Missing critical dependencies. Installing automatically..." -ForegroundColor Yellow
+    & $PythonExe -m pip install -r requirements_sota.txt
+}
+
+# --- 自動檢查模型 (Models) ---
+Write-Host "  [Check] Verifying AI models..." -ForegroundColor DarkGray
+$ModelsPath = Join-Path $ScriptDir "models"
+if (-not (Test-Path "$ModelsPath\depth_pro_pt") -and -not (Test-Path "$ModelsPath\sam2_tiny_pt")) {
+    Write-Host "  [Check] Models are missing! Automatically downloading and setting up models..." -ForegroundColor Yellow
+    & $PythonExe setup_models.py
+}
+
+# --- 自動啟動 Ngrok (可選) ---
+if ($env:ML_SERVICE_URL -and $env:ML_SERVICE_URL -match "ngrok-free\.dev") {
+    $domain = $env:ML_SERVICE_URL.Replace("https://", "").Replace("http://", "")
+    Write-Host "`n  [Ngrok] Starting ngrok tunnel to $domain..." -ForegroundColor Yellow
+    # 啟動 ngrok 在背景執行 (確保在 uvicorn 之前執行)
+    Start-Process ngrok -ArgumentList "http --url=$domain $env:PORT --log stdout" -NoNewWindow
+}
+
+# --- 啟動 Uvicorn 伺服器 ---
+Write-Host "`n  [Uvicorn] Starting API server..." -ForegroundColor Green
 & $PythonExe -m uvicorn app:app --host 0.0.0.0 --port $env:PORT --workers $Workers
+

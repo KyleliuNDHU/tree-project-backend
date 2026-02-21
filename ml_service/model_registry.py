@@ -416,8 +416,23 @@ class _HybridSAM2Predictor:
             inp = self._ov_encoder.inputs[0]
             iname = inp.get_any_name() if hasattr(inp, "get_any_name") else inp.get_names()[0]
             res = self._ov_encoder({iname: inp_np})
+            
         outs = list(res.values()) if isinstance(res, dict) else (list(res) if isinstance(res, (list, tuple)) else [res])
-        feats = [torch.from_numpy(np.asarray(o)).float() for o in outs]
+        # OpenVINO sometimes returns scalar/0D arrays or object arrays depending on bindings
+        # We ensure it's a standard numeric numpy array before passing to torch
+        feats = []
+        for o in outs:
+            arr = np.asarray(o)
+            if str(arr.dtype) == 'object' or 'openvino' in str(type(o)):
+                # Handle OpenVINO ConstOutput or generic object arrays
+                try:
+                    arr = np.array(o.data)
+                except AttributeError:
+                    arr = np.array(list(o))
+            if arr.dtype == np.object_:
+                arr = arr.astype(np.float32)
+            feats.append(torch.from_numpy(arr).float())
+            
         if len(feats) >= 3:
             self._predictor._features = {
                 "image_embed": feats[0],
