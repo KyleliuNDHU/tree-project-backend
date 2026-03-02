@@ -1,4 +1,4 @@
---extra-index-url https://download.pytorch.org/whl/cpu
+--extra-index-url https://download.pytorch.org/whl/xpu
 torch>=2.0.0
 torchvision>=0.15.0
 transformers>=4.45.0

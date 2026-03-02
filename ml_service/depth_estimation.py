@@ -96,11 +96,19 @@ def _probe_backend() -> str:
         print(f"[Hardware] CUDA GPU detected: {torch.cuda.get_device_name(0)}")
         return "cuda"
 
-    # 3. MPS (Apple Silicon)
+    # 3. Intel XPU (Arc / integrated)
+    if hasattr(torch, "xpu") and torch.xpu.is_available():
+        name = torch.xpu.get_device_name(0)
+        props = torch.xpu.get_device_properties(0)
+        vram_gb = round(props.total_memory / 1024**3, 1)
+        print(f"[Hardware] Intel XPU detected: {name} ({vram_gb} GB VRAM)")
+        return "xpu"
+
+    # 4. MPS (Apple Silicon)
     if hasattr(torch.backends, "mps") and torch.backends.mps.is_available():
         return "mps"
 
-    # 4. ONNX Runtime
+    # 5. ONNX Runtime
     if USE_ONNX_RUNTIME:
         try:
             import onnxruntime
@@ -116,6 +124,8 @@ def _get_torch_device(backend: str) -> str:
     """Map backend string to torch device string."""
     if backend == "cuda":
         return "cuda"
+    if backend == "xpu":
+        return "xpu"
     if backend == "mps":
         return "mps"
     return "cpu"
@@ -265,6 +275,11 @@ def _try_load_depth_pro(model_id: str) -> bool:
 
         if _device == "cpu":
             torch.set_num_threads(CPU_THREADS)
+        elif _device == "xpu":
+            # Intel Arc GPU: log VRAM usage
+            props = torch.xpu.get_device_properties(0)
+            vram_gb = round(props.total_memory / 1024**3, 1)
+            print(f"[DepthEstimation] Intel Arc XPU: {torch.xpu.get_device_name(0)} ({vram_gb} GB)")
 
         _model_id = model_id
         _backend_type = "depth_pro"
@@ -313,6 +328,10 @@ def _load_pytorch_standard(model_id: str, config):
     if _device == "cpu":
         torch.set_num_threads(CPU_THREADS)
         print(f"[DepthEstimation] CPU threads set to {CPU_THREADS}")
+    elif _device == "xpu":
+        props = torch.xpu.get_device_properties(0)
+        vram_gb = round(props.total_memory / 1024**3, 1)
+        print(f"[DepthEstimation] Intel Arc XPU: {torch.xpu.get_device_name(0)} ({vram_gb} GB)")
 
     _model_id = model_id
     _backend_type = f"pytorch_{_device}"
@@ -494,6 +513,8 @@ def get_backend_info() -> dict:
         "openvino_enabled": ENABLE_OPENVINO,
         "onnx_enabled": USE_ONNX_RUNTIME,
         "cuda_available": torch.cuda.is_available(),
+        "xpu_available": hasattr(torch, "xpu") and torch.xpu.is_available(),
+        "xpu_device": torch.xpu.get_device_name(0) if (hasattr(torch, "xpu") and torch.xpu.is_available()) else None,
         "active_backend": _backend_type,
         "active_model": _model_id,
     }

@@ -94,6 +94,27 @@ Write-Host "  OpenVINO:  $($env:ML_USE_OPENVINO)" -ForegroundColor White
 Write-Host "  SAM:       $($env:ML_ENABLE_SAM) ($($env:ML_SEG_MODEL))" -ForegroundColor White
 Write-Host "  API Key:   $(if ($env:ML_API_KEY) { $env:ML_API_KEY.Substring(0,8) + '...' } else { 'NOT SET' })" -ForegroundColor $(if ($env:ML_API_KEY) { 'White' } else { 'Red' })
 Write-Host "  Workers:   $Workers" -ForegroundColor White
+
+# --- GPU 偵測 ---
+$gpuInfo = & $PythonExe -c "
+try:
+    import torch
+    if hasattr(torch, 'xpu') and torch.xpu.is_available():
+        name = torch.xpu.get_device_properties(0).name
+        mem = torch.xpu.get_device_properties(0).total_memory / (1024**3)
+        print(f'Intel XPU: {name} ({mem:.1f} GB)')
+    elif torch.cuda.is_available():
+        name = torch.cuda.get_device_name(0)
+        mem = torch.cuda.get_device_properties(0).total_mem / (1024**3)
+        print(f'CUDA: {name} ({mem:.1f} GB)')
+    else:
+        print('CPU only')
+except:
+    print('CPU only')
+" 2>$null
+$gpuColor = if ($gpuInfo -and $gpuInfo -notmatch 'CPU only') { 'Green' } else { 'DarkGray' }
+Write-Host "  GPU:       $gpuInfo" -ForegroundColor $gpuColor
+
 Write-Host "  ========================================" -ForegroundColor DarkCyan
 Write-Host ""
 
