@@ -95,6 +95,16 @@ Write-Host "  SAM:       $($env:ML_ENABLE_SAM) ($($env:ML_SEG_MODEL))" -Foregrou
 Write-Host "  API Key:   $(if ($env:ML_API_KEY) { $env:ML_API_KEY.Substring(0,8) + '...' } else { 'NOT SET' })" -ForegroundColor $(if ($env:ML_API_KEY) { 'White' } else { 'Red' })
 Write-Host "  Workers:   $Workers" -ForegroundColor White
 
+# --- 啟動準備 (先決定 PythonExe，GPU 偵測需要) ---
+Set-Location $ScriptDir
+if ($env:VIRTUAL_ENV) {
+    $PythonExe = "python"
+} elseif (Test-Path "$ScriptDir\venv\Scripts\python.exe") {
+    $PythonExe = "$ScriptDir\venv\Scripts\python.exe"
+} else {
+    $PythonExe = "python"
+}
+
 # --- GPU 偵測 ---
 $gpuInfo = & $PythonExe -c "
 try:
@@ -117,16 +127,6 @@ Write-Host "  GPU:       $gpuInfo" -ForegroundColor $gpuColor
 
 Write-Host "  ========================================" -ForegroundColor DarkCyan
 Write-Host ""
-
-# --- 啟動準備 ---
-Set-Location $ScriptDir
-if ($env:VIRTUAL_ENV) {
-    $PythonExe = "python"
-} elseif (Test-Path "$ScriptDir\venv\Scripts\python.exe") {
-    $PythonExe = "$ScriptDir\venv\Scripts\python.exe"
-} else {
-    $PythonExe = "python"
-}
 
 # --- 自動清理殘留的 Process (解決 Port 衝突) ---
 Write-Host "`n  [Cleanup] Checking for ghost processes..." -ForegroundColor DarkGray
