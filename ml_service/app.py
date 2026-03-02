@@ -32,7 +32,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from fastapi.exceptions import RequestValidationError
 from starlette.middleware.base import BaseHTTPMiddleware
-from PIL import Image
+from PIL import Image, ImageOps
 import numpy as np
 
 # ============================================================
@@ -511,6 +511,7 @@ async def estimate_depth_endpoint(
         # Read image and resize for performance
         img_bytes = await image.read()
         pil_image = Image.open(io.BytesIO(img_bytes)).convert("RGB")
+        pil_image = ImageOps.exif_transpose(pil_image) or pil_image
         pil_image, _ = _resize_for_processing(pil_image)
 
         # Run depth estimation
@@ -595,6 +596,7 @@ async def measure_dbh_endpoint(
             pil_image_orig = Image.open(io.BytesIO(img_bytes)).convert("RGB")
         except Exception:
             raise HTTPException(status_code=400, detail="無法解析圖片，請確認檔案格式正確")
+        pil_image_orig = ImageOps.exif_transpose(pil_image_orig) or pil_image_orig
         W_orig, H_orig = pil_image_orig.size
         pil_image, scale = _resize_for_processing(pil_image_orig)
         W, H = pil_image.size
@@ -788,6 +790,10 @@ async def auto_measure_dbh_endpoint(
             pil_image_orig = Image.open(io.BytesIO(img_bytes)).convert("RGB")
         except Exception:
             raise HTTPException(status_code=400, detail="無法解析圖片，請確認檔案格式正確")
+        # 關鍵：套用 EXIF 方向旋轉，使影像座標與前端一致
+        # 手機拍直向照片時 JPEG 原始資料是橫向 1280x720，
+        # 前端的 bbox 座標是基於旋轉後的直向 720x1280 空間
+        pil_image_orig = ImageOps.exif_transpose(pil_image_orig) or pil_image_orig
         W_orig, H_orig = pil_image_orig.size
         pil_image, scale = _resize_for_processing(pil_image_orig)
         W, H = pil_image.size
@@ -835,12 +841,12 @@ async def auto_measure_dbh_endpoint(
         # If Edge AI local_bbox is provided, we use that instead of server auto-detection
         if bbox_x1 is not None and bbox_y1 is not None and bbox_x2 is not None and bbox_y2 is not None:
             bbox = BoundingBox(
-                x1=int(bbox_x1 * scale),
-                y1=int(bbox_y1 * scale),
-                x2=int(bbox_x2 * scale),
-                y2=int(bbox_y2 * scale),
+                x1=max(0, min(W - 1, int(bbox_x1 * scale))),
+                y1=max(0, min(H - 1, int(bbox_y1 * scale))),
+                x2=max(0, min(W, int(bbox_x2 * scale))),
+                y2=max(0, min(H, int(bbox_y2 * scale))),
             )
-            print(f"[AutoMeasure] Using Edge AI local bbox: {bbox}")
+            print(f"[AutoMeasure] Using Edge AI local bbox: {bbox}  (image={W}x{H}, scale={scale:.3f})")
             # Mock best_trunk for response compatibility
             class MockTrunk:
                 def __init__(self, b):
@@ -1258,6 +1264,7 @@ async def auto_measure_dbh_multi_endpoint(
         for i, img_upload in enumerate(images):
             img_bytes = await img_upload.read()
             pil_img = Image.open(io.BytesIO(img_bytes)).convert("RGB")
+            pil_img = ImageOps.exif_transpose(pil_img) or pil_img
             pil_img, scale = _resize_for_processing(pil_img)
             W, H = pil_img.size
 

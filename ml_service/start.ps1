@@ -151,5 +151,30 @@ if ($env:ML_SERVICE_URL -and $env:ML_SERVICE_URL -match "ngrok-free\.dev") {
 
 # --- 啟動 Uvicorn 伺服器 ---
 Write-Host "`n  [Uvicorn] Starting API server..." -ForegroundColor Green
-& $PythonExe -m uvicorn app:app --host 0.0.0.0 --port $env:PORT --workers $Workers
+
+# --- 防止系統睡眠（螢幕可以關，但系統不會休眠）---
+# ES_CONTINUOUS | ES_SYSTEM_REQUIRED = 0x80000001
+Write-Host "  [Power] Preventing system sleep (screen can turn off)..." -ForegroundColor DarkGray
+$sleepGuardCode = @"
+using System;
+using System.Runtime.InteropServices;
+public class SleepGuard {
+    [DllImport("kernel32.dll")]
+    static extern uint SetThreadExecutionState(uint esFlags);
+    public static void Prevent() { SetThreadExecutionState(0x80000001); }
+    public static void Restore() { SetThreadExecutionState(0x80000000); }
+}
+"@
+try {
+    Add-Type -TypeDefinition $sleepGuardCode -ErrorAction SilentlyContinue
+    [SleepGuard]::Prevent()
+} catch {}
+
+try {
+    & $PythonExe -m uvicorn app:app --host 0.0.0.0 --port $env:PORT --workers $Workers
+} finally {
+    # 還原電源設定（不論是正常結束或 Ctrl+C）
+    Write-Host "`n  [Power] Restoring system sleep settings..." -ForegroundColor DarkGray
+    try { [SleepGuard]::Restore() } catch {}
+}
 
