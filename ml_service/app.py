@@ -542,7 +542,7 @@ async def estimate_depth_endpoint(
 
     except Exception as e:
         traceback.print_exc()
-        raise HTTPException(status_code=500, detail="處理過程中發生內部錯誤，請稍後再試")
+        raise HTTPException(status_code=500, detail=f"Internal error during depth estimation: {type(e).__name__}")
 
 
 # ============================================================
@@ -707,7 +707,7 @@ async def measure_dbh_endpoint(
         raise
     except Exception as e:
         traceback.print_exc()
-        raise HTTPException(status_code=500, detail="處理過程中發生內部錯誤，請稍後再試")
+        raise HTTPException(status_code=500, detail=f"Internal error during DBH measurement: {type(e).__name__}")
 
 
 # ============================================================
@@ -847,17 +847,31 @@ async def auto_measure_dbh_endpoint(
                 y2=max(0, min(H, int(bbox_y2 * scale))),
             )
             print(f"[AutoMeasure] Using Edge AI local bbox: {bbox}  (image={W}x{H}, scale={scale:.3f})")
-            # Mock best_trunk for response compatibility
+            # Compute depth at bbox center for MockTrunk
+            _cy = (bbox.y1 + bbox.y2) // 2
+            _cx = (bbox.x1 + bbox.x2) // 2
+            _cy = max(0, min(depth_map.shape[0] - 1, _cy))
+            _cx = max(0, min(depth_map.shape[1] - 1, _cx))
+            # Use median depth in bbox region for robustness
+            _roi = depth_map[bbox.y1:bbox.y2, bbox.x1:bbox.x2]
+            _mock_depth = float(np.median(_roi)) if _roi.size > 0 else float(depth_map[_cy, _cx])
+            # Mock best_trunk for response compatibility (must match DetectedTrunk attrs)
             class MockTrunk:
-                def __init__(self, b):
+                def __init__(self, b, depth_val):
                     self.bbox_x1 = b.x1
                     self.bbox_y1 = b.y1
                     self.bbox_x2 = b.x2
                     self.bbox_y2 = b.y2
                     self.confidence = 1.0
+                    self.depth_m = depth_val
+                    self.pixel_width = float(b.x2 - b.x1)
+                    self.pixel_height = float(b.y2 - b.y1)
+                    self.center_x = (b.x1 + b.x2) // 2
+                    self.center_y = (b.y1 + b.y2) // 2
                     self.distance_status = "ok"
-                    self.distance_message = "Local tracking used"
-            best_trunk = MockTrunk(bbox)
+                    self.distance_message = "Edge AI local tracking"
+                    self.mask = None
+            best_trunk = MockTrunk(bbox, _mock_depth)
             detection.trunks = [best_trunk]
             detection.best_trunk_index = 0
             # Also reset error if local bbox provided
@@ -1133,7 +1147,7 @@ async def auto_measure_dbh_endpoint(
         raise
     except Exception as e:
         traceback.print_exc()
-        raise HTTPException(status_code=500, detail="處理過程中發生內部錯誤，請稍後再試")
+        raise HTTPException(status_code=500, detail=f"Internal error during processing: {type(e).__name__}")
 
 
 # ============================================================
@@ -1226,7 +1240,7 @@ async def depth_at_point(
         raise
     except Exception as e:
         traceback.print_exc()
-        raise HTTPException(status_code=500, detail="處理過程中發生內部錯誤，請稍後再試")
+        raise HTTPException(status_code=500, detail=f"Internal error during debug endpoint: {type(e).__name__}")
 
 
 # ============================================================
@@ -1359,7 +1373,7 @@ async def auto_measure_dbh_multi_endpoint(
         raise
     except Exception as e:
         traceback.print_exc()
-        raise HTTPException(status_code=500, detail="處理過程中發生內部錯誤，請稍後再試")
+        raise HTTPException(status_code=500, detail=f"Internal error during multi-photo measurement: {type(e).__name__}")
 
 
 # ============================================================
