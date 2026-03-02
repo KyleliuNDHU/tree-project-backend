@@ -1,0 +1,12 @@
+# Tree Trunk Instance Segmentation Dataset
+# Used by YOLOv8 for training
+
+# Paths (relative to this file)
+path: ./datasets
+train: images/train
+val: images/val
+
+# Single class: tree trunk only
+nc: 1
+names:
+  0: tree_trunk

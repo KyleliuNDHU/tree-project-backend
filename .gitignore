@@ -48,6 +48,7 @@ build/
 # --- Python / ML Service ---
 __pycache__/
 *.pyc
+ml_service/depth_pro_src/
 *.pyo
 .hf_cache/
 *.egg-info/

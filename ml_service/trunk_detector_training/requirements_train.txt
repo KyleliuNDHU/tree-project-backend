@@ -1,0 +1,31 @@
+# YOLOv8n-seg tree trunk training dependencies
+# Install: pip install -r requirements_train.txt
+
+# Core
+ultralytics>=8.3.0          # YOLOv8 training framework
+torch>=2.0.0                # PyTorch (auto-detects CUDA)
+torchvision>=0.15.0
+
+# Data preparation
+roboflow>=1.1.0             # Download pre-labeled datasets
+albumentations>=1.4.0       # Data augmentation
+supervision>=0.25.0         # Annotation utilities
+
+# SAM-assisted labeling
+segment-anything-2>=0.1     # SAM 2.1 for semi-auto labeling (optional)
+transformers>=4.45.0        # HuggingFace SAM fallback
+
+# Export
+onnx>=1.14.0                # ONNX export
+onnxruntime>=1.16.0         # ONNX validation
+tensorflow>=2.13.0          # TFLite export (INT8 quantization)
+
+# Evaluation
+scikit-learn>=1.3.0         # Metrics
+matplotlib>=3.7.0           # Plots
+pandas>=2.0.0               # Results CSV
+Pillow>=10.0.0
+numpy>=1.24.0
+opencv-python>=4.8.0        # Image processing
+tqdm>=4.65.0
+pyyaml>=6.0

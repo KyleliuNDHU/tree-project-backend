@@ -28,6 +28,12 @@ services:
         sync: false
       - key: ML_API_KEY
         sync: false
+      - key: CLOUDINARY_CLOUD_NAME
+        sync: false
+      - key: CLOUDINARY_API_KEY
+        sync: false
+      - key: CLOUDINARY_API_SECRET
+        sync: false
   # ML Service 已改為自架 (self-hosted on local machine + ngrok)
   # 設定值透過 ML_SERVICE_URL / ML_API_KEY 環境變數提供給 backend
   # backend 會在登入時將 ML config 傳給前端 App

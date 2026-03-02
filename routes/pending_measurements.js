@@ -146,6 +146,34 @@ async function initTable() {
   } catch (e) {
     console.warn('[pending-measurements] instrument_dbh migration skipped:', e.message);
   }
+
+  // [v19.0] Migration: 新增 VLGEO2 儀器參數欄位
+  try {
+    await pool.query(`
+      DO $$
+      BEGIN
+        IF NOT EXISTS (
+          SELECT 1 FROM information_schema.columns
+          WHERE table_name = 'pending_tree_measurements'
+          AND column_name = 'gps_hdop'
+        ) THEN
+          ALTER TABLE pending_tree_measurements ADD COLUMN gps_hdop DOUBLE PRECISION;
+          ALTER TABLE pending_tree_measurements ADD COLUMN device_sn VARCHAR(50);
+          ALTER TABLE pending_tree_measurements ADD COLUMN ref_height DOUBLE PRECISION;
+          ALTER TABLE pending_tree_measurements ADD COLUMN utm_zone VARCHAR(10);
+          ALTER TABLE pending_tree_measurements ADD COLUMN raw_data_snapshot JSONB;
+          COMMENT ON COLUMN pending_tree_measurements.gps_hdop IS 'GPS HDOP 精度指標';
+          COMMENT ON COLUMN pending_tree_measurements.device_sn IS '儀器序號 (SNR)';
+          COMMENT ON COLUMN pending_tree_measurements.ref_height IS '儀器參考高度 REFH (m)';
+          COMMENT ON COLUMN pending_tree_measurements.utm_zone IS 'UTM 帶區';
+          COMMENT ON COLUMN pending_tree_measurements.raw_data_snapshot IS '完整原始數據快照 (JSON)';
+        END IF;
+      END $$;
+    `);
+    console.log('[pending-measurements] v19.0 儀器參數欄位確認完成');
+  } catch (e) {
+    console.warn('[pending-measurements] v19.0 migration skipped:', e.message);
+  }
 })();
 
 /**
@@ -183,8 +211,9 @@ router.post('/batch', async (req, res) => {
           station_latitude, station_longitude,
           horizontal_distance, slope_distance, azimuth, pitch, altitude,
           measurement_type, status, priority,
-          instrument_dbh_cm, dbh_source
-        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22)
+          instrument_dbh_cm, dbh_source,
+          gps_hdop, device_sn, ref_height, utm_zone, raw_data_snapshot
+        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25, $26, $27)
         RETURNING id
       `, [
         m.session_id,
@@ -208,7 +237,12 @@ router.post('/batch', async (req, res) => {
         m.status ?? 'pending',
         m.priority ?? 3,
         m.instrument_dbh_cm ?? null,
-        m.dbh_source ?? null
+        m.dbh_source ?? null,
+        m.gps_hdop ?? null,
+        m.device_sn ?? null,
+        m.ref_height ?? null,
+        m.utm_zone ?? null,
+        m.raw_data_snapshot ? JSON.stringify(m.raw_data_snapshot) : null
       ]);
       
       insertedIds.push(result.rows[0].id);
@@ -507,6 +541,7 @@ router.post('/transfer', async (req, res) => {
     const projectMaxIds = {};
     
     const transferredIds = [];
+    const idMapping = []; // { pending_id, tree_survey_id, system_tree_id }
     
     for (const p of pendingResult.rows) {
       // 生成 system_tree_id
@@ -582,6 +617,11 @@ router.post('/transfer', async (req, res) => {
       ]);
       
       transferredIds.push(insertResult.rows[0].id);
+      idMapping.push({
+        pending_id: p.id,
+        tree_survey_id: insertResult.rows[0].id,
+        system_tree_id: systemTreeId,
+      });
       
       // 同時插入 tree_measurement_raw（保留儀器數據）
       try {
@@ -590,8 +630,9 @@ router.post('/transfer', async (req, res) => {
             tree_id, instrument_type,
             horizontal_dist, slope_dist, vertical_angle, azimuth,
             raw_lat, raw_lon, altitude,
+            gps_hdop, device_sn, ref_height, utm_zone, raw_data_snapshot,
             measured_at
-          ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+          ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)
         `, [
           insertResult.rows[0].id,
           'VLGEO2+Vision',
@@ -602,10 +643,26 @@ router.post('/transfer', async (req, res) => {
           p.tree_latitude,
           p.tree_longitude,
           p.altitude,
+          p.gps_hdop ?? null,
+          p.device_sn ?? null,
+          p.ref_height ?? null,
+          p.utm_zone ?? null,
+          p.raw_data_snapshot ? (typeof p.raw_data_snapshot === 'string' ? p.raw_data_snapshot : JSON.stringify(p.raw_data_snapshot)) : null,
           p.completed_at ?? new Date()
         ]);
       } catch (rawErr) {
         console.warn('[Transfer] tree_measurement_raw insert skipped:', rawErr.message);
+      }
+
+      // 遷移照片：將 tree_images 的 pending_measurement_id → tree_survey_id
+      try {
+        await client.query(`
+          UPDATE tree_images 
+          SET tree_survey_id = $1, pending_measurement_id = NULL
+          WHERE pending_measurement_id = $2
+        `, [insertResult.rows[0].id, p.id]);
+      } catch (imgErr) {
+        console.warn(`[Transfer] tree_images migration skipped for pending_id=${p.id}:`, imgErr.message);
       }
     }
     
@@ -621,7 +678,8 @@ router.post('/transfer', async (req, res) => {
     res.json({
       success: true,
       message: `成功轉移 ${transferredIds.length} 筆記錄到 tree_survey`,
-      transferred_tree_ids: transferredIds
+      transferred_tree_ids: transferredIds,
+      id_mapping: idMapping
     });
     
   } catch (error) {

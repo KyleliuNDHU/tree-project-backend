@@ -27,30 +27,44 @@ def setup_models(depth_only=False, sam_only=False, download_only=False):
             print(f"  [ERROR] Download failed: {e}")
             return False
 
-    # 1. Depth Pro (Depth Anything V2 as proxy)
+    # 1. Depth Model: 根據 model_registry.py 的設定下載正確的模型
+    #    DEFAULT_DEPTH_MODEL 預設為 "depth_pro" (Apple DepthPro)
+    #    如果 OpenVINO 不可用，自動 fallback 到 DA V2 Base
     if not sam_only:
-        print("\n[Depth Pro] Setting up...")
-        model_id = "depth-anything/Depth-Anything-V2-Small-hf"
-        depth_pt = base_dir / "depth_pro_pt"
+        print("\n[Depth Model] Setting up...")
+
+        # 下載 Depth Pro (預設生產模型)
+        depth_pro_id = "apple/DepthPro-hf"
+        depth_pro_pt = base_dir / "depth_pro_pt"
+        print(f"  - Primary: {depth_pro_id} (ICLR 2025 SOTA)")
         try:
             if download_only:
-                print(f"  - Downloading PyTorch model: {model_id}...")
-                _download_pytorch(model_id, depth_pt)
+                print(f"  - Downloading PyTorch model: {depth_pro_id}...")
+                _download_pytorch(depth_pro_id, depth_pro_pt)
             else:
-                print(f"  - Downloading {model_id}...")
+                print(f"  - Downloading {depth_pro_id}...")
                 print("  - Converting to OpenVINO IR (FP16)...")
                 env = {**os.environ, "HF_HOME": str(cache_dir)}
-                cmd = ["optimum-cli", "export", "openvino", "--model", model_id, "--task", "depth-estimation",
+                cmd = ["optimum-cli", "export", "openvino", "--model", depth_pro_id, "--task", "depth-estimation",
                        "--weight-format", "fp16", str(base_dir / "depth_pro_ov")]
                 ret = subprocess.run(cmd, env=env).returncode
                 if ret != 0:
                     print(f"  [WARN] OpenVINO export failed (exit {ret}). Falling back to PyTorch download...")
-                    _download_pytorch(model_id, depth_pt)
+                    _download_pytorch(depth_pro_id, depth_pro_pt)
         except Exception as e:
             print(f"  [ERROR] Depth Pro setup failed: {e}")
             if not download_only:
                 print("  - Attempting PyTorch fallback download...")
-                _download_pytorch(model_id, depth_pt)
+                _download_pytorch(depth_pro_id, depth_pro_pt)
+
+        # 也下載 DA V2 Metric Outdoor Base 作為 fallback / fast 模式
+        da_v2_base_id = "depth-anything/Depth-Anything-V2-Metric-Outdoor-Base-hf"
+        da_v2_pt = base_dir / "da_v2_base_pt"
+        print(f"\n  - Fallback: {da_v2_base_id} (faster, for 'fast' mode)")
+        try:
+            _download_pytorch(da_v2_base_id, da_v2_pt)
+        except Exception as e:
+            print(f"  [WARN] DA V2 Base download failed (non-critical): {e}")
 
     # 2. SAM 2.1
     if not depth_only:

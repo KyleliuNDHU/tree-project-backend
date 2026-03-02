@@ -108,8 +108,8 @@ def _load_sam_model():
         _sam_predictor = Sam2Processor.from_pretrained(model_id)
 
         _sam_model.eval()
-        if hasattr(torch, "inference_mode"):
-            _sam_model = torch.no_grad()
+        # Note: do NOT overwrite _sam_model with torch.no_grad() — it's a context manager, not a model
+        # torch.no_grad() is used as a context in _run_sam_point_prompt instead
 
         print(f"[SAM] SAM 2.1 loaded successfully ({config.params_m}M params)")
         return _sam_predictor

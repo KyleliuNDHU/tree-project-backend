@@ -477,12 +477,17 @@ def cylindrical_correction(chord_length_m: float,
     The chord is always shorter than the diameter.
 
     Formula (Xiang et al. 2025):
-        d = l² * p / (l² + 4p²)
+        d = l * p / sqrt(p² - l²/4)
 
     Where:
-        l = chord length (meters)
-        p = camera distance to chord plane (meters)
+        l = chord length (meters) — visible width at camera distance
+        p = camera distance to trunk front surface (meters)
         d = cylinder diameter (meters)
+
+    Derivation: The camera tangent rays touch the cylinder surface at points
+    behind the center plane. The visible chord l at distance p relates to
+    the true diameter d by: l² = d²p²/(p² + d²/4), solving for d gives
+    d² = l²p²/(p² - l²/4).
 
     For large distances (p >> d), the correction is small (<1%).
     """

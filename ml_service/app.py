@@ -77,7 +77,7 @@ def verify_api_key(request: Request):
 class RateLimitMiddleware(BaseHTTPMiddleware):
     """Simple IP-based rate limiter for ML endpoints."""
     
-    def __init__(self, app, max_requests: int = 30, window_seconds: int = 3600):
+    def __init__(self, app, max_requests: int = 120, window_seconds: int = 3600):
         super().__init__(app)
         self.max_requests = max_requests
         self.window_seconds = window_seconds
