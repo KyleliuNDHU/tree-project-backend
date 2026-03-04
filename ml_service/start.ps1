@@ -3,14 +3,15 @@
 # ============================================================
 # 使用方式:
 #   cd backend\ml_service
-#   .\start.ps1              # 預設模式 (DA V2 Base)
-#   .\start.ps1 -Preset pro  # Depth Pro 模式
-#   .\start.ps1 -Verify      # 啟用 numpy 驗證
-#   .\start.ps1 -Workers 2   # 多 worker (需較大 RAM)
+#   .\start.ps1                  # 預設模式 (DA V2 Base)
+#   .\start.ps1 -Preset pro      # Depth Pro 模式 (PyTorch)
+#   .\start.ps1 -Preset pro_ov   # Depth Pro + OpenVINO INT8-W (推薦)
+#   .\start.ps1 -Verify          # 啟用 numpy 驗證
+#   .\start.ps1 -Workers 2       # 多 worker (需較大 RAM)
 # ============================================================
 
 param(
-    [ValidateSet('default', 'pro', 'openvino')]
+    [ValidateSet('default', 'pro', 'openvino', 'pro_ov')]
     [string]$Preset = 'default',
 
     [switch]$Verify,
@@ -43,6 +44,11 @@ switch ($Preset) {
         $env:ML_DEPTH_MODEL = 'depth_pro'
         $env:ML_USE_OPENVINO = 'false'
         Write-Host "`n  Model: Depth Pro (higher accuracy, slower)" -ForegroundColor Cyan
+    }
+    'pro_ov' {
+        $env:ML_DEPTH_MODEL = 'depth_pro'
+        $env:ML_USE_OPENVINO = 'true'
+        Write-Host "`n  Model: Depth Pro + OpenVINO INT8-W iGPU acceleration" -ForegroundColor Cyan
     }
     'openvino' {
         $env:ML_DEPTH_MODEL = 'da_v2_base'

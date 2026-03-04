@@ -561,14 +561,23 @@ class _ModelRegistry:
         """
         Get depth model + processor (lazy load).
         Uses OpenVINO IR from OPENVINO_MODEL_DIR when ENABLE_OPENVINO and available.
+        Prefers INT8-W compressed model (depth_pro_int8w/) over FP16 for ~15% faster
+        inference and ~50% smaller file size with negligible accuracy loss.
         """
         config = get_depth_config()
-        ov_path = os.path.join(
-            OPENVINO_MODEL_DIR,
-            "depth_pro" if "depthpro" in config.model_id.lower() or "depth_pro" in config.model_id.lower() else "depth",
-        )
-        if ENABLE_OPENVINO and (force_openvino or os.path.exists(ov_path)):
-            return self._load_depth_openvino(ov_path, config)
+        is_depth_pro = "depthpro" in config.model_id.lower() or "depth_pro" in config.model_id.lower()
+        base_name = "depth_pro" if is_depth_pro else "depth"
+
+        # Prefer INT8-W compressed model when available (smaller + faster)
+        int8w_path = os.path.join(OPENVINO_MODEL_DIR, f"{base_name}_int8w")
+        fp16_path = os.path.join(OPENVINO_MODEL_DIR, base_name)
+
+        if ENABLE_OPENVINO:
+            if os.path.exists(os.path.join(int8w_path, "openvino_model.xml")):
+                print(f"[ModelRegistry] Using INT8-W compressed model: {int8w_path}")
+                return self._load_depth_openvino(int8w_path, config)
+            if force_openvino or os.path.exists(fp16_path):
+                return self._load_depth_openvino(fp16_path, config)
         return self._load_depth_pytorch(config)
 
     def _load_depth_openvino(self, ov_path: str, config) -> tuple:

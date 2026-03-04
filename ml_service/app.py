@@ -758,6 +758,10 @@ async def auto_measure_dbh_endpoint(
     bbox_y1: Optional[float] = Form(default=None),
     bbox_x2: Optional[float] = Form(default=None),
     bbox_y2: Optional[float] = Form(default=None),
+    # ── [方案A] YOLOv8-seg mask pixel width ───────────────────
+    mask_pixel_width: Optional[float] = Form(default=None,
+        description="Trunk pixel width computed on-device from YOLOv8-seg mask. "
+                    "Overrides depth-edge detection when provided."),
     return_visualization: bool = Form(default=True,
         description="Return annotated visualization image"),
     return_detection_visualization: bool = Form(default=True,
@@ -920,12 +924,52 @@ async def auto_measure_dbh_endpoint(
         )
         calc_time = time.time() - t2
 
+        # ── [方案A] Override pixel width with on-device seg mask measurement ──
+        # When the Flutter app sends mask_pixel_width (computed from YOLOv8-seg),
+        # it is far more accurate than depth-edge detection (38px → ~200px).
+        #
+        # Coordinate space chain:
+        #   Flutter: preview-portrait px  →  (sX)  →  photo px  (sent as mask_pixel_width)
+        #   Backend: photo px             →  (scale) →  processed-image px
+        # So we multiply by scale here to put it in the same space as focal_length_px.
+        seg_mask_applied = False
+        if mask_pixel_width is not None and mask_pixel_width > 10.0:
+            try:
+                # Convert from photo-space pixels to processed-image-space pixels
+                mask_pixel_width_proc = mask_pixel_width * scale
+                mask_chord_m = pixel_width_to_metric(
+                    mask_pixel_width_proc, result.trunk_depth_m, result.focal_length_px
+                )
+                mask_dbh_m = cylindrical_correction(mask_chord_m, result.trunk_depth_m)
+                old_depth_edge_px = result.trunk_pixel_width
+                result = DBHResult(
+                    dbh_cm=round(mask_dbh_m * 100.0, 2),
+                    confidence=min(1.0, round(result.confidence + 0.05, 3)),
+                    trunk_depth_m=result.trunk_depth_m,
+                    trunk_pixel_width=round(mask_pixel_width_proc, 2),
+                    chord_length_m=round(mask_chord_m, 4),
+                    focal_length_px=result.focal_length_px,
+                    measurement_row=result.measurement_row,
+                    method=f"{result.method}+seg_mask",
+                    notes=result.notes + [
+                        f"方案A: on-device mask width {mask_pixel_width:.1f}px (photo) "
+                        f"→ {mask_pixel_width_proc:.1f}px (processed, scale={scale:.3f}); "
+                        f"depth-edge was {old_depth_edge_px:.1f}px"
+                    ],
+                )
+                seg_mask_applied = True
+            except Exception as e:
+                result.notes.append(f"方案A mask override skipped: {e}")
+
         # Step 4.5: Subpixel + Ellipse refinement (mode-dependent)
+        # Skip when 方案A seg-mask override was applied: the on-device YOLOv8-seg
+        # mask width is more accurate than depth-gradient refinement, and running
+        # subpixel/ellipse would negate the improvement.
         active_preset = get_preset(mode) if mode else get_preset("balanced")
         subpixel_width = None
         ellipse_width = None
 
-        if active_preset.use_subpixel and result.measurement_row is not None:
+        if not seg_mask_applied and active_preset.use_subpixel and result.measurement_row is not None:
             try:
                 gray = np.array(pil_image.convert("L")).astype(np.float64)
                 fg_mask = (depth_map < np.percentile(depth_map, 40)).astype(np.uint8)
@@ -955,7 +999,7 @@ async def auto_measure_dbh_endpoint(
             except Exception as e:
                 result.notes.append(f"Subpixel refinement skipped: {e}")
 
-        if active_preset.use_ellipse_fit and result.measurement_row is not None:
+        if not seg_mask_applied and active_preset.use_ellipse_fit and result.measurement_row is not None:
             try:
                 fg_mask = (depth_map < np.percentile(depth_map, 40)).astype(np.uint8)
                 ell_w = ellipse_corrected_width(fg_mask, result.measurement_row)
