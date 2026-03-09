@@ -121,8 +121,14 @@ from dbh_calculator import (
 )
 from visualization import create_result_image, depth_to_colormap, image_to_bytes
 from tree_trunk_detector import detect_trunks, create_detection_visualization
-from tree_segmentation import segment_trunk_auto
-from tree_segmentation import subpixel_trunk_width, ellipse_corrected_width
+from tree_segmentation import (
+    segment_trunk_auto,
+    segment_trunk_with_bbox,
+    segment_trunk_with_yolo_guidance,
+    subpixel_trunk_width,
+    ellipse_corrected_width,
+    compute_trunk_width_from_mask,
+)
 from model_registry import (
     get_depth_config, get_seg_config, get_preset,
     print_config_summary, ACCURACY_PRESETS, DEPTH_MODELS,
@@ -434,11 +440,18 @@ async def ws_scan(websocket: WebSocket):
                 y2=best_trunk.bbox_y2,
             )
 
-            # SAM segmentation (auto-prompt center)
-            seg_result = segment_trunk_auto(
-                np.array(pil_image), depth_map,
-                existing_mask=best_trunk.mask.astype(np.uint8) if best_trunk.mask is not None else None,
-            )
+            # SAM segmentation: prefer YOLO bbox guidance, fallback to auto-prompt
+            img_np = np.array(pil_image)
+            if ENABLE_SAM_SEGMENTATION:
+                seg_result = segment_trunk_with_yolo_guidance(
+                    img_np, depth_map,
+                    bbox=(bbox.x1, bbox.y1, bbox.x2, bbox.y2),
+                )
+            else:
+                seg_result = segment_trunk_auto(
+                    img_np, depth_map,
+                    existing_mask=best_trunk.mask.astype(np.uint8) if best_trunk.mask is not None else None,
+                )
 
             # DBH calculation
             result = measure_dbh_multi_row(
@@ -447,6 +460,26 @@ async def ws_scan(websocket: WebSocket):
                 image_width_px=W,
                 fov_degrees=effective_fov,
             )
+
+            # Override with SAM mask width if available (方案A+C)
+            if seg_result.confidence > 0.3 and seg_result.method.startswith("sam2"):
+                _sam_w, _ = compute_trunk_width_from_mask(
+                    seg_result.mask, (bbox.x1, bbox.y1, bbox.x2, bbox.y2)
+                )
+                if _sam_w > 10.0:
+                    _chord = pixel_width_to_metric(_sam_w, result.trunk_depth_m, result.focal_length_px)
+                    _dbh_m = cylindrical_correction(_chord, result.trunk_depth_m)
+                    result = DBHResult(
+                        dbh_cm=round(_dbh_m * 100.0, 2),
+                        confidence=min(1.0, round(result.confidence + 0.10, 3)),
+                        trunk_depth_m=result.trunk_depth_m,
+                        trunk_pixel_width=round(_sam_w, 2),
+                        chord_length_m=round(_chord, 4),
+                        focal_length_px=result.focal_length_px,
+                        measurement_row=result.measurement_row,
+                        method=f"{result.method}+sam_mask",
+                        notes=result.notes + [f"SAM mask width: {_sam_w:.1f}px"],
+                    )
 
             mask_b64 = _mask_to_overlay_base64(pil_image, seg_result.mask)
 
@@ -914,6 +947,55 @@ async def auto_measure_dbh_endpoint(
                 y2=best_trunk.bbox_y2,
             )
 
+        # Step 3.5: SAM segmentation with YOLO bbox guidance (方案A+C)
+        # When Edge AI provides bbox, use it as SAM prompt for precise trunk mask
+        t_seg = time.time()
+        sam_seg_result = None
+        sam_trunk_width = None
+        seg_mask_applied = False
+        has_yolo_bbox = (bbox_x1 is not None and bbox_y1 is not None
+                         and bbox_x2 is not None and bbox_y2 is not None)
+
+        if ENABLE_SAM_SEGMENTATION and has_yolo_bbox:
+            try:
+                img_np = np.array(pil_image)
+                _tap = (tap_x, tap_y) if (tap_x is not None and tap_y is not None) else None
+                sam_seg_result = segment_trunk_with_yolo_guidance(
+                    img_np, depth_map,
+                    bbox=(bbox.x1, bbox.y1, bbox.x2, bbox.y2),
+                    tap_point=_tap,
+                )
+                if sam_seg_result.confidence > 0.3:
+                    # Compute trunk width from SAM mask (more precise than depth edges)
+                    sam_trunk_width, _ = compute_trunk_width_from_mask(
+                        sam_seg_result.mask,
+                        (bbox.x1, bbox.y1, bbox.x2, bbox.y2),
+                    )
+                    print(f"[AutoMeasure] SAM mask trunk width: {sam_trunk_width:.1f}px "
+                          f"(method={sam_seg_result.method}, conf={sam_seg_result.confidence:.2f})")
+            except Exception as e:
+                print(f"[AutoMeasure] SAM segmentation failed: {e}")
+                import traceback
+                traceback.print_exc()
+        elif ENABLE_SAM_SEGMENTATION:
+            # No YOLO bbox — use depth-based auto-prompt
+            try:
+                img_np = np.array(pil_image)
+                _tap = (tap_x, tap_y) if (tap_x is not None and tap_y is not None) else None
+                if _tap:
+                    from tree_segmentation import segment_trunk_with_tap
+                    sam_seg_result = segment_trunk_with_tap(img_np, depth_map, _tap[0], _tap[1])
+                else:
+                    sam_seg_result = segment_trunk_auto(img_np, depth_map)
+                if sam_seg_result.confidence > 0.3:
+                    sam_trunk_width, _ = compute_trunk_width_from_mask(
+                        sam_seg_result.mask,
+                        (bbox.x1, bbox.y1, bbox.x2, bbox.y2),
+                    )
+            except Exception as e:
+                print(f"[AutoMeasure] SAM auto-prompt failed: {e}")
+        seg_time = time.time() - t_seg
+
         # Step 4: Measure DBH using auto-detected bbox
         t2 = time.time()
         result = measure_dbh_multi_row(
@@ -924,16 +1006,39 @@ async def auto_measure_dbh_endpoint(
         )
         calc_time = time.time() - t2
 
-        # ── [方案A] Override pixel width with on-device seg mask measurement ──
-        # When the Flutter app sends mask_pixel_width (computed from YOLOv8-seg),
-        # it is far more accurate than depth-edge detection (38px → ~200px).
-        #
-        # Coordinate space chain:
-        #   Flutter: preview-portrait px  →  (sX)  →  photo px  (sent as mask_pixel_width)
-        #   Backend: photo px             →  (scale) →  processed-image px
-        # So we multiply by scale here to put it in the same space as focal_length_px.
-        seg_mask_applied = False
-        if mask_pixel_width is not None and mask_pixel_width > 10.0:
+        # ── [方案A+C] Override with SAM mask width (highest priority) ──
+        # SAM mask width > on-device mask_pixel_width > depth-edge detection
+        if sam_trunk_width is not None and sam_trunk_width > 10.0:
+            try:
+                sam_chord_m = pixel_width_to_metric(
+                    sam_trunk_width, result.trunk_depth_m, result.focal_length_px
+                )
+                sam_dbh_m = cylindrical_correction(sam_chord_m, result.trunk_depth_m)
+                old_px = result.trunk_pixel_width
+                result = DBHResult(
+                    dbh_cm=round(sam_dbh_m * 100.0, 2),
+                    confidence=min(1.0, round(result.confidence + 0.10, 3)),
+                    trunk_depth_m=result.trunk_depth_m,
+                    trunk_pixel_width=round(sam_trunk_width, 2),
+                    chord_length_m=round(sam_chord_m, 4),
+                    focal_length_px=result.focal_length_px,
+                    measurement_row=result.measurement_row,
+                    method=f"{result.method}+sam_mask",
+                    notes=result.notes + [
+                        f"方案A+C: SAM mask width {sam_trunk_width:.1f}px "
+                        f"(depth-edge was {old_px:.1f}px, "
+                        f"SAM method={sam_seg_result.method}, "
+                        f"SAM conf={sam_seg_result.confidence:.2f})"
+                    ],
+                )
+                seg_mask_applied = True
+            except Exception as e:
+                result.notes.append(f"SAM mask override failed: {e}")
+
+        # ── [方案A fallback] On-device mask_pixel_width (only if SAM didn't apply) ──
+        # When SAM mask is available, it's more precise than on-device YOLO mask width.
+        # Only use on-device mask_pixel_width as fallback when SAM was not applied.
+        if not seg_mask_applied and mask_pixel_width is not None and mask_pixel_width > 10.0:
             try:
                 # Convert from photo-space pixels to processed-image-space pixels
                 mask_pixel_width_proc = mask_pixel_width * scale
@@ -1157,16 +1262,28 @@ async def auto_measure_dbh_endpoint(
             "depth_source": depth_source,
             "reference_distance_m": reference_distance,
             "instrument_distance_m": instrument_distance,
+            "sam_segmentation": {
+                "applied": seg_mask_applied,
+                "method": sam_seg_result.method if sam_seg_result else None,
+                "confidence": round(sam_seg_result.confidence, 3) if sam_seg_result else None,
+                "sam_trunk_width_px": round(sam_trunk_width, 1) if sam_trunk_width else None,
+            } if sam_seg_result else None,
             "timing": {
                 "depth_estimation_ms": round(depth_time * 1000, 1),
                 "detection_ms": round(detect_time * 1000, 1),
+                "sam_segmentation_ms": round(seg_time * 1000, 1),
                 "dbh_calculation_ms": round(calc_time * 1000, 1),
-                "total_ms": round((depth_time + detect_time + calc_time) * 1000, 1),
+                "total_ms": round((depth_time + detect_time + seg_time + calc_time) * 1000, 1),
             },
             "image_size": {"width": W_orig, "height": H_orig},
             "processing_size": {"width": W, "height": H},
             "backend_used": depth_result.backend_used,
         }
+
+        # SAM mask overlay (green highlight on trunk)
+        if sam_seg_result is not None and sam_seg_result.confidence > 0.3:
+            mask_b64 = _mask_to_overlay_base64(pil_image, sam_seg_result.mask)
+            response["sam_mask_overlay_base64"] = mask_b64
 
         if return_visualization:
             viz = create_result_image(

@@ -287,27 +287,31 @@ def segment_trunk_with_bbox(
             bbox_used=bbox,
             notes=["SAM not available, using depth-based mask within bbox"],
         )
-    
-    # TODO: Uncomment when SAM 2.1 is installed
-    # predictor.set_image(image)
-    # masks, scores, _ = predictor.predict(
-    #     box=np.array([x1, y1, x2, y2]),
-    #     multimask_output=True,
-    # )
-    # best_idx = np.argmax(scores)
-    # best_mask = masks[best_idx]
-    # best_score = float(scores[best_idx])
-    
-    best_mask = _depth_mask_in_bbox(depth_map, x1, y1, x2, y2)
-    best_score = 0.4
-    
-    return SegmentationResult(
-        mask=best_mask,
-        confidence=best_score,
-        method="sam2_bbox",
-        bbox_used=bbox,
-        notes=[f"Bbox prompt ({x1},{y1})-({x2},{y2})"],
-    )
+
+    try:
+        best_mask, best_score = _run_sam_bbox_prompt(image, x1, y1, x2, y2)
+        # Post-process: clip mask to bbox region to remove noise outside
+        clipped_mask = np.zeros_like(best_mask)
+        clipped_mask[y1:y2, x1:x2] = best_mask[y1:y2, x1:x2]
+        return SegmentationResult(
+            mask=clipped_mask,
+            confidence=best_score,
+            method="sam2_bbox",
+            bbox_used=bbox,
+            notes=[f"SAM 2.1 bbox prompt ({x1},{y1})-({x2},{y2})"],
+        )
+    except Exception as e:
+        print(f"[SAM] Bbox inference failed: {e}")
+        import traceback
+        traceback.print_exc()
+        mask = _depth_mask_in_bbox(depth_map, x1, y1, x2, y2)
+        return SegmentationResult(
+            mask=mask,
+            confidence=0.4,
+            method="heuristic",
+            bbox_used=bbox,
+            notes=[f"SAM bbox failed: {e}, using heuristic"],
+        )
 
 
 # ============================================================
@@ -384,6 +388,277 @@ def _run_sam_point_prompt(
     best_score = float(scores[best_idx].cpu())
 
     return best_mask, best_score
+
+
+def _run_sam_bbox_prompt(
+    image: np.ndarray,
+    x1: int, y1: int, x2: int, y2: int,
+) -> Tuple[np.ndarray, float]:
+    """
+    Run SAM 2.1 inference with bounding box prompt.
+    Uses the YOLO-detected bbox to constrain SAM segmentation to the trunk region.
+
+    Supports: (1) SAM2ImagePredictor / Hybrid (set_image + predict with box=)
+              (2) HuggingFace transformers (processor + model)
+    Returns (mask, score).
+    """
+    import torch
+
+    global _sam_model, _sam_predictor
+
+    # SAM2ImagePredictor / Hybrid path
+    if _is_sam2_predictor_style(_sam_model):
+        predictor = _sam_model
+        box = np.array([x1, y1, x2, y2], dtype=np.float32)
+        if image.dtype != np.uint8:
+            image = image.astype(np.uint8)
+        predictor.set_image(image)
+        masks, iou_predictions, _ = predictor.predict(
+            box=box,
+            multimask_output=True,
+            return_logits=False,
+        )
+        iou_arr = iou_predictions[0]
+        iou_arr = iou_arr.cpu().numpy() if hasattr(iou_arr, "cpu") else np.array(iou_arr)
+        best_idx = int(np.argmax(iou_arr))
+        m = masks[0][best_idx]
+        best_mask = (m.cpu().numpy() if hasattr(m, "cpu") else np.array(m)).astype(np.uint8)
+        best_score = float(iou_arr[best_idx])
+        return best_mask, best_score
+
+    # HuggingFace transformers path
+    processor = _sam_predictor
+    model = _sam_model
+    pil_image = Image.fromarray(image) if isinstance(image, np.ndarray) else image
+
+    input_boxes = [[[x1, y1, x2, y2]]]
+
+    inputs = processor(
+        pil_image,
+        input_boxes=input_boxes,
+        return_tensors="pt",
+    )
+
+    with torch.no_grad():
+        outputs = model(**inputs)
+
+    masks = processor.post_process_masks(
+        outputs.pred_masks,
+        inputs["original_sizes"],
+        inputs["reshaped_input_sizes"],
+    )
+
+    scores = outputs.iou_scores[0][0]
+    mask_tensors = masks[0][0]
+
+    best_idx = torch.argmax(scores).item()
+    best_mask = mask_tensors[best_idx].cpu().numpy().astype(np.uint8)
+    best_score = float(scores[best_idx].cpu())
+
+    return best_mask, best_score
+
+
+def segment_trunk_with_yolo_guidance(
+    image: np.ndarray,
+    depth_map: np.ndarray,
+    bbox: Tuple[int, int, int, int],
+    tap_point: Optional[Tuple[int, int]] = None,
+) -> SegmentationResult:
+    """
+    Best-quality segmentation: combines YOLO bbox + optional tap point as SAM prompts.
+
+    Strategy: Use YOLO bbox as box prompt AND bbox center (or tap point) as positive
+    point prompt simultaneously. This gives SAM maximum guidance for trunk-only masks.
+
+    Args:
+        image: RGB image as numpy array (H, W, 3)
+        depth_map: Metric depth map (H, W) in meters
+        bbox: (x1, y1, x2, y2) from YOLO detection
+        tap_point: Optional user tap (x, y) for additional guidance
+
+    Returns:
+        SegmentationResult with precise trunk mask
+    """
+    predictor = _load_sam_model()
+    x1, y1, x2, y2 = bbox
+
+    if predictor is None:
+        mask = _depth_mask_in_bbox(depth_map, x1, y1, x2, y2)
+        return SegmentationResult(
+            mask=mask,
+            confidence=0.4,
+            method="heuristic",
+            bbox_used=bbox,
+            notes=["SAM not available, using depth heuristic with YOLO bbox"],
+        )
+
+    try:
+        best_mask, best_score = _run_sam_combined_prompt(
+            image, x1, y1, x2, y2, tap_point
+        )
+        # Post-process: clip to bbox + morphological cleanup
+        clipped = _postprocess_trunk_mask(best_mask, x1, y1, x2, y2)
+        return SegmentationResult(
+            mask=clipped,
+            confidence=best_score,
+            method="sam2_yolo_guided",
+            bbox_used=bbox,
+            prompt_point=tap_point,
+            notes=[
+                f"SAM 2.1 YOLO-guided: bbox ({x1},{y1})-({x2},{y2})"
+                + (f" + tap ({tap_point[0]},{tap_point[1]})" if tap_point else "")
+            ],
+        )
+    except Exception as e:
+        print(f"[SAM] YOLO-guided inference failed: {e}")
+        import traceback
+        traceback.print_exc()
+        mask = _depth_mask_in_bbox(depth_map, x1, y1, x2, y2)
+        return SegmentationResult(
+            mask=mask,
+            confidence=0.4,
+            method="heuristic",
+            bbox_used=bbox,
+            notes=[f"SAM YOLO-guided failed: {e}, using heuristic"],
+        )
+
+
+def _run_sam_combined_prompt(
+    image: np.ndarray,
+    x1: int, y1: int, x2: int, y2: int,
+    tap_point: Optional[Tuple[int, int]] = None,
+) -> Tuple[np.ndarray, float]:
+    """
+    Run SAM with both bbox AND point prompts for maximum precision.
+    Point = bbox center (or user tap), Box = YOLO bbox.
+    """
+    import torch
+
+    global _sam_model, _sam_predictor
+
+    # Calculate center point if no tap provided
+    if tap_point is not None:
+        px, py = tap_point
+    else:
+        px = (x1 + x2) // 2
+        py = (y1 + y2) // 2
+
+    # SAM2ImagePredictor / Hybrid path
+    if _is_sam2_predictor_style(_sam_model):
+        predictor = _sam_model
+        box = np.array([x1, y1, x2, y2], dtype=np.float32)
+        point_coords = np.array([[px, py]], dtype=np.float32)
+        point_labels = np.array([1], dtype=np.int32)
+
+        if image.dtype != np.uint8:
+            image = image.astype(np.uint8)
+        predictor.set_image(image)
+        masks, iou_predictions, _ = predictor.predict(
+            point_coords=point_coords,
+            point_labels=point_labels,
+            box=box,
+            multimask_output=True,
+            return_logits=False,
+        )
+        iou_arr = iou_predictions[0]
+        iou_arr = iou_arr.cpu().numpy() if hasattr(iou_arr, "cpu") else np.array(iou_arr)
+        best_idx = int(np.argmax(iou_arr))
+        m = masks[0][best_idx]
+        best_mask = (m.cpu().numpy() if hasattr(m, "cpu") else np.array(m)).astype(np.uint8)
+        best_score = float(iou_arr[best_idx])
+        return best_mask, best_score
+
+    # HuggingFace transformers: bbox prompt only (transformers API doesn't easily combine)
+    return _run_sam_bbox_prompt.__wrapped__(image, x1, y1, x2, y2) if hasattr(_run_sam_bbox_prompt, '__wrapped__') else _run_sam_bbox_prompt(image, x1, y1, x2, y2)
+
+
+def _postprocess_trunk_mask(
+    mask: np.ndarray,
+    x1: int, y1: int, x2: int, y2: int,
+) -> np.ndarray:
+    """
+    Post-process SAM mask for trunk measurement:
+    1. Clip to bbox region (remove noise outside YOLO detection)
+    2. Keep only the largest connected component (remove small fragments)
+    3. Light morphological closing to fill small holes
+    """
+    H, W = mask.shape
+    # Clip to bbox
+    clipped = np.zeros_like(mask)
+    bx1, by1 = max(0, x1), max(0, y1)
+    bx2, by2 = min(W, x2), min(H, y2)
+    clipped[by1:by2, bx1:bx2] = mask[by1:by2, bx1:bx2]
+
+    # Keep largest connected component
+    try:
+        from scipy import ndimage
+        labeled, num_features = ndimage.label(clipped)
+        if num_features > 1:
+            sizes = ndimage.sum(clipped, labeled, range(1, num_features + 1))
+            largest_label = np.argmax(sizes) + 1
+            clipped = (labeled == largest_label).astype(np.uint8)
+    except ImportError:
+        pass  # scipy not available, skip connected component filtering
+
+    # Morphological closing (fill small holes in trunk mask)
+    try:
+        from scipy.ndimage import binary_closing
+        struct = np.ones((5, 5))
+        clipped = binary_closing(clipped, structure=struct).astype(np.uint8)
+    except ImportError:
+        pass
+
+    return clipped
+
+
+def compute_trunk_width_from_mask(
+    mask: np.ndarray,
+    bbox: Tuple[int, int, int, int],
+    measurement_row: Optional[int] = None,
+    num_sample_rows: int = 5,
+) -> Tuple[float, int]:
+    """
+    Compute trunk pixel width directly from SAM segmentation mask.
+
+    Much more accurate than depth-gradient edge detection because SAM provides
+    pixel-perfect trunk boundaries trained on millions of images.
+
+    Args:
+        mask: Binary trunk mask (H, W) from SAM
+        bbox: (x1, y1, x2, y2) bounding box
+        measurement_row: Specific row to measure (None = center of bbox)
+        num_sample_rows: Number of rows to sample for robustness
+
+    Returns:
+        (pixel_width, measurement_row) — width is median across sampled rows
+    """
+    x1, y1, x2, y2 = bbox
+    H, W = mask.shape
+
+    if measurement_row is None:
+        measurement_row = (y1 + y2) // 2
+    measurement_row = max(y1, min(y2 - 1, measurement_row))
+
+    # Sample multiple rows around measurement point for robustness
+    half = num_sample_rows // 2
+    widths = []
+    for dr in range(-half, half + 1):
+        r = measurement_row + dr
+        if r < 0 or r >= H:
+            continue
+        row_mask = mask[r, x1:x2]
+        indices = np.where(row_mask > 0)[0]
+        if len(indices) >= 2:
+            # Width = rightmost - leftmost positive pixel
+            w = float(indices[-1] - indices[0] + 1)
+            if w >= 3:  # minimum sensible width
+                widths.append(w)
+
+    if not widths:
+        # Fallback: use full bbox width * 0.7
+        return float(x2 - x1) * 0.7, measurement_row
+
+    return float(np.median(widths)), measurement_row
 
 
 def _find_foreground_center(depth_map: np.ndarray) -> Tuple[int, int]:

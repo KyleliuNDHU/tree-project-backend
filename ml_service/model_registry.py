@@ -139,6 +139,25 @@ DEPTH_MODELS: Dict[str, DepthModelConfig] = {
     #     ),
     # ),
     
+    # ── Metric3D v2 (ICLR 2024) ────────────────────────────────
+    "metric3d_v2": DepthModelConfig(
+        model_id="JUGGHM/Metric3D-v2-ViT-Large",
+        display_name="Metric3D v2 ViT-Large",
+        params_m=300.0,
+        license="Apache-2.0",
+        expected_cpu_time_s=20.0,
+        input_size=616,
+        output_type="metric",
+        backend="metric3d",
+        notes=(
+            "ICLR 2024 SOTA metric depth. Camera-intrinsic-aware. "
+            "Canonical camera transform eliminates need for EXIF calibration. "
+            "Better generalization than Depth Pro on diverse camera types. "
+            "Requires: pip install metric3d  OR manual integration. "
+            "Best on Core Ultra iGPU via OpenVINO (~8s) or CUDA (~1s)."
+        ),
+    ),
+
     # ── Phase 4: Latest SOTA ───────────────────────────────────
     # TODO: Uncomment when MetricAnything is mature enough
     # "metric_anything": DepthModelConfig(
@@ -213,6 +232,38 @@ SEGMENTATION_MODELS: Dict[str, SegmentationModelConfig] = {
         notes="Slightly better than tiny. Use if tiny isn't accurate enough.",
     ),
     
+    # ── HQ-SAM: High Quality SAM ─────────────────────────────
+    "hq_sam_tiny": SegmentationModelConfig(
+        model_id="lkeab/hq-sam",
+        display_name="HQ-SAM (High Quality)",
+        params_m=100.0,
+        license="Apache-2.0",
+        expected_cpu_time_s=5.0,
+        backend="hq_sam",
+        needs_prompt=False,
+        notes=(
+            "NeurIPS 2023. Specialized high-quality token for sharper boundaries. "
+            "Better edge quality than SAM2 for thin structures like tree trunks. "
+            "pip install segment-anything-hq"
+        ),
+    ),
+
+    # ── EfficientViT-SAM: Lightweight ─────────────────────────
+    "efficientvit_sam": SegmentationModelConfig(
+        model_id="mit-han-lab/efficientvit-sam",
+        display_name="EfficientViT-SAM (Lightweight)",
+        params_m=25.0,
+        license="MIT",
+        expected_cpu_time_s=1.5,
+        backend="efficientvit_sam",
+        needs_prompt=False,
+        notes=(
+            "ICCV 2023. 48x faster than SAM with comparable accuracy. "
+            "Ideal for MX130/low-end GPU. Only 25M params. "
+            "pip install efficientvit"
+        ),
+    ),
+
     # ── Phase 3: Grounded SAM ──────────────────────────────────
     # TODO: Uncomment when ready to test
     # "grounded_sam": SegmentationModelConfig(
@@ -258,9 +309,15 @@ ONNX_MODEL_DIR = os.environ.get("ML_ONNX_DIR", "./onnx_models")
 OPENVINO_MODEL_DIR = os.environ.get("ML_OPENVINO_DIR", os.path.join(os.path.dirname(__file__), "openvino_models"))
 
 # 👇 CPU Thread count — set to physical core count for best throughput
-#    i7-3615QM has 4 physical cores. Using all 4 for inference.
-#    (Old setting was 2 because Render free had 1 core)
-CPU_THREADS = int(os.environ.get("ML_CPU_THREADS", "4"))
+#    Core Ultra 5 125H has 14 cores (6P+8E). Use P-cores for inference.
+#    i3-8130U has 2 cores. Set via env var for each machine.
+CPU_THREADS = int(os.environ.get("ML_CPU_THREADS", "6"))
+
+# 👇 OpenVINO device priority — auto-detect Intel Arc iGPU, NPU, or fallback CPU
+#    Core Ultra 5 125H: has Arc iGPU (XMX) + NPU — prefer GPU for best throughput
+#    i3-8130U + MX130: UHD 620 (no XMX) — NVIDIA MX130 not supported by OpenVINO, use CPU
+#    Set ML_OV_DEVICE to override: "GPU", "NPU", "CPU", "GPU.0", "GPU.1"
+OPENVINO_DEVICE = os.environ.get("ML_OV_DEVICE", "AUTO")
 
 # 👇 Input resolution override — lower = faster, slightly less accurate
 #    518 = DA V2 default. 384 = ~45% less computation for ~2% accuracy loss.
@@ -315,12 +372,12 @@ ACCURACY_PRESETS: Dict[str, AccuracyPreset] = {
     ),
     "accurate": AccuracyPreset(
         depth_model="depth_pro",
-        seg_model="sam2_tiny",
+        seg_model="sam2_small",
         input_size=0,
         use_multi_row=True,
         use_subpixel=True,
         use_ellipse_fit=True,
-        description="精確模式 (~10-15s): Depth Pro + SAM 2.1 + 亞像素 + 橢圓擬合",
+        description="精確模式 (~10-15s): Depth Pro + SAM 2.1 Small + 亞像素 + 橢圓擬合",
     ),
 }
 
@@ -593,9 +650,14 @@ class _ModelRegistry:
             from transformers import DepthProImageProcessorFast, AutoImageProcessor
             from openvino import Core
             core = Core()
-            # Prefer GPU over NPU for Depth Pro because NPU vpux-compiler fails on complex ViT shapes
+            # Device selection: use env var override, else auto-detect
+            # Core Ultra 5 125H → Intel Arc iGPU (best), i3-8130U → CPU only
             avail = core.available_devices
-            device = "GPU" if "GPU" in avail else "CPU"
+            if OPENVINO_DEVICE != "AUTO":
+                device = OPENVINO_DEVICE
+            else:
+                device = "GPU" if "GPU" in avail else "CPU"
+            print(f"[ModelRegistry] OpenVINO devices: {avail}, selected: {device}")
             
             if config.backend == "depth_pro":
                 self._depth_processor = DepthProImageProcessorFast.from_pretrained(config.model_id)
@@ -656,7 +718,11 @@ class _ModelRegistry:
         try:
             from openvino import Core
             core = Core()
-            device = "GPU" if "GPU" in core.available_devices else "CPU"
+            avail = core.available_devices
+            if OPENVINO_DEVICE != "AUTO":
+                device = OPENVINO_DEVICE
+            else:
+                device = "GPU" if "GPU" in avail else "CPU"
             enc_path = os.path.join(ov_dir, "ov_image_encoder.xml")
             pred_path = os.path.join(ov_dir, "ov_mask_predictor.xml")
             if not os.path.exists(enc_path):
