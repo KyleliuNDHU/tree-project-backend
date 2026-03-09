@@ -122,6 +122,10 @@ apiRouter.use('/ml-service', mlServiceRoutes); // 掛載 ML Service 代理路由
 apiRouter.use('/admin/import-csv', csvImportRoutes); // [Phase C] 掛載 CSV 匯入路由
 
 
+// --- GitHub Webhook (不需 JWT) ---
+const webhookRoutes = require('./routes/webhook');
+app.use('/webhook', webhookRoutes);
+
 // 將所有 API 路由應用速率限制並掛載到 /api
 app.use('/api', apiLimiter, jwtAuth, apiRouter);
 
