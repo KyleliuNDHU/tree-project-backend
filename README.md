@@ -4,13 +4,53 @@
 [![Express](https://img.shields.io/badge/Express-4.x-lightgrey.svg)](https://expressjs.com/)
 [![PostgreSQL](https://img.shields.io/badge/PostgreSQL-14+-blue.svg)](https://www.postgresql.org/)
 [![License](https://img.shields.io/badge/License-ISC-yellow.svg)](LICENSE)
-[![Version](https://img.shields.io/badge/Version-18.3.2-green.svg)](https://github.com/KyleliuNDHU/tree-project-backend)
+[![Version](https://img.shields.io/badge/Version-18.5.0-green.svg)](https://github.com/KyleliuNDHU/tree-project-backend)
 
 > 基於大語言模型的永續發展分析平台 - 後端 API 服務
 
 ---
 
 ## 📦 版本紀錄
+
+### v18.5.0 (2026-03-10) - Self-Hosted Deployment & Auto-Deploy 🏠
+
+#### 🏠 自架伺服器部署
+- **完整自架部署系統** - 從 Render 遷移至雙機自架架構
+  - Ubuntu (i3-8130U) 運行 Node.js Backend + PostgreSQL
+  - Windows (Core Ultra 5) 運行 ML Service (Depth Pro + SAM 2.1)
+  - Tailscale VPN 連接雙機，無需公網暴露
+  - PM2 cluster mode (2 instances) + systemd auto-start
+  - Nginx reverse proxy with self-signed TLS
+
+#### 🔄 自動部署與回滾機制
+- **GitHub Webhook 自動部署** - 取代 Render 的 git-push 部署
+  - `POST /webhook/deploy` — HMAC-SHA256 簽名驗證
+  - 自動 `git pull` → `npm install` → `migrate` → `pm2 reload`
+  - Health check 驗證：部署失敗自動 rollback
+  - 部署日誌記錄在 `/opt/tree-app/logs/deploy.log`
+- **Rollback 腳本** — 快速回到任意歷史版本
+  - `scripts/rollback.sh` — 回到上次成功的 commit
+  - `scripts/rollback.sh <commit>` — 回到指定 commit
+  - `scripts/rollback.sh --list` — 列出最近 10 個 commit
+
+#### 🛠 維運腳本 (scripts/)
+- `deploy.sh` — 自動部署 (支援 `--skip-migrate`, `--dry-run`)
+- `rollback.sh` — 回滾到指定 commit
+- `backup_db.sh` — PostgreSQL 自動備份 (cron 每天 3:00)
+- `health_check.sh` — 健康檢查 (cron 每 5 分鐘)
+
+#### 📋 變更清單
+| 類型 | 檔案 | 說明 |
+|------|------|------|
+| feat | `routes/webhook.js` | GitHub Webhook 自動部署路由 |
+| feat | `scripts/deploy.sh` | 自動部署腳本 (含 rollback) |
+| feat | `scripts/rollback.sh` | 手動回滾腳本 |
+| feat | `scripts/backup_db.sh` | 資料庫備份腳本 |
+| feat | `scripts/health_check.sh` | 健康檢查腳本 |
+| feat | `ecosystem.config.js` | PM2 cluster 設定檔 |
+| chore | `app.js` | 掛載 webhook 路由 (JWT 之外) |
+
+---
 
 ### v18.4.0 (2026-02-22) - ML Precision Upgrade & Backend Stabilization 🚀
 
@@ -471,7 +511,7 @@ RENDER_EXTERNAL_URL=https://xxx.onrender.com  # 部署時自動設定
 
 ### 基礎資訊
 
-- **生產環境 Base URL**: `https://tree-app-backend-prod.onrender.com/api`
+- **自架伺服器 Base URL**: `https://100.118.203.75/api`
 - **本地開發 Base URL**: `http://localhost:3000/api`
 - **認證方式**: 部分 API 需要登入後取得的 user_id
 - **Content-Type**: `application/json`
@@ -714,23 +754,73 @@ npm test
 
 ## 🚢 部署
 
-### Render.com 部署（目前使用）
+### 自架伺服器部署（目前使用）
 
-1. 連結 GitHub Repository
-2. 設定環境變數
-3. Build Command: `npm install`
-4. Start Command: `npm start`
+系統已從 Render 完全遷移至自架雙機架構：
 
-### 部署注意事項
+```
+Windows (Core Ultra 5)  →  ML Service (Depth Pro + SAM 2.1)
+     ↕ Tailscale VPN
+Ubuntu (i3-8130U)       →  Node.js Backend + PostgreSQL + Nginx
+```
 
-- 免費方案會在閒置時休眠
-- 第一次請求可能較慢（冷啟動）
-- 建議設定健康檢查端點: `/health`
+#### 自動部署（推送 GitHub 即部署）
+
+1. 在 GitHub repo → Settings → Webhooks → Add webhook
+2. Payload URL: `https://<server-ip>/webhook/deploy`
+3. Content type: `application/json`
+4. Secret: 與 `.env` 中的 `DEPLOY_WEBHOOK_SECRET` 一致
+5. Events: Just the push event
+
+之後每次 `git push origin main`，伺服器將自動：
+- `git pull` → `npm install` → `migrate.js` → `pm2 reload`
+- Health check 失敗自動 rollback
+
+#### 手動部署與回滾
+
+```bash
+# SSH 連線
+ssh kyleliu@100.118.203.75
+
+# 手動部署
+/opt/tree-app/scripts/deploy.sh
+/opt/tree-app/scripts/deploy.sh --skip-migrate  # 跳過 migration
+/opt/tree-app/scripts/deploy.sh --dry-run       # 只拉取不重啟
+
+# 回滾
+/opt/tree-app/scripts/rollback.sh               # 回到上次成功的 commit
+/opt/tree-app/scripts/rollback.sh --list         # 列出最近 10 個 commit
+/opt/tree-app/scripts/rollback.sh <commit_hash>  # 回到指定 commit
+
+# PM2 管理
+pm2 status                    # 查看服務狀態
+pm2 logs tree-backend         # 查看日誌
+pm2 restart tree-backend      # 重啟服務
+pm2 reload tree-backend       # 零停機重載
+
+# 資料庫備份 (每天 3:00 自動執行)
+/opt/tree-app/scripts/backup_db.sh
+```
+
+#### 部署環境
+
+| 項目 | 值 |
+|------|----|
+| Node.js | v20.20.1 |
+| PostgreSQL | 16.13 |
+| PM2 | 6.0.14 (cluster ×2) |
+| Nginx | 1.24.0 (reverse proxy + TLS) |
+| OS | Ubuntu 24.04 LTS |
+| Tailscale IP | 100.118.203.75 |
+
+### Render.com 部署（已棄用）
+
+> ⚠️ 自 v18.5.0 起不再使用 Render。保留 `render.yaml` 僅供參考。
 
 ### Docker 部署（可選）
 
 ```dockerfile
-FROM node:18-alpine
+FROM node:20-alpine
 WORKDIR /app
 COPY package*.json ./
 RUN npm ci --only=production
