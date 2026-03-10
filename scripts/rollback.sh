@@ -24,6 +24,21 @@ log() {
 
 cd "$BACKEND_DIR"
 
+# --help
+if [ "${1:-}" = "-h" ] || [ "${1:-}" = "--help" ]; then
+    echo "Usage: $0 [commit_hash] [--list] [--help]"
+    echo ""
+    echo "Options:"
+    echo "  (no args)    Roll back to last known good commit"
+    echo "  <commit>     Roll back to specified commit hash"
+    echo "  --list       Show recent 10 commits and last good commit"
+    echo "  -h, --help   Show this help"
+    echo ""
+    echo "Note: This only rolls back code + services, NOT database."
+    echo "      For DB rollback, use backups in /opt/tree-app/backups/"
+    exit 0
+fi
+
 # --list: show recent commits
 if [ "${1:-}" = "--list" ]; then
     echo "=== Recent 10 commits ==="

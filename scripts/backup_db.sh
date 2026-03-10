@@ -16,7 +16,29 @@ mkdir -p "$BACKUP_DIR"
 
 DUMP_FILE="$BACKUP_DIR/tree_survey_$TIMESTAMP.dump"
 
-PGPASSWORD='TreeSurvey2026!Secure' pg_dump \
+# Help
+if [ "${1:-}" = "-h" ] || [ "${1:-}" = "--help" ]; then
+    echo "Usage: $0"
+    echo ""
+    echo "PostgreSQL backup for tree_survey database."
+    echo "Backups are saved to: $BACKUP_DIR"
+    echo "Retention: $RETAIN_DAYS days"
+    echo ""
+    echo "Crontab: 0 3 * * * $0"
+    exit 0
+fi
+
+# Load DB password from .env
+ENV_FILE="/opt/tree-app/backend/.env"
+if [ -f "$ENV_FILE" ]; then
+    DB_PASS=$(grep -oP 'postgresql://[^:]+:\K[^@]+' "$ENV_FILE" 2>/dev/null || echo "")
+fi
+if [ -z "${DB_PASS:-}" ]; then
+    echo "ERROR: Cannot extract DB password from $ENV_FILE"
+    exit 1
+fi
+
+PGPASSWORD="$DB_PASS" pg_dump \
     -U tree_app -h 127.0.0.1 tree_survey \
     --format=custom --no-owner --no-privileges \
     -f "$DUMP_FILE"

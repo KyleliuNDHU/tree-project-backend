@@ -1,560 +1,206 @@
-# 🌳 TreeAI Backend - 智慧樹木管理系統後端
+﻿# TreeAI Backend
 
-[![Node.js](https://img.shields.io/badge/Node.js-18+-green.svg)](https://nodejs.org/)
+[![Node.js](https://img.shields.io/badge/Node.js-20+-green.svg)](https://nodejs.org/)
 [![Express](https://img.shields.io/badge/Express-4.x-lightgrey.svg)](https://expressjs.com/)
-[![PostgreSQL](https://img.shields.io/badge/PostgreSQL-14+-blue.svg)](https://www.postgresql.org/)
+[![PostgreSQL](https://img.shields.io/badge/PostgreSQL-16+-blue.svg)](https://www.postgresql.org/)
 [![License](https://img.shields.io/badge/License-ISC-yellow.svg)](LICENSE)
-[![Version](https://img.shields.io/badge/Version-18.5.0-green.svg)](https://github.com/KyleliuNDHU/tree-project-backend)
 
-> 基於大語言模型的永續發展分析平台 - 後端 API 服務
-
----
-
-## 📦 版本紀錄
-
-### v18.5.0 (2026-03-10) - Self-Hosted Deployment & Auto-Deploy 🏠
-
-#### 🏠 自架伺服器部署
-- **完整自架部署系統** - 從 Render 遷移至雙機自架架構
-  - Ubuntu (i3-8130U) 運行 Node.js Backend + PostgreSQL
-  - Windows (Core Ultra 5) 運行 ML Service (Depth Pro + SAM 2.1)
-  - Tailscale VPN 連接雙機，無需公網暴露
-  - PM2 cluster mode (2 instances) + systemd auto-start
-  - Nginx reverse proxy with self-signed TLS
-
-#### 🔄 自動部署與回滾機制
-- **GitHub Webhook 自動部署** - 取代 Render 的 git-push 部署
-  - `POST /webhook/deploy` — HMAC-SHA256 簽名驗證
-  - 自動 `git pull` → `npm install` → `migrate` → `pm2 reload`
-  - Health check 驗證：部署失敗自動 rollback
-  - 部署日誌記錄在 `/opt/tree-app/logs/deploy.log`
-- **Rollback 腳本** — 快速回到任意歷史版本
-  - `scripts/rollback.sh` — 回到上次成功的 commit
-  - `scripts/rollback.sh <commit>` — 回到指定 commit
-  - `scripts/rollback.sh --list` — 列出最近 10 個 commit
-
-#### 🛠 維運腳本 (scripts/)
-- `deploy.sh` — 自動部署 (支援 `--skip-migrate`, `--dry-run`)
-- `rollback.sh` — 回滾到指定 commit
-- `backup_db.sh` — PostgreSQL 自動備份 (cron 每天 3:00)
-- `health_check.sh` — 健康檢查 (cron 每 5 分鐘)
-
-#### 📋 變更清單
-| 類型 | 檔案 | 說明 |
-|------|------|------|
-| feat | `routes/webhook.js` | GitHub Webhook 自動部署路由 |
-| feat | `scripts/deploy.sh` | 自動部署腳本 (含 rollback) |
-| feat | `scripts/rollback.sh` | 手動回滾腳本 |
-| feat | `scripts/backup_db.sh` | 資料庫備份腳本 |
-| feat | `scripts/health_check.sh` | 健康檢查腳本 |
-| feat | `ecosystem.config.js` | PM2 cluster 設定檔 |
-| chore | `app.js` | 掛載 webhook 路由 (JWT 之外) |
+智慧樹木管理系統後端  為臺灣港務公司 (TIPC) 設計的 AI 驅動樹木調查平台。
 
 ---
 
-### v18.4.0 (2026-02-22) - ML Precision Upgrade & Backend Stabilization 🚀
+## 目錄
 
-#### 🚀 ML 模型升級與整合
-- **Depth Pro 與 OpenVINO 整合** - 引入 SOTA 深度預測模型
-  - 支援 EXIF 焦距提取與亞像素(subpixel)精度計算
-  - 多鏡頭(multi-shot)融合提升測量穩定度
-  - 新增 `setup_models.py` 自動下載與轉換 OpenVINO 模型
-
-#### 🔧 後端穩定性提升
-- **輸入驗證與錯誤處理** - 全面強化資料處理的強健性
-  - 增強輸入驗證與錯誤清理 (Error Sanitization)
-  - 引入 NumPy 向量化運算提升處理效能
-  - 修正資料表初始化的順序問題 (Table Init Sequencing)
-- **API 與欄位擴充**
-  - `PATCH /api/pending-measurements/:id` 新增 `project_area`, `project_code`, `project_name` 支援
-  - `pending_tree_measurements` 新增 `measurement_type` 與 `has_gps` 欄位
-
-#### 🛠️ 開發與部署工具
-- **ngrok 與啟動腳本**
-  - 支援 ngrok header bypass (跳過 ngrok 警告頁面)
-  - 新增 `start.ps1` 啟動腳本與掃描器工具
+- [功能](#功能)
+- [架構](#架構)
+- [快速開始](#快速開始)
+- [環境變數](#環境變數)
+- [API 文件](#api-文件)
+- [部署](#部署)
+- [維運指令](#維運指令)
+- [資料庫](#資料庫)
+- [測試](#測試)
+- [版本紀錄](#版本紀錄)
 
 ---
 
-### v18.3.2 (2025-12-14) - 清理 API 使用改進與前端整合優化 🔄
-
-#### 🔄 API 使用改進
-- **清理 API 前端整合優化** - 前端更好地利用後端清理 API
-  - 前端 V2/V3 頁面新增專案區位/專案名稱/樹種時，退出未提交會自動清理
-  - 使用 `POST /api/project_areas/cleanup` 清理未使用的專案區位和樹種
-  - 使用 `DELETE /api/project_areas/:id` 直接刪除專案區位
-  - 使用 `DELETE /api/projects/:code` 直接刪除專案
-- **清理機制說明**：
-  - 清理 API 會自動清理未使用的專案區位（沒有任何樹木使用的）
-  - 清理 API 會自動清理未使用的樹種（沒有任何樹木使用的，保留 ID='0000'）
-  - 清理 API 會清理孤立的佔位記錄
-  - 清理 API 會清理舊的聊天記錄
-
-#### 📋 相關 API 端點
-| 方法 | 端點 | 說明 | 狀態 |
-|------|------|------|------|
-| POST | `/api/project_areas/cleanup` | 手動觸發清理（專案區位、樹種、佔位記錄、聊天記錄） | 🟢 |
-| DELETE | `/api/project_areas/:id` | 刪除專案區位 | 🟢 |
-| DELETE | `/api/projects/:code` | 刪除專案 | 🟢 |
-
----
-
-### v18.3.0 (2025-12-14) - Phase 4 安全性完成與完整回歸測試 🔒✅
-
-#### 🔒 安全性增強 (Phase 4)
-- **專案權限控管 (Phase 4.2)** - 新增 `projectAuth` 中間件
-  - 限制非專案成員無法編輯專案內樹木資料
-  - 系統管理員/業務管理員擁有全部專案權限
-  - 一般使用者僅能編輯自己有權限的專案
-  - 支援專案成員管理（`project_members` 表）
-- **登入失敗監控 (Phase 4.4)** - 防止暴力破解
-  - 5 次登入失敗後鎖定帳號 30 分鐘
-  - 記錄登入嘗試日誌 (`login_attempts` 表)
-  - 支援管理員解鎖功能
-- **審計日誌系統** - 完整操作記錄
-  - 記錄所有資料修改操作 (`audit_logs` 表)
-  - 包含使用者、時間、操作類型、IP 等資訊
-  - 支援查詢與匯出審計記錄
-
-#### 🆕 功能新增
-- **樹種管理 API (Phase 3.3)** - 新增樹種 API
-  - `POST /api/tree_species` - 新增樹種
-  - 支援自動對應現有樹種或建立新樹種
-  - 與前端樹種辨識功能整合
-- **樹木影像 API** - 完整影像管理
-  - `POST /api/tree_images` - 上傳影像
-  - `GET /api/tree_images/:tree_id` - 查詢樹木影像
-  - `DELETE /api/tree_images/:id` - 刪除影像
-  - 支援影像 metadata 儲存與關聯
-
-#### 🔧 修復與優化
-- **V2 API 路由修復** - 修復 V2 新增樹木 API 404 問題
-  - 確保 `POST /api/tree_survey/v2` 正常運作
-  - 維持向後兼容性
-- **JWT 認證強化** - 改進 JWT 驗證邏輯
-  - 支援 50 天 Legacy 過渡期
-  - 改進錯誤處理與回應訊息
-
-#### 🧪 測試與品質
-- **完整回歸測試套件** - 32+ 項自動化測試
-  - 覆蓋所有核心 API 功能
-  - 包含權限控管測試
-  - 可取代大部分手動測試需求
-  - 測試檔案：`tests/regression.test.js`
-
-#### 📋 變更清單
-| 類型 | 檔案 | 說明 |
-|------|------|------|
-| feat | `middleware/projectAuth.js` | 新增專案權限控管中間件 |
-| feat | `middleware/loginAttemptMonitor.js` | 登入失敗監控 |
-| feat | `services/auditLogService.js` | 審計日誌服務 |
-| feat | `routes/treeSpecies.js` | 新增樹種 API |
-| feat | `routes/tree_images.js` | 樹木影像 API |
-| feat | `tests/regression.test.js` | 完整回歸測試套件 |
-| fix | `routes/treeSurvey.js` | 修復 V2 API 路由 |
-| fix | `controllers/treeSurveyCreateController.js` | 整合專案權限檢查 |
-| fix | `controllers/treeSurveyUpdateController.js` | 整合專案權限檢查 |
-
-#### 🗃️ 資料庫變更
-```sql
--- 新增表格
-project_members         -- 專案成員關聯表
-login_attempts          -- 登入嘗試記錄
-audit_logs              -- 審計日誌
-tree_images             -- 樹木影像資料表
-
--- 系統設定擴充
-system_settings         -- 新增 JWT Legacy 過渡期設定
-```
-
----
-
-### v18.0.0 (2025-12-03) - ID 修復與 ML 訓練數據收集 🔧🤖
-
-#### 🔧 修復
-- **專案 ID 生成問題** - 修復新專案第一筆樹木 ID 從 PT-2 開始的問題
-  - 佔位記錄改用 `PT-0` 取代原本的 `PT-1`
-  - 確保第一筆實際資料 ID 為 `PT-1`
-  - 新增 `is_placeholder` 欄位標記佔位記錄
-  - 更新所有 ID 查詢邏輯排除佔位記錄
-
-#### 🆕 新增功能
-- **ML 訓練數據收集 API** - 收集前端使用者修正數據用於模型改善
-  - `POST /api/ml-training/batch` - 批次上傳訓練數據
-  - `GET /api/ml-training/statistics` - 獲取統計資訊
-  - `GET /api/ml-training/export` - 導出訓練數據
-  - `GET /api/ml-training/analysis` - 修正模式分析報告
-  - 支援 6 種記錄類型：AR測量、樹種辨識、碳儲量、座標、樹高、冠幅
-
-#### 📋 變更清單
-| 類型 | 檔案 | 說明 |
-|------|------|------|
-| fix | `controllers/treeSurveyCreateController.js` | 排除 PT-0 佔位記錄 |
-| fix | `controllers/treeSurveyBatchController.js` | 排除 PLACEHOLDER-* 格式 |
-| fix | `routes/treeSurvey.js` | next_system_number/next_project_number 排除佔位 |
-| fix | `routes/projects.js` | 新專案佔位記錄使用 PT-0 |
-| feat | `routes/ml_training_data.js` | 新增 ML 訓練數據 API |
-| feat | `database/initial_data/ml_training_data.pg.sql` | ML 數據表格 schema |
-| feat | `scripts/migrate_placeholder_fix.js` | 舊資料庫遷移腳本 |
-
-#### 🗃️ 資料庫變更
-```sql
--- 新增表格
-ml_training_batches     -- ML 訓練數據批次
-ml_training_records     -- ML 訓練數據記錄
-ml_training_images      -- ML 訓練關聯圖片
-
--- tree_survey 表新增欄位
-is_placeholder BOOLEAN  -- 標記佔位記錄
-```
-
----
-
-### v16.0.1 (2025-12-02) - 錯誤修復 🔧
-
-#### 🔧 修復
-- **OpenAI API 兼容性** - 新增 `getTokenLimitParams()` helper 函數
-  - 支援 o1/o3 系列模型使用 `max_completion_tokens` 參數
-  - 舊版模型 (gpt-4, gpt-4-turbo 等) 仍使用 `max_tokens`（向後兼容）
-- **圖片上傳錯誤處理** - 改進 multer fileFilter 錯誤回應格式
-  - 現在正確返回 JSON 格式錯誤訊息
-  - 支援檔案過大、非圖片等錯誤類型
-
-#### 📋 變更清單
-| 類型 | 檔案 | 說明 |
-|------|------|------|
-| fix | `routes/ai.js` | 新增 helper 函數，修復 OpenAI API 參數兼容性 |
-| fix | `controllers/openaiController.js` | 新增 helper 函數 |
-| fix | `controllers/aiReportController.js` | 新增 helper 函數 |
-| fix | `routes/speciesIdentification.js` | 改進 multer 錯誤處理 |
-
----
-
-### v15.0.0 (2025-12-02) - 重大更新 🎉
-
-#### 🌿 新增功能
-- **樹種辨識 API** - 整合 Pl@ntNet + GBIF + iNaturalist 三合一
-  - `POST /api/species/identify` - 圖片辨識樹種
-  - `GET /api/species/search` - 學名搜尋
-  - `GET /api/species/:id/info` - 取得物種詳情
-  - 自動標記臺灣原生種
-- **Text-to-SQL 優化** - 改進查詢準確度
-
-#### 📋 新增檔案
-| 類型 | 檔案 | 說明 |
-|------|------|------|
-| service | `services/speciesIdentificationService.js` | 樹種辨識服務 |
-| route | `routes/speciesIdentification.js` | 樹種辨識 API 路由 |
-
-#### ⚠️ 環境變數
-需在 Render 添加：
-```
-PLANTNET_API_KEY=your_plantnet_api_key
-```
-
----
-
-## 📋 目錄
-
-- [專案簡介](#-專案簡介)
-- [功能特色](#-功能特色)
-- [功能狀態總覽](#-功能狀態總覽)
-- [系統架構](#-系統架構)
-- [快速開始](#-快速開始)
-- [環境變數設定](#-環境變數設定)
-- [API 文件](#-api-文件)
-- [資料庫結構](#-資料庫結構)
-- [測試](#-測試)
-- [部署](#-部署)
-- [開發指南](#-開發指南)
-- [常見問題](#-常見問題)
-- [貢獻指南](#-貢獻指南)
-
----
-
-## 📖 專案簡介
-
-TreeAI 是一個智慧樹木管理系統，專為臺灣港務公司 (TIPC) 設計，用於：
-
-- 🌲 **樹木調查管理** - 記錄、追蹤樹木資料
-- 🤖 **AI 智慧助手** - 自然語言查詢資料庫 (Text-to-SQL)
-- 📊 **碳匯計算** - 計算樹木碳儲存量
-- 📈 **統計分析** - 生成報表與視覺化圖表
-- 📱 **QR Code 掃描** - 快速查詢樹木資訊
-
----
-
-## ✨ 功能特色
-
-### 核心功能
+## 功能
 
 | 功能 | 說明 |
 |------|------|
-| **Text-to-SQL** | 使用自然語言查詢資料庫，AI 自動生成 SQL |
-| **樹種辨識** | Pl@ntNet + GBIF + iNaturalist 三合一 API ⭐ NEW |
-| **多 AI 模型支援** | 支援 Gemini、OpenAI、DeepSeek、Qwen 等多種模型 |
-| **安全 SQL 驗證** | 185 個測試確保 SQL 注入防護 |
-| **Excel 匯出** | 查詢結果超過 5 筆自動匯出為 Excel 下載連結 |
+| **樹木調查 CRUD** | 完整的樹木資料管理，支援 Excel/CSV 批次匯入 |
+| **Text-to-SQL AI** | 自然語言查詢資料庫，AI 自動生成 SQL |
+| **樹種辨識** | Pl@ntNet + GBIF + iNaturalist 三合一 API |
 | **碳匯計算** | 根據樹種、胸徑計算碳儲存量 |
+| **報表匯出** | Excel、PDF 報表生成與下載 |
+| **AR/ML 測量** | DBH 測量數據收集、ML 訓練數據管理 |
+| **專案邊界** | PostGIS 多邊形邊界管理 |
+| **安全性** | JWT 認證、RBAC 權限、SQL 注入防護、審計日誌 |
+| **自動部署** | GitHub Webhook  自動部署 + 失敗自動回滾 |
 
-### 技術亮點
+### 支援的 AI 模型
 
-- 🔒 **安全性** - Helmet、CORS、Rate Limiting、SQL 注入防護
-- ⚡ **效能優化** - 連接池、精簡 API（地圖 API 減少 70% 傳輸量）、OOM 防護
-- 🧪 **測試完善** - 單元測試、整合測試、安全審計測試
-- 📝 **自動遷移** - 生產環境啟動時自動執行資料庫遷移
-
----
-
-## 📊 功能狀態總覽
-
-> ⚠️ **重要：此表格顯示各功能模組的實際開發狀態**
-
-### 🟢 已上線且穩定運作
-
-| 功能模組 | 路由檔案 | 說明 |
-|----------|----------|------|
-| **使用者認證** | `routes/users.js` | 登入、註冊、使用者管理 |
-| **樹木調查 CRUD** | `routes/treeSurvey.js` | 完整 CRUD、Excel 匯入、批次操作 |
-| **地圖精簡 API** | `routes/treeSurvey.js` | `/tree_survey/map` 精簡版（效能優化） |
-| **Chat V2 (Text-to-SQL)** | `routes/ai.js` | 主要聊天 API `/chat`，自然語言查資料庫 |
-| **統計分析** | `routes/statistics.js` | 樹種、專案、區域統計 |
-| **報表匯出** | `routes/reports.js` | Excel、PDF 匯出 |
-| **專案區域管理** | `routes/project_areas.js` | 區域 CRUD |
-| **樹種資料** | `routes/treeSpecies.js` | 樹種查詢、新增樹種 |
-| **樹種辨識** | `routes/speciesIdentification.js` | Pl@ntNet API 圖片辨識 |
-| **ML 訓練數據** | `routes/ml_training_data.js` | ML 數據收集 API |
-| **樹木影像** | `routes/tree_images.js` | 影像上傳、查詢、刪除 ⭐ NEW |
-| **V3 測量任務** | `routes/pending_measurements.js` | VLGEO2 測量任務管理 ⭐ NEW |
-| **專案邊界** | `routes/project_boundaries.js` | PostGIS 多邊形邊界管理 ⭐ NEW |
-| **管理後台** | `routes/admin.js` | API Key 管理、腳本執行 |
-
-### 🟡 已開發但使用較少
-
-| 功能模組 | 路由檔案 | 說明 |
-|----------|----------|------|
-| **舊版 RAG 聊天** | `routes/ai.js` | `/chat_old_rag_version` - 已被 Text-to-SQL 取代，保留供參考 |
-| **碳足跡計算器** | `routes/carbon.js` | 碳排放計算、樹木抵消建議 |
-| **樹木管理建議** | `routes/management.js` | AI 生成管理建議 |
-| **知識庫 API** | `routes/knowledge.js` | 知識 CRUD（RAG 架構停用後較少使用） |
-| **位置服務** | `routes/location.js` | 地理編碼服務 |
-| **碳匯數據** | `routes/carbon_data.js` | 樹種碳吸收數據 |
-
-### 🔴 測試用/已停用
-
-| 功能模組 | 路由檔案 | 說明 |
-|----------|----------|------|
-| **測試路由** | `routes/test.js` | 開發測試用，生產環境已註解 |
-
-### 📜 腳本狀態
-
-| 腳本 | 狀態 | 說明 |
-|------|------|------|
-| `migrate.js` | 🟢 使用中 | 資料庫遷移（生產環境自動執行） |
-| `migrate_placeholder_fix.js` | 🟡 可用 | 修復佔位記錄 ID 問題（舊資料庫專用） |
-| `populateSpeciesRegionScore.js` | 🟡 可用 | 填充樹種區域分數（Admin 面板可觸發） |
-| `generate_species_knowledge.js` | 🟡 可用 | AI 生成樹種知識（Admin 面板可觸發，耗時長） |
-| `enrich_species_synonyms.js` | 🟡 可用 | AI 擴充樹種同義詞（Admin 面板可觸發） |
-| `populate_knowledge_from_survey.js` | ⚠️ 較少用 | RAG 知識填充（Text-to-SQL 取代後較少需要） |
-| `generateEmbeddings.js` | ⚠️ 較少用 | 生成向量嵌入（RAG 架構） |
-| `populate_knowledge.js` | ⚠️ 較少用 | 填充知識庫 |
+- `deepseek-ai/DeepSeek-V3`（預設，透過 SiliconFlow）
+- `Qwen/Qwen3-VL-32B-Instruct`（透過 SiliconFlow）
+- `gpt-4.1-nano`、`gpt-4.1-mini`（OpenAI）
+- `gemini-2.5-flash`（Google）
 
 ---
 
-## 🏗 系統架構
+## 架構
+
+```
+雙機架構（透過 Tailscale VPN 連接）
+
+Windows (Core Ultra 5 125H)     ML Service (Depth Pro + SAM 2.1 Small)
+      Tailscale VPN
+Ubuntu  (i3-8130U + MX130)      Node.js Backend + PostgreSQL + Nginx
+```
+
+### 目錄結構
 
 ```
 backend/
-├── app.js                      # 🚀 主程式入口
-├── package.json                # 📦 依賴管理
-│
-├── config/                     # ⚙️ 設定檔
-│   ├── db.js                   # PostgreSQL 連接池
-│   ├── database.js             # 資料庫設定
-│   └── apiKeys.js              # API 金鑰管理
-│
-├── routes/                     # 🛣️ API 路由
-│   ├── ai.js                   # AI 聊天 API ⭐
-│   ├── treeSurvey.js           # 樹木調查 CRUD
-│   ├── users.js                # 使用者認證
-│   ├── statistics.js           # 統計資料
-│   ├── reports.js              # 報表匯出
-│   ├── carbon.js               # 碳匯計算
-│   ├── admin.js                # 管理功能
-│   └── ...                     # 其他路由
-│
-├── services/                   # 🔧 業務邏輯服務
-│   ├── sqlQueryService.js      # Text-to-SQL 核心 ⭐
-│   ├── geminiService.js        # Gemini API 封裝
-│   └── openaiService.js        # OpenAI API 封裝
-│
-├── middleware/                 # 🛡️ 中介軟體
-│   ├── adminAuth.js            # 管理員驗證
-│   └── rateLimiter.js          # 請求限流
-│
-├── scripts/                    # 📜 工具腳本
-│   └── migrate.js              # 資料庫遷移
-│
-├── tests/                      # 🧪 測試檔案
-│   ├── intentClassification.test.js
-│   ├── sqlValidation.test.js
-│   ├── securityAudit.test.js
-│   └── ...
-│
-├── data/                       # 📂 靜態資料
-│   ├── tree_species.json       # 樹種資料
-│   └── twCounty2010.fixed.geo.json # 台灣縣市 GeoJSON
-│
-└── utils/                      # 🔨 工具函數
-    └── cleanup.js              # 清理函數
+ app.js                    # Express 入口
+ ecosystem.config.js       # PM2 cluster 設定
+ config/
+    db.js                 # PostgreSQL 連接池
+    database.js           # 資料庫設定
+ routes/                   # API 路由
+    ai.js                 # AI 聊天 (Text-to-SQL)
+    treeSurvey.js         # 樹木調查 CRUD
+    users.js              # 使用者認證
+    statistics.js         # 統計
+    reports.js            # 報表匯出
+    speciesIdentification.js # 樹種辨識
+    webhook.js            # GitHub 自動部署
+    ...
+ services/                 # 業務邏輯
+    sqlQueryService.js    # Text-to-SQL 核心
+    geminiService.js      # Gemini API
+    openaiService.js      # OpenAI API
+ middleware/               # 中介軟體
+    adminAuth.js          # 管理員驗證
+    projectAuth.js        # 專案權限
+    rateLimiter.js        # 請求限流
+ scripts/                  # 維運腳本
+    deploy.sh             # 自動部署
+    rollback.sh           # 回滾
+    backup_db.sh          # 資料庫備份
+    health_check.sh       # 健康檢查
+    migrate.js            # 資料庫遷移
+ tests/                    # 測試（185+ 測試案例）
+ ml_service/               # ML 推論服務 (FastAPI)
 ```
 
 ---
 
-## 🚀 快速開始
+## 快速開始
 
 ### 前置需求
 
-- **Node.js** 18.0.0 以上
-- **PostgreSQL** 14 以上
-- **npm** 或 **yarn**
+- Node.js 20+
+- PostgreSQL 16+
+- npm
 
-### 安裝步驟
+### 安裝
 
 ```bash
-# 1. 複製專案
 git clone https://github.com/KyleliuNDHU/tree-project-backend.git
 cd tree-project-backend
-
-# 2. 安裝依賴
 npm install
-
-# 3. 機器學習模型設定 (ML Service)
-# 因為模型檔案較大，我們不會將它們放進 Git 版本控制中。
-# 請執行以下腳本來自動下載並轉換模型：
-cd ml_service
-pip install -r requirements.txt
-python setup_models.py
-cd ..
-
-# 4. 設定環境變數
-cp .env.example .env
-# 編輯 .env 檔案，填入必要的設定值
-
-# 5. 啟動開發伺服器
-npm run dev
-
-# 伺服器會在 http://localhost:3000 啟動
+cp .env.example .env   # 編輯 .env 填入設定值
+npm run dev             # 開發模式 http://localhost:3000
 ```
 
 ### 常用指令
 
 ```bash
-npm run dev          # 開發模式（自動重啟）
-npm start            # 生產模式
-npm test             # 執行測試
-npm run test:intent  # 只測試意圖分類
-npm run test:sql     # 只測試 SQL 驗證
+npm run dev           # 開發模式（nodemon 自動重啟）
+npm start             # 生產模式
+npm test              # 執行所有測試
+npm run test:intent   # 意圖分類測試
+npm run test:sql      # SQL 驗證測試
 ```
 
 ---
 
-## 🔐 環境變數設定
+## 環境變數
 
-在專案根目錄建立 `.env` 檔案：
+在專案根目錄建立 `.env`：
 
 ```env
-# === 資料庫設定 ===
-DATABASE_URL=postgresql://username:password@host:5432/database_name
+# 資料庫
+DATABASE_URL=postgresql://tree_app:<password>@127.0.0.1:5432/tree_survey
 
-# === AI API 金鑰（至少需要一個）===
-OPENAI_API_KEY=your_openai_api_key        # 必要：用於 SQL 生成
-GEMINI_API_KEY=your_gemini_api_key        # 可選：用於聊天回應
-SiliconFlow_API_KEY=your_siliconflow_key  # 可選：DeepSeek/Qwen 模型
+# AI API（至少需要一個）
+OPENAI_API_KEY=           # 用於 SQL 生成（必要）
+GEMINI_API_KEY=           # 聊天回應
+SiliconFlow_API_KEY=      # DeepSeek/Qwen 模型
+Claude_API_KEY=           # Claude 模型
 
-# === JWT 設定 ===
-JWT_SECRET=your_jwt_secret_key
+# 認證
+JWT_SECRET=<32+ 字元隨機字串>
 
-# === JWT 過渡期相容 (Legacy Mode) ===
-AUTH_LEGACY_UNTIL=2026-02-01T00:00:00+08:00
-AUTH_LEGACY_LOG_MODE=off
+# ML Service
+ML_SERVICE_URL=http://<Windows_Tailscale_IP>:8100
+ML_API_KEY=
 
-# === 伺服器設定 ===
+# 圖片服務
+CLOUDINARY_CLOUD_NAME=
+CLOUDINARY_API_KEY=
+CLOUDINARY_API_SECRET=
+
+# 自動部署
+DEPLOY_WEBHOOK_SECRET=    # GitHub Webhook HMAC-SHA256 密鑰
+
+# 樹種辨識
+PLANTNET_API_KEY=
+
+# 伺服器
 PORT=3000
-NODE_ENV=development
-
-# === 可選：其他服務 ===
-Claude_API_KEY=your_anthropic_key         # 可選：Claude 模型
-RENDER_EXTERNAL_URL=https://xxx.onrender.com  # 部署時自動設定
+NODE_ENV=production
 ```
-
-### AUTH_LEGACY_* 說明
-
-- **AUTH_LEGACY_UNTIL**
-  - JWT 導入過渡期的到期時間（固定時間點）。在到期前，未帶 JWT 的舊版 App 請求仍會被允許；到期後未帶 JWT 會回傳 `401`。
-- **AUTH_LEGACY_LOG_MODE**
-  - legacy 相容性 log 模式。
-  - `off`: 不輸出 legacy 相容性 log（預設）
-  - `summary`: 只輸出彙總資訊（避免刷 log）
-
-### 如何取得 API 金鑰
-
-| 服務 | 取得方式 | 用途 |
-|------|----------|------|
-| **OpenAI** | [OpenAI Platform](https://platform.openai.com/api-keys) | SQL 生成（必要）|
-| **Gemini** | [Google AI Studio](https://aistudio.google.com/app/apikey) | 聊天回應 |
-| **SiliconFlow** | [SiliconFlow](https://siliconflow.cn/) | DeepSeek/Qwen 模型 |
 
 ---
 
-## 📚 API 文件
+## API 文件
 
-### 基礎資訊
+**Base URL**: `https://100.118.203.75/api`（自架）| `http://localhost:3000/api`（本地開發）
 
-- **自架伺服器 Base URL**: `https://100.118.203.75/api`
-- **本地開發 Base URL**: `http://localhost:3000/api`
-- **認證方式**: 部分 API 需要登入後取得的 user_id
-- **Content-Type**: `application/json`
+### 使用者認證
 
-### 主要 API 端點
+| 方法 | 端點 | 說明 |
+|------|------|------|
+| POST | `/api/login` | 登入 |
+| GET | `/api/users` | 取得使用者列表 |
+| POST | `/api/users` | 新增使用者 |
+| PUT | `/api/users/:id` | 更新使用者 |
+| DELETE | `/api/users/:id` | 刪除使用者 |
 
-#### 🔐 使用者認證
+### 樹木調查
 
-| 方法 | 端點 | 說明 | 狀態 |
-|------|------|------|------|
-| POST | `/api/login` | 使用者登入（支援一般/管理員） | 🟢 |
-| GET | `/api/users` | 取得使用者列表 | 🟢 |
-| POST | `/api/users` | 新增使用者 | 🟢 |
-| PUT | `/api/users/:id` | 更新使用者 | 🟢 |
-| DELETE | `/api/users/:id` | 刪除使用者 | 🟢 |
+| 方法 | 端點 | 說明 |
+|------|------|------|
+| GET | `/api/tree_survey` | 取得所有樹木（支援分頁） |
+| GET | `/api/tree_survey/map` | 地圖精簡版（減少 70% 傳輸量） |
+| GET | `/api/tree_survey/by_id/:id` | 單筆查詢 |
+| GET | `/api/tree_survey/by_project/:name` | 依專案查詢 |
+| POST | `/api/tree_survey` | 新增樹木 |
+| POST | `/api/tree_survey/v2` | V2 新增（自動編號） |
+| PUT | `/api/tree_survey/:id` | 更新 |
+| DELETE | `/api/tree_survey/:id` | 刪除 |
+| POST | `/api/tree_survey/batch` | 批次匯入 |
 
-#### 🌲 樹木調查（主要功能）
+### AI 聊天
 
-| 方法 | 端點 | 說明 | 狀態 |
-|------|------|------|------|
-| GET | `/api/tree_survey` | 取得所有樹木調查（支援分頁） | 🟢 |
-| GET | `/api/tree_survey/map` | 🚀 地圖專用精簡 API（減少 70% 傳輸量） | 🟢 |
-| GET | `/api/tree_survey/by_id/:id` | 取得單筆樹木調查 | 🟢 |
-| GET | `/api/tree_survey/by_project/:name` | 依專案名稱查詢 | 🟢 |
-| GET | `/api/tree_survey/by_area/:area` | 依區位查詢 | 🟢 |
-| POST | `/api/tree_survey` | 新增樹木調查 | 🟢 |
-| POST | `/api/tree_survey/v2` | V2 新增（自動編號） | 🟢 |
-| PUT | `/api/tree_survey/:id` | 更新樹木調查 | 🟢 |
-| DELETE | `/api/tree_survey/:id` | 刪除樹木調查 | 🟢 |
-| POST | `/api/tree_survey/batch` | 批次匯入（Excel/CSV） | 🟢 |
-
-#### 🤖 AI 聊天（核心功能）
-
-| 方法 | 端點 | 說明 | 狀態 |
-|------|------|------|------|
-| POST | `/api/chat` | ⭐ AI 聊天（Text-to-SQL V2） | 🟢 |
-| GET | `/api/download/:filename` | 下載 Excel 匯出檔案 | 🟢 |
-| POST | `/api/chat_old_rag_version` | 舊版 RAG 聊天（保留） | 🟡 |
-
-**Chat API 請求範例：**
+| 方法 | 端點 | 說明 |
+|------|------|------|
+| POST | `/api/chat` | Text-to-SQL AI 聊天 |
+| GET | `/api/download/:filename` | 下載查詢結果 Excel |
 
 ```json
-POST /api/chat
+// POST /api/chat 請求範例
 {
   "message": "列出所有胸徑大於 50 公分的樹木",
   "userId": "user123",
@@ -563,384 +209,204 @@ POST /api/chat
 }
 ```
 
-**回應範例（資料查詢）：**
+### 樹種辨識
 
-```json
-{
-  "success": true,
-  "response": "根據查詢結果，共找到 15 棵胸徑大於 50 公分的樹木...",
-  "queryMode": "data",
-  "executedSQL": "SELECT * FROM tree_survey WHERE dbh_cm > 50 LIMIT 100",
-  "resultCount": 15,
-  "excelDownloadUrl": "https://xxx.onrender.com/api/download/query_xxx.xlsx"
-}
-```
+| 方法 | 端點 | 說明 |
+|------|------|------|
+| POST | `/api/species/identify` | 圖片辨識樹種 |
+| GET | `/api/species/search` | 學名搜尋 |
+| GET | `/api/species/:id/info` | 物種詳情 |
 
-**支援的 AI 模型：**
-- `deepseek-ai/DeepSeek-V3` (預設，透過 SiliconFlow)
-- `Qwen/Qwen3-VL-32B-Instruct` (透過 SiliconFlow)
-- `gpt-4.1-nano`, `gpt-4.1-mini` (OpenAI)
-- `gemini-2.5-flash` (Google)
+### 報表匯出
 
-#### 📊 統計
+| 方法 | 端點 | 說明 |
+|------|------|------|
+| GET | `/api/export/excel?project_codes=xxx` | Excel |
+| GET | `/api/export/pdf?project_codes=xxx` | PDF |
+| GET | `/api/sustainability_report` | 永續報告 |
 
-| 方法 | 端點 | 說明 | 狀態 |
-|------|------|------|------|
-| GET | `/api/tree_statistics` | 取得統計資料（樹種、專案、區域） | 🟢 |
+### V3 測量任務
 
-#### 📄 報表匯出
+| 方法 | 端點 | 說明 |
+|------|------|------|
+| POST | `/api/pending-measurements/batch` | 批次建立 |
+| GET | `/api/pending-measurements/sessions` | 任務列表 |
+| PATCH | `/api/pending-measurements/:id` | 更新狀態 |
+| GET | `/api/pending-measurements/stats` | 統計 |
 
-| 方法 | 端點 | 說明 | 狀態 |
-|------|------|------|------|
-| GET | `/api/export/excel?project_codes=xxx` | 匯出 Excel | 🟢 |
-| GET | `/api/export/pdf?project_codes=xxx` | 匯出 PDF | 🟢 |
-| GET | `/api/sustainability_report` | 永續報告 | 🟢 |
+### 其他端點
 
-#### 🌱 碳匯相關
-
-| 方法 | 端點 | 說明 | 狀態 |
-|------|------|------|------|
-| POST | `/api/carbon/footprint/calculator` | 碳足跡計算器 | 🟡 |
-| POST | `/api/carbon/footprint/offset` | 碳抵消建議 | 🟡 |
-| GET | `/api/tree-carbon-data` | 樹種碳吸收數據 | 🟢 |
-
-#### � 管理後台
-
-| 方法 | 端點 | 說明 | 狀態 |
-|------|------|------|------|
-| POST | `/api/admin/run-script` | 執行後台腳本 | 🟢 |
-| GET | `/api/admin/api-keys` | 取得 API Key 列表 | 🟢 |
-| POST | `/api/admin/api-keys` | 新增 API Key | 🟢 |
-
-#### 🌱 樹種管理
-
-| 方法 | 端點 | 說明 | 狀態 |
-|------|------|------|------|
-| GET | `/api/tree_species` | 取得樹種列表 | 🟢 |
-| POST | `/api/tree_species` | 新增樹種 ⭐ NEW | 🟢 |
-
-#### 📷 樹木影像
-
-| 方法 | 端點 | 說明 | 狀態 |
-|------|------|------|------|
-| POST | `/api/tree_images` | 上傳樹木影像 ⭐ NEW | 🟢 |
-| GET | `/api/tree_images/:tree_id` | 查詢樹木影像 ⭐ NEW | 🟢 |
-| DELETE | `/api/tree_images/:id` | 刪除影像 ⭐ NEW | 🟢 |
-
-#### 📋 V3 測量任務
-
-| 方法 | 端點 | 說明 | 狀態 |
-|------|------|------|------|
-| POST | `/api/pending-measurements/batch` | 批次建立測量任務 ⭐ NEW | 🟢 |
-| GET | `/api/pending-measurements/sessions` | 取得測量任務列表 ⭐ NEW | 🟢 |
-| GET | `/api/pending-measurements/trees` | 取得待測量樹木列表 ⭐ NEW | 🟢 |
-| GET | `/api/pending-measurements/:id` | 取得單一測量任務 ⭐ NEW | 🟢 |
-| PATCH | `/api/pending-measurements/:id` | 更新測量任務狀態 ⭐ NEW | 🟢 |
-| POST | `/api/pending-measurements/transfer` | 轉移測量任務 ⭐ NEW | 🟢 |
-| DELETE | `/api/pending-measurements/session/:sessionId` | 刪除測量任務 ⭐ NEW | 🟢 |
-| GET | `/api/pending-measurements/stats` | 取得測量任務統計 ⭐ NEW | 🟢 |
-
-#### 📍 其他
-
-| 方法 | 端點 | 說明 | 狀態 |
-|------|------|------|------|
-| GET | `/api/project_areas` | 取得專案區域列表 | 🟢 |
-| POST | `/api/project_areas` | 新增專案區域 | 🟢 |
-| DELETE | `/api/project_areas/:id` | 刪除專案區域 | 🟢 |
-| POST | `/api/project_areas/cleanup` | 手動觸發清理（專案區位、樹種、佔位記錄、聊天記錄） | 🟢 |
-| GET | `/api/project-boundaries` | 取得專案邊界 (GeoJSON) ⭐ NEW | 🟢 |
-| POST | `/api/project-boundaries` | 建立專案邊界 ⭐ NEW | 🟢 |
-| DELETE | `/api/projects/:code` | 刪除專案 | 🟢 |
-| GET | `/health` | 健康檢查端點 | 🟢 |
+| 方法 | 端點 | 說明 |
+|------|------|------|
+| GET | `/api/tree_statistics` | 統計資料 |
+| GET | `/api/tree_species` | 樹種列表 |
+| POST | `/api/tree_images` | 上傳樹木影像 |
+| GET | `/api/project_areas` | 專案區域 |
+| POST | `/api/project_areas/cleanup` | 清理未使用資料 |
+| GET | `/api/project-boundaries` | 專案邊界 (GeoJSON) |
+| POST | `/api/ml-training/batch` | ML 訓練數據上傳 |
+| GET | `/health` | 健康檢查 |
 
 ---
 
-## 🗃️ 資料庫結構
+## 部署
 
-### 主要資料表
-
-#### `tree_survey` - 樹木調查主表
-
-| 欄位 | 類型 | 說明 |
-|------|------|------|
-| id | SERIAL | 主鍵 |
-| system_tree_id | VARCHAR | 系統樹木編號 |
-| project_tree_id | VARCHAR | 專案樹木編號 |
-| species_id | INTEGER | 樹種 ID (FK) |
-| dbh | DECIMAL | 胸徑 (cm) |
-| tree_height | DECIMAL | 樹高 (m) |
-| latitude | DECIMAL | 緯度 |
-| longitude | DECIMAL | 經度 |
-| health_status | VARCHAR | 健康狀態 |
-| created_at | TIMESTAMP | 建立時間 |
-| updated_at | TIMESTAMP | 更新時間 |
-
-#### `tree_species` - 樹種資料表
-
-| 欄位 | 類型 | 說明 |
-|------|------|------|
-| id | SERIAL | 主鍵 |
-| name | VARCHAR | 中文名 |
-| scientific_name | VARCHAR | 學名 |
-| family | VARCHAR | 科名 |
-| carbon_coefficient | DECIMAL | 碳係數 |
-
-#### `project_areas` - 專案區域
-
-| 欄位 | 類型 | 說明 |
-|------|------|------|
-| id | SERIAL | 主鍵 |
-| name | VARCHAR | 區域名稱 |
-| description | TEXT | 描述 |
-
-### ER 圖
-
-```
-┌─────────────────┐       ┌─────────────────┐
-│   tree_survey   │       │  tree_species   │
-├─────────────────┤       ├─────────────────┤
-│ id (PK)         │       │ id (PK)         │
-│ species_id (FK) │──────>│ name            │
-│ project_area_id │       │ scientific_name │
-│ dbh             │       │ carbon_coef     │
-│ tree_height     │       └─────────────────┘
-│ latitude        │
-│ longitude       │       ┌─────────────────┐
-│ health_status   │       │  project_areas  │
-│ ...             │       ├─────────────────┤
-└────────┬────────┘       │ id (PK)         │
-         │                │ name            │
-         └───────────────>│ description     │
-                          └─────────────────┘
-```
-
----
-
-## 🧪 測試
-
-### 執行所有測試
-
-```bash
-npm test
-```
-
-### 測試類別
-
-| 測試檔案 | 說明 | 指令 |
-|----------|------|------|
-| `intentClassification.test.js` | 意圖分類測試 | `npm run test:intent` |
-| `sqlValidation.test.js` | SQL 安全驗證 | `npm run test:sql` |
-| `chatIntegration.test.js` | Chat API 整合測試 | `npm run test:integration` |
-| `apiIntegration.test.js` | API 整合測試 | `npm run test:api` |
-| `securityAudit.test.js` | 安全審計測試 | - |
-| `edgeCases.test.js` | 邊界案例測試 | - |
-
-### 測試覆蓋率
-
-```
-✅ 185 個測試全部通過
-
-測試類別:
-├── 意圖分類測試 ✅
-├── SQL 驗證測試 ✅
-├── 安全審計測試 ✅
-├── 進階安全審計 ✅
-├── 極端案例測試 ✅
-├── API 整合測試 ✅
-└── Chat 整合測試 ✅
-```
-
----
-
-## 🚢 部署
-
-### 自架伺服器部署（目前使用）
-
-系統已從 Render 完全遷移至自架雙機架構：
-
-```
-Windows (Core Ultra 5)  →  ML Service (Depth Pro + SAM 2.1)
-     ↕ Tailscale VPN
-Ubuntu (i3-8130U)       →  Node.js Backend + PostgreSQL + Nginx
-```
-
-#### 自動部署（推送 GitHub 即部署）
-
-1. 在 GitHub repo → Settings → Webhooks → Add webhook
-2. Payload URL: `https://<server-ip>/webhook/deploy`
-3. Content type: `application/json`
-4. Secret: 與 `.env` 中的 `DEPLOY_WEBHOOK_SECRET` 一致
-5. Events: Just the push event
-
-之後每次 `git push origin main`，伺服器將自動：
-- `git pull` → `npm install` → `migrate.js` → `pm2 reload`
-- Health check 失敗自動 rollback
-
-#### 手動部署與回滾
-
-```bash
-# SSH 連線
-ssh kyleliu@100.118.203.75
-
-# 手動部署
-/opt/tree-app/scripts/deploy.sh
-/opt/tree-app/scripts/deploy.sh --skip-migrate  # 跳過 migration
-/opt/tree-app/scripts/deploy.sh --dry-run       # 只拉取不重啟
-
-# 回滾
-/opt/tree-app/scripts/rollback.sh               # 回到上次成功的 commit
-/opt/tree-app/scripts/rollback.sh --list         # 列出最近 10 個 commit
-/opt/tree-app/scripts/rollback.sh <commit_hash>  # 回到指定 commit
-
-# PM2 管理
-pm2 status                    # 查看服務狀態
-pm2 logs tree-backend         # 查看日誌
-pm2 restart tree-backend      # 重啟服務
-pm2 reload tree-backend       # 零停機重載
-
-# 資料庫備份 (每天 3:00 自動執行)
-/opt/tree-app/scripts/backup_db.sh
-```
-
-#### 部署環境
+### 自架伺服器（目前使用）
 
 | 項目 | 值 |
 |------|----|
 | Node.js | v20.20.1 |
 | PostgreSQL | 16.13 |
-| PM2 | 6.0.14 (cluster ×2) |
+| PM2 | 6.0.14 (cluster 2) |
 | Nginx | 1.24.0 (reverse proxy + TLS) |
 | OS | Ubuntu 24.04 LTS |
 | Tailscale IP | 100.118.203.75 |
 
-### Render.com 部署（已棄用）
+#### 自動部署流程
 
-> ⚠️ 自 v18.5.0 起不再使用 Render。保留 `render.yaml` 僅供參考。
+```
+git push origin main
+   GitHub Webhook (HMAC-SHA256)
+   deploy.sh: git pull  npm install  migrate  pm2 reload
+   Health check (3 retries)
+   失敗自動 rollback
+```
 
-### Docker 部署（可選）
+設定 GitHub Webhook：
+1. GitHub repo  Settings  Webhooks  Add webhook
+2. URL: `https://<server-ip>/webhook/deploy`
+3. Content type: `application/json`
+4. Secret: 與 `.env` 中 `DEPLOY_WEBHOOK_SECRET` 一致
+5. SSL verification: Disable（自簽憑證）
+6. Events: Just the push event
 
-```dockerfile
-FROM node:20-alpine
-WORKDIR /app
-COPY package*.json ./
-RUN npm ci --only=production
-COPY . .
-EXPOSE 3000
-CMD ["npm", "start"]
+---
+
+## 維運指令
+
+所有腳本都支援 `--help` 查看用法。
+
+### 部署
+
+```bash
+/opt/tree-app/scripts/deploy.sh              # 自動部署
+/opt/tree-app/scripts/deploy.sh --skip-migrate  # 跳過 migration
+/opt/tree-app/scripts/deploy.sh --dry-run     # 只拉取不重啟
+/opt/tree-app/scripts/deploy.sh --help        # 查看用法
+```
+
+### 回滾
+
+```bash
+/opt/tree-app/scripts/rollback.sh              # 回到上次成功 commit
+/opt/tree-app/scripts/rollback.sh <commit>     # 回到指定 commit
+/opt/tree-app/scripts/rollback.sh --list       # 列出最近 10 個 commit
+/opt/tree-app/scripts/rollback.sh --help       # 查看用法
+```
+
+> 注意：回滾只回退程式碼，不回退資料庫。如需 DB 回退，使用 `/opt/tree-app/backups/` 中的備份。
+
+### 備份
+
+```bash
+/opt/tree-app/scripts/backup_db.sh    # 手動備份（自動每天 3:00 執行）
+/opt/tree-app/scripts/backup_db.sh --help
+```
+
+### PM2 管理
+
+```bash
+pm2 status                     # 服務狀態
+pm2 logs tree-backend          # 查看日誌
+pm2 reload tree-backend        # 零停機重載
+pm2 restart tree-backend       # 重啟
+pm2 monit                      # 即時監控
+```
+
+### 日誌位置
+
+```
+/opt/tree-app/logs/deploy.log   # 部署日誌
+/opt/tree-app/logs/health.log   # 健康檢查日誌
+/opt/tree-app/logs/app-*.log    # 應用程式日誌 (PM2)
 ```
 
 ---
 
-## 👨‍💻 開發指南
+## 資料庫
 
-### 新增 API 端點
+### 主要資料表
 
-1. 在 `routes/` 建立或修改路由檔案
-2. 在 `app.js` 註冊路由
-3. 撰寫測試
-
-**範例：新增一個端點**
-
-```javascript
-// routes/example.js
-const express = require('express');
-const router = express.Router();
-
-router.get('/hello', (req, res) => {
-    res.json({ message: 'Hello World!' });
-});
-
-module.exports = router;
+```
+tree_survey              # 樹木調查主表
+tree_species             # 樹種資料
+project_areas            # 專案區域
+project_boundaries       # 專案邊界 (PostGIS)
+project_members          # 專案成員
+pending_tree_measurements # V3 測量任務
+tree_images              # 樹木影像
+ml_training_batches      # ML 訓練數據批次
+ml_training_records      # ML 訓練數據記錄
+audit_logs               # 審計日誌
+login_attempts           # 登入嘗試記錄
 ```
 
-```javascript
-// app.js 中註冊
-const exampleRoutes = require('./routes/example');
-apiRouter.use('/example', exampleRoutes);
+### 遷移
+
+啟動時自動執行 `scripts/migrate.js`。手動執行：
+
+```bash
+node scripts/migrate.js
 ```
 
-### 修改 Text-to-SQL 邏輯
+### 備份與還原
 
-核心檔案：`services/sqlQueryService.js`
+```bash
+# 備份
+/opt/tree-app/scripts/backup_db.sh
 
-主要函數：
-- `classifyIntent()` - 意圖分類
-- `generateSQL()` - 生成 SQL
-- `validateSQL()` - SQL 安全驗證
-- `executeQuery()` - 執行查詢
-
-### 程式碼風格
-
-- 使用 ES6+ 語法
-- 使用 async/await 處理非同步
-- 錯誤處理使用 try-catch
-- 註解使用中文
+# 還原
+pg_restore -U tree_app -d tree_survey --clean /opt/tree-app/backups/<file>.dump
+```
 
 ---
 
-## ❓ 常見問題
+## 測試
 
-### Q: 啟動時出現資料庫連線錯誤？
+```bash
+npm test                    # 所有測試
+npm run test:intent         # 意圖分類
+npm run test:sql            # SQL 安全驗證
+npm run test:integration    # Chat API 整合
+npm run test:api            # API 整合
+```
 
-確認：
-1. `.env` 中的 `DATABASE_URL` 正確
-2. PostgreSQL 服務已啟動
-3. 資料庫已建立
-
-### Q: AI 聊天沒有回應？
-
-確認：
-1. API 金鑰已設定且有效
-2. 檢查 console 是否有錯誤訊息
-3. 確認網路連線正常
-
-### Q: SQL 查詢被拒絕？
-
-可能原因：
-1. 查詢包含危險關鍵字（安全機制）
-2. 查詢的表格不在白名單中
-3. SQL 語法錯誤
-
-### Q: 如何新增支援的 AI 模型？
-
-1. 在 `services/` 建立新的服務檔案
-2. 在 `routes/ai.js` 新增模型選項
-3. 更新前端的模型選擇列表
+185+ 測試案例，涵蓋意圖分類、SQL 注入防護、API 整合、安全審計。
 
 ---
 
-## 🤝 貢獻指南
+## 版本紀錄
 
-1. Fork 專案
-2. 建立功能分支 (`git checkout -b feature/AmazingFeature`)
-3. 提交變更 (`git commit -m 'Add some AmazingFeature'`)
-4. 推送到分支 (`git push origin feature/AmazingFeature`)
-5. 開啟 Pull Request
+完整版本紀錄請見 [CHANGELOG.md](CHANGELOG.md)。
 
----
+### 主要版本
 
-## 📄 授權
-
-本專案使用 ISC 授權條款 - 詳見 [LICENSE](LICENSE) 檔案
-
----
-
-## 📞 聯絡資訊
-
-- **GitHub**: [@KyleliuNDHU](https://github.com/KyleliuNDHU)
-- **專案連結**: [tree-project-backend](https://github.com/KyleliuNDHU/tree-project-backend)
+| 版本 | 日期 | 重點 |
+|------|------|------|
+| 18.5 | 2026-03-10 | 自架部署 + 自動部署 + 回滾機制 |
+| 18.4 | 2026-02-22 | Depth Pro + OpenVINO 整合 |
+| 18.3 | 2025-12-14 | 安全性 Phase 4 + 回歸測試 |
+| 18.0 | 2025-12-03 | ID 修復 + ML 訓練數據 API |
+| 16.0 | 2025-12-02 | OpenAI 兼容性修復 |
+| 15.0 | 2025-12-02 | 樹種辨識 API + Text-to-SQL 優化 |
 
 ---
 
-## 🙏 致謝
+## 授權
 
-- Google Gemini API
-- OpenAI API
-- 國立東華大學
-- 臺灣港務公司
+ISC License
 
----
+## 聯絡
 
-<p align="center">
-  Made with ❤️ for sustainable forestry management
-</p>
+- GitHub: [@KyleliuNDHU](https://github.com/KyleliuNDHU)
+- 專案: [tree-project-backend](https://github.com/KyleliuNDHU/tree-project-backend)
