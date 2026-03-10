@@ -28,8 +28,7 @@ const app = express();
         }
     } catch (e) {
         console.error('[Startup] Migration failed:', e);
-        // Decide if you want to crash the server if migration fails
-        // process.exit(1); 
+        process.exit(1);
     }
 })();
 
@@ -150,6 +149,16 @@ app.use((err, req, res, next) => {
 
 // --- 啟動伺服器 ---
 const PORT = process.env.PORT || 3000;
+
+// 產環必要環境變數檢查
+if (process.env.NODE_ENV === 'production') {
+    const required = ['DATABASE_URL', 'JWT_SECRET'];
+    const missing = required.filter(key => !process.env[key]);
+    if (missing.length > 0) {
+        console.error(`[FATAL] 缺少必要環境變數: ${missing.join(', ')}`);
+        process.exit(1);
+    }
+}
 
 app.listen(PORT, () => {
     console.log(`伺服器正在 http://localhost:${PORT} 上運行`);

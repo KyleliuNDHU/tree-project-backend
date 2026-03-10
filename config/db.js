@@ -32,3 +32,17 @@ module.exports = {
   query: (text, params) => pool.query(text, params),
   pool,
 };
+
+// PM2 cluster mode: 優雅關閉連接池
+process.on('SIGINT', () => {
+  pool.end().then(() => {
+    console.log('[DB] Pool closed (SIGINT)');
+    process.exit(0);
+  });
+});
+process.on('SIGTERM', () => {
+  pool.end().then(() => {
+    console.log('[DB] Pool closed (SIGTERM)');
+    process.exit(0);
+  });
+});

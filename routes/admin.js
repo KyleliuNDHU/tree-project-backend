@@ -314,7 +314,7 @@ router.post('/backup', requireRole('系統管理員'), (req, res) => {
         res.json({
             success: true,
             message: '資料庫備份成功',
-            backupFile: backupFile
+            backupFile: path.basename(backupFile)
         });
     });
 });

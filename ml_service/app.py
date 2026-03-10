@@ -44,8 +44,8 @@ ML_API_KEY = os.environ.get("ML_API_KEY", "")
 ALLOWED_ORIGINS = [
     o.strip() for o in os.environ.get(
         "ML_CORS_ORIGINS",
-        "http://localhost:3000,http://localhost:8080,https://tree-app-backend-prod.onrender.com,*"
-    ).split(",") if o.strip()
+        "http://localhost:3000,http://localhost:8080,https://tree-app-backend-prod.onrender.com"
+    ).split(",") if o.strip() and o.strip() != "*"
 ]
 
 
@@ -333,7 +333,7 @@ async def ws_scan(websocket: WebSocket):
     if ML_API_KEY:
         provided_key = websocket.query_params.get("api_key") or websocket.headers.get("x-ml-api-key")
         if not provided_key or not hmac.compare_digest(provided_key.strip(), ML_API_KEY.strip()):
-            print(f"[WS Auth Failed] Expected: '{ML_API_KEY}', Got: '{provided_key}'")
+            print("[WS Auth Failed] Invalid or missing API key")
             await websocket.close(code=1008)
             return
 
