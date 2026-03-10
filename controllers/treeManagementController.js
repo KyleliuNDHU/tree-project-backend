@@ -105,7 +105,9 @@ exports.generateManagementActions = async (req, res) => {
  */
 exports.getManagementActions = async (req, res) => {
     try {
-        const { tree_id, project_code, area_name, is_done, category, limit = 20, offset = 0 } = req.query;
+        const { tree_id, project_code, area_name, is_done, category, limit: rawLimit = 20, offset: rawOffset = 0 } = req.query;
+        const limit = Math.min(Math.max(parseInt(rawLimit) || 20, 1), 1000);
+        const offset = Math.max(parseInt(rawOffset) || 0, 0);
         let query = `
             SELECT tma.*, ts.species_name, ts.project_code, ts.project_location 
             FROM tree_management_actions tma 
@@ -141,11 +143,11 @@ exports.getManagementActions = async (req, res) => {
         const total = countRows[0] ? parseInt(countRows[0].total, 10) : 0;
 
         query += ` ORDER BY tma.created_at DESC LIMIT $${paramIndex++} OFFSET $${paramIndex++}`;
-        queryParams.push(parseInt(limit), parseInt(offset));
+        queryParams.push(limit, offset);
 
         const { rows: actions } = await db.query(query, queryParams);
 
-        res.json({ success: true, data: actions, total: total, limit: parseInt(limit), offset: parseInt(offset) });
+        res.json({ success: true, data: actions, total: total, limit, offset });
 
     } catch (error) {
         console.error('獲取樹木管理建議時發生錯誤:', error);

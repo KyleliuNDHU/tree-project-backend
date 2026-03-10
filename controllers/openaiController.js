@@ -12,8 +12,21 @@ function getTokenLimitParams(modelName, tokenLimit) {
     return { max_tokens: tokenLimit };
 }
 
-// 全局存儲用戶對話歷史
+// 全局存儲用戶對話歷史（附帶最後活動時間）
 const conversationHistory = {};
+const conversationLastActive = {};
+const MAX_CONVERSATION_AGE_MS = 2 * 60 * 60 * 1000; // 2 小時自動清除
+
+// 定期清理過期對話（每 30 分鐘）
+setInterval(() => {
+    const now = Date.now();
+    for (const userId of Object.keys(conversationLastActive)) {
+        if (now - conversationLastActive[userId] > MAX_CONVERSATION_AGE_MS) {
+            delete conversationHistory[userId];
+            delete conversationLastActive[userId];
+        }
+    }
+}, 30 * 60 * 1000);
 
 // 生成永續報告
 async function generateSustainabilityReport(dbData) {
@@ -54,6 +67,8 @@ async function generateSustainabilityReport(dbData) {
 // 主要聊天功能
 async function chatWithAI(userId, message, treeData) {
     try {
+        // 記錄最後活動時間
+        conversationLastActive[userId] = Date.now();
         // 初始化對話歷史（如果不存在）
         if (!conversationHistory[userId]) {
             conversationHistory[userId] = [

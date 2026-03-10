@@ -5,14 +5,24 @@ const helmet = require('helmet');
 const path = require('path');
 const { apiLimiter, loginLimiter } = require('./middleware/rateLimiter');
 const { jwtAuth } = require('./middleware/jwtAuth');
-const { 
-    cleanupUnusedProjectAreas, 
-    cleanupUnusedSpecies, 
+const {
+    cleanupUnusedProjectAreas,
+    cleanupUnusedSpecies,
     cleanupOrphanedPlaceholders,
     cleanupOldChatLogs
 } = require('./utils/cleanup');
 const { scheduledSynonymMaintenance } = require('./services/speciesSynonymService');
 const migrate = require('./scripts/migrate'); // Import migration script
+
+// 全域未捕獲錯誤處理
+process.on('unhandledRejection', (reason, promise) => {
+    console.error('[Process] Unhandled Rejection at:', promise, 'reason:', reason);
+});
+process.on('uncaughtException', (err) => {
+    console.error('[Process] Uncaught Exception:', err);
+    // 給予時間寫入 log 後安全退出
+    setTimeout(() => process.exit(1), 1000);
+});
 
 const app = express();
 

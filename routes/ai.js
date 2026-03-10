@@ -88,7 +88,7 @@ const EXPORT_URL_PREFIX = '/api/download/';  // 下載路由前綴（對應 rout
 function getFullDownloadUrl(fileName) {
     // 優先使用環境變數中的 RENDER_EXTERNAL_URL（Render 自動提供）
     // 或者使用自訂的 BASE_URL
-    const baseUrl = process.env.RENDER_EXTERNAL_URL || process.env.BASE_URL || 'https://tree-project-backend.onrender.com';
+    const baseUrl = process.env.RENDER_EXTERNAL_URL || process.env.BASE_URL || `http://localhost:${process.env.PORT || 3000}`;
     return `${baseUrl}${EXPORT_URL_PREFIX}${fileName}`;
 }
 

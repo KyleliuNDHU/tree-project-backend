@@ -153,7 +153,12 @@ router.get('/:id', async (req, res) => {
         // Legacy fallback: 本地檔案（舊資料遷移期間）
         const path = require('path');
         const fs = require('fs');
-        const absolutePath = path.join(__dirname, '..', imageRecord.cloud_url);
+        const uploadsDir = path.resolve(__dirname, '..', 'uploads');
+        const absolutePath = path.resolve(__dirname, '..', imageRecord.cloud_url);
+        // 防止目錄遍歷攻擊：確保路徑在 uploads 目錄內
+        if (!absolutePath.startsWith(uploadsDir)) {
+            return res.status(403).json({ success: false, message: '無效的檔案路徑' });
+        }
         if (fs.existsSync(absolutePath)) {
             return res.sendFile(absolutePath);
         }
