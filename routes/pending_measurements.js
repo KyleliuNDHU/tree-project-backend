@@ -696,6 +696,41 @@ router.post('/transfer', async (req, res) => {
 });
 
 /**
+ * PATCH /api/pending-measurements/session/:sessionId/project
+ * 批量更新整個 session 的專案資訊（單次 SQL，取代 N+1 逐筆 PATCH）
+ */
+router.patch('/session/:sessionId/project', async (req, res) => {
+  const { sessionId } = req.params;
+  const { project_area, project_code, project_name } = req.body;
+
+  if (!sessionId) {
+    return res.status(400).json({ success: false, message: 'session_id is required' });
+  }
+  if (!project_area) {
+    return res.status(400).json({ success: false, message: 'project_area is required' });
+  }
+
+  try {
+    const result = await pool.query(
+      `UPDATE pending_tree_measurements
+       SET project_area = $1, project_code = $2, project_name = $3
+       WHERE session_id = $4
+       RETURNING id`,
+      [project_area, project_code || null, project_name || null, sessionId]
+    );
+
+    res.json({
+      success: true,
+      updated: result.rowCount,
+      message: `已更新 ${result.rowCount} 筆記錄的專案資訊`,
+    });
+  } catch (err) {
+    console.error('[PendingMeasurements] Bulk update project error:', err);
+    res.status(500).json({ success: false, message: err.message });
+  }
+});
+
+/**
  * DELETE /api/pending-measurements/session/:sessionId
  * 刪除整個測量批次
  */
