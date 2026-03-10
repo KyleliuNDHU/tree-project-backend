@@ -39,7 +39,10 @@ import numpy as np
 # Security: API Key Authentication
 # ============================================================
 
-ML_API_KEY = os.environ.get("ML_API_KEY", "")
+ML_API_KEY = os.environ.get("ML_API_KEY", "").strip()
+if not ML_API_KEY:
+    print("[WARNING] ML_API_KEY is not set. All endpoints are open without authentication.")
+    print("[WARNING] Set ML_API_KEY environment variable for production use.")
 
 ALLOWED_ORIGINS = [
     o.strip() for o in os.environ.get(
@@ -56,7 +59,7 @@ def verify_api_key(request: Request):
         return
     
     # Check X-ML-API-Key header
-    provided_key = request.headers.get("X-ML-API-Key", "")
+    provided_key = request.headers.get("X-ML-API-Key", "").strip()
     if not provided_key:
         # Also check Authorization: Bearer <key>
         auth_header = request.headers.get("Authorization", "")
