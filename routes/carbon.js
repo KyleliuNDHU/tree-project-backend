@@ -138,23 +138,33 @@ router.get('/sink/filter-by-environment', carbonSinkController.filterByEnvironme
 router.post('/sink/mixed-forest', carbonSinkController.generateMixedForest);
 
 // --- 碳交易與優化 ---
-router.get('/trading/market_data', async (req, res) => {
-    // 模擬數據
-    const marketData = { current_price: 25.75, trend: 'up' };
-    res.json({ success: true, data: marketData });
-});
+// 注意：碳交易市場價格需來自公開 API 或第三方數據源，
+//       目前尚未串接即時數據，因此這些端點回傳本系統的碳儲存統計，
+//       不提供市場價格。
 
 router.get('/trading/credit_calculator', async (req, res) => {
     try {
-        const { rows } = await db.query('SELECT SUM("碳儲存量") as total_carbon_storage, SUM("推估年碳吸存量") as annual_carbon_sequestration FROM tree_survey');
+        const { rows } = await db.query(
+            `SELECT COALESCE(SUM(carbon_storage), 0) as total_carbon_storage,
+                    COALESCE(SUM(carbon_sequestration_per_year), 0) as annual_carbon_sequestration
+             FROM tree_survey`
+        );
         const data = rows[0];
-        const totalCredits = (data.total_carbon_storage || 0) / 1000;
-        const annualCredits = (data.annual_carbon_sequestration || 0) / 1000;
-        const estimatedValue = {
-            current: totalCredits * 25.75,
-            annual_potential: annualCredits * 25.75
-        };
-        res.json({ success: true, data: { total_credits: totalCredits, annual_credits: annualCredits, estimated_value: estimatedValue } });
+        const totalCarbonKg = parseFloat(data.total_carbon_storage) || 0;
+        const annualSeqKg = parseFloat(data.annual_carbon_sequestration) || 0;
+        // 轉為 CO₂ 當量噸
+        const totalCO2Ton = (totalCarbonKg * 3.67) / 1000;
+        const annualCO2Ton = (annualSeqKg * 3.67) / 1000;
+        res.json({
+            success: true,
+            data: {
+                total_carbon_kg: Math.round(totalCarbonKg * 100) / 100,
+                annual_sequestration_kg: Math.round(annualSeqKg * 100) / 100,
+                total_co2_equivalent_ton: Math.round(totalCO2Ton * 100) / 100,
+                annual_co2_equivalent_ton: Math.round(annualCO2Ton * 100) / 100,
+            },
+            note: '碳權價值需參考即時市場行情，本系統目前僅提供碳儲存統計。',
+        });
     } catch (err) {
         res.status(500).json({ success: false, error: '計算碳信用額度失敗' });
     }
@@ -178,31 +188,27 @@ router.get('/optimization/species_recommendation', async (req, res) => {
     }
 });
 
-// 新增：從 index_1.js 遷移過來的碳權估算 API
+// 碳權估算 — 僅提供碳吸存量統計，不使用未經驗證的碳權換算率
 router.get('/credit_estimation', async (req, res) => {
-    const CARBON_CREDIT_RATE = 0.05; // 假設每公斤碳吸存量可獲得0.05個碳權
     try {
         const query = `
             SELECT 
                 species_name, 
-                SUM(carbon_sequestration_per_year) as total_annual_carbon 
+                COUNT(*) as tree_count,
+                ROUND(SUM(carbon_sequestration_per_year)::numeric, 2) as total_annual_carbon_kg,
+                ROUND(SUM(carbon_sequestration_per_year * 3.67 / 1000)::numeric, 4) as total_annual_co2_ton
             FROM tree_survey 
             GROUP BY species_name
+            ORDER BY total_annual_carbon_kg DESC
         `;
         const { rows } = await db.query(query);
-
-        const estimation = rows.map(r => ({
-            樹種: r.species_name,
-            年碳吸存量: parseFloat(r.total_annual_carbon) || 0,
-            預估碳權: ((parseFloat(r.total_annual_carbon) || 0) * CARBON_CREDIT_RATE).toFixed(2)
-        }));
 
         res.json({
             success: true,
             data: {
-                總預估碳權: estimation.reduce((sum, e) => sum + parseFloat(e.預估碳權), 0).toFixed(2),
-                各樹種碳權估算: estimation
-            }
+                各樹種碳吸存統計: rows,
+            },
+            note: '碳權額度需經授權驗證機構 (VVB) 依特定方法學核證後方可取得，此處僅列出年碳吸存量統計。',
         });
 
     } catch (err) {

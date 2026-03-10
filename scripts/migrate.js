@@ -27,6 +27,7 @@ const migrationFiles = [
   'tree_management_actions.pg.sql',
   'chat_logs.pg.sql', // 新增 chat_logs 表格
   '02_chat_logs_add_session.pg.sql', // [New] 加入 session_id 欄位支援多會話
+  '04_chat_logs_agent_mode.pg.sql', // [New] Agent 模式支援 (chat_mode + metadata)
   'tree_knowledge_embeddings_v2.pg.sql', // 新增 AI 知識庫表格
   '01_sync_project_id_trigger.sql', // [New] Project ID synchronization trigger
   'ml_training_data.pg.sql', // ML 訓練數據表
