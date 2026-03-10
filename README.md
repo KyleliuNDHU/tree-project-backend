@@ -1,412 +1,487 @@
-﻿# TreeAI Backend
+# TreeAI Backend
 
 [![Node.js](https://img.shields.io/badge/Node.js-20+-green.svg)](https://nodejs.org/)
 [![Express](https://img.shields.io/badge/Express-4.x-lightgrey.svg)](https://expressjs.com/)
 [![PostgreSQL](https://img.shields.io/badge/PostgreSQL-16+-blue.svg)](https://www.postgresql.org/)
-[![License](https://img.shields.io/badge/License-ISC-yellow.svg)](LICENSE)
+[![License](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
-智慧樹木管理系統後端  為臺灣港務公司 (TIPC) 設計的 AI 驅動樹木調查平台。
+> **Sustainable TreeAI** — An AI-driven urban tree inventory and carbon sequestration analysis platform.
+> 智慧樹木管理系統後端：AI 驅動的都市樹木調查與碳匯分析平台。
 
----
-
-## 目錄
-
-- [功能](#功能)
-- [架構](#架構)
-- [快速開始](#快速開始)
-- [環境變數](#環境變數)
-- [API 文件](#api-文件)
-- [部署](#部署)
-- [維運指令](#維運指令)
-- [資料庫](#資料庫)
-- [測試](#測試)
-- [版本紀錄](#版本紀錄)
+Developed for Taiwan International Ports Corporation (TIPC) to digitize tree surveys, automate DBH (Diameter at Breast Height) measurement via computer vision, and calculate carbon storage using peer-reviewed allometric equations.
 
 ---
 
-## 功能
+## Table of Contents
 
-| 功能 | 說明 |
-|------|------|
-| **樹木調查 CRUD** | 完整的樹木資料管理，支援 Excel/CSV 批次匯入 |
-| **Text-to-SQL AI** | 自然語言查詢資料庫，AI 自動生成 SQL |
-| **樹種辨識** | Pl@ntNet + GBIF + iNaturalist 三合一 API |
-| **碳匯計算** | 根據樹種、胸徑計算碳儲存量 |
-| **報表匯出** | Excel、PDF 報表生成與下載 |
-| **AR/ML 測量** | DBH 測量數據收集、ML 訓練數據管理 |
-| **專案邊界** | PostGIS 多邊形邊界管理 |
-| **安全性** | JWT 認證、RBAC 權限、SQL 注入防護、審計日誌 |
-| **自動部署** | GitHub Webhook  自動部署 + 失敗自動回滾 |
-
-### 支援的 AI 模型
-
-- `deepseek-ai/DeepSeek-V3`（預設，透過 SiliconFlow）
-- `Qwen/Qwen3-VL-32B-Instruct`（透過 SiliconFlow）
-- `gpt-4.1-nano`、`gpt-4.1-mini`（OpenAI）
-- `gemini-2.5-flash`（Google）
+- [Motivation](#motivation)
+- [Features](#features)
+- [System Architecture](#system-architecture)
+- [Getting Started](#getting-started)
+- [Environment Variables](#environment-variables)
+- [API Reference](#api-reference)
+- [ML Service](#ml-service)
+- [Deployment](#deployment)
+- [Testing](#testing)
+- [Security](#security)
+- [Research Background](#research-background)
+- [License](#license)
 
 ---
 
-## 架構
+## Motivation
+
+Traditional urban tree surveys require manual field measurements (tape + clinometer), which are labor-intensive and error-prone. This system replaces manual workflows with:
+
+1. **Smartphone-based DBH measurement** — Using monocular depth estimation (Depth Pro) + instance segmentation (SAM 2.1) to measure tree trunk diameter from a single photo.
+2. **AI-powered data queries** — Natural language to SQL translation so non-technical researchers can query the database without writing code.
+3. **Carbon sequestration analysis** — Automated calculation using the Chave et al. (2014) pantropical allometric model, enabling carbon credit estimation for ESG reporting.
+
+---
+
+## Features
+
+### Core Functionality
+
+| Feature | Description |
+|---------|-------------|
+| **Tree Survey CRUD** | Full tree data lifecycle management with Excel/CSV batch import |
+| **Text-to-SQL AI Chat** | Natural language queries translated to safe, validated SQL (multi-LLM support) |
+| **AI Agent** | ReAct-style autonomous agent with 5 tools for carbon analysis and data queries |
+| **Species Identification** | Pl@ntNet + GBIF + iNaturalist triple-API plant recognition |
+| **Carbon Calculation** | Allometric biomass estimation (Chave et al., 2014) with CO2 equivalence |
+| **Report Export** | Excel and PDF report generation with sustainability metrics |
+| **ML Measurement Proxy** | Proxies depth estimation + segmentation requests to the ML service |
+| **Geospatial** | Project boundary management with point-in-polygon validation |
+
+### AI & Machine Learning
+
+| Component | Model / Method |
+|-----------|---------------|
+| **Text-to-SQL** | DeepSeek-V3, GPT-4.1, Gemini 2.5 (via intent classification + SQL validation) |
+| **AI Agent** | ReAct loop with SiliconFlow API — tools: `query_tree_data`, `calculate_carbon`, `species_carbon_info`, `project_summary`, `carbon_credit_estimate` |
+| **Species Recognition** | Pl@ntNet CNN ensemble + GBIF taxonomy + iNaturalist cross-reference |
+| **Knowledge Retrieval** | RAG with OpenAI embeddings + cosine similarity for context-aware responses |
+
+### Security
+
+| Layer | Implementation |
+|-------|---------------|
+| **Authentication** | JWT (HS256) with 24-hour expiration |
+| **Authorization** | 5-tier RBAC (System Admin, Port Admin, Project Manager, Surveyor, General User) |
+| **Rate Limiting** | Dual-layer Express + Nginx limiting (API: 500/15min, AI: 30/hr, Login: 10/hr) |
+| **SQL Safety** | Whitelist-only tables, parameterized queries, keyword blacklist (no DROP/DELETE/ALTER) |
+| **Account Protection** | 5-attempt lockout (30-min cooldown), audit logging, login attempt tracking |
+| **Network** | UFW firewall (Tailscale subnet only), Nginx reverse proxy with TLS |
+
+---
+
+## System Architecture
 
 ```
-雙機架構（透過 Tailscale VPN 連接）
-
-Windows (Core Ultra 5 125H)     ML Service (Depth Pro + SAM 2.1 Small)
-      Tailscale VPN
-Ubuntu  (i3-8130U + MX130)      Node.js Backend + PostgreSQL + Nginx
++-------------------------------------------------------------------+
+|                        Mobile App (Flutter)                        |
+|   Tree Survey / AI Chat / Species ID / Image Scanner / BLE Import    |
++-------------------------------+-----------------------------------+
+                                | HTTPS (JWT)
+                                v
++-------------------------------------------------------------------+
+|  Ubuntu Server (i3-8130U, 11GB RAM)                               |
+|  +--------+  +------------------------------+  +--------------+  |
+|  | Nginx  |->| Node.js Backend (Express)    |->| PostgreSQL   |  |
+|  | TLS    |  | - REST API (23 route modules)|  | (12+ tables) |  |
+|  | Proxy  |  | - AI Chat (Text-to-SQL)      |  +--------------+  |
+|  +--------+  | - Agent (ReAct + 5 tools)    |                     |
+|              | - PM2 Cluster (2 instances)   |                     |
+|              +--------------+----------------+                     |
+|                             | Tailscale VPN                       |
++-----------------------------+-------------------------------------+
+                              v
++-------------------------------------------------------------------+
+|  Windows ML Server (Core Ultra 5 125H, 16GB RAM)                  |
+|  +---------------------------------------------------------------+|
+|  | FastAPI ML Service                                            ||
+|  | - Depth Pro (Apple, 350M params) + OpenVINO on Intel Arc GPU  ||
+|  | - SAM 2.1 Small (Meta, 46M params)                           ||
+|  | - Real-time WebSocket scanning                                ||
+|  +---------------------------------------------------------------+|
++-------------------------------------------------------------------+
 ```
 
-### 目錄結構
+### Project Structure
 
 ```
 backend/
- app.js                    # Express 入口
- ecosystem.config.js       # PM2 cluster 設定
- config/
-    db.js                 # PostgreSQL 連接池
-    database.js           # 資料庫設定
- routes/                   # API 路由
-    ai.js                 # AI 聊天 (Text-to-SQL)
-    treeSurvey.js         # 樹木調查 CRUD
-    users.js              # 使用者認證
-    statistics.js         # 統計
-    reports.js            # 報表匯出
-    speciesIdentification.js # 樹種辨識
-    webhook.js            # GitHub 自動部署
-    ...
- services/                 # 業務邏輯
-    sqlQueryService.js    # Text-to-SQL 核心
-    geminiService.js      # Gemini API
-    openaiService.js      # OpenAI API
- middleware/               # 中介軟體
-    adminAuth.js          # 管理員驗證
-    projectAuth.js        # 專案權限
-    rateLimiter.js        # 請求限流
- scripts/                  # 維運腳本
-    deploy.sh             # 自動部署
-    rollback.sh           # 回滾
-    backup_db.sh          # 資料庫備份
-    health_check.sh       # 健康檢查
-    migrate.js            # 資料庫遷移
- tests/                    # 測試（185+ 測試案例）
- ml_service/               # ML 推論服務 (FastAPI)
+├── app.js                     # Express application entry point
+├── ecosystem.config.js        # PM2 cluster configuration
+├── config/
+│   ├── db.js                  # PostgreSQL connection pool
+│   └── database.js            # Database configuration
+├── routes/                    # 23 API route modules
+│   ├── ai.js                  # AI chat (Text-to-SQL)
+│   ├── agent.js               # AI Agent (ReAct tool calling)
+│   ├── treeSurvey.js          # Tree survey CRUD
+│   ├── users.js               # Authentication & user management
+│   ├── carbon.js              # Carbon calculation & credit estimation
+│   ├── speciesIdentification.js # Plant species recognition
+│   ├── reports.js             # Excel/PDF export
+│   ├── mlService.js           # ML service proxy
+│   ├── webhook.js             # GitHub auto-deploy
+│   └── ...                    # 14 more route modules
+├── services/                  # Business logic
+│   ├── agentService.js        # ReAct agent with SiliconFlow API
+│   ├── sqlQueryService.js     # Text-to-SQL with injection prevention
+│   ├── speciesIdentificationService.js
+│   ├── knowledgeEmbeddingService.js  # RAG retrieval
+│   ├── auditLogService.js     # Security audit logging
+│   └── ...
+├── middleware/                 # Security & access control
+│   ├── jwtAuth.js             # JWT token verification
+│   ├── roleAuth.js            # 5-tier RBAC
+│   ├── projectAuth.js         # Project-level permissions
+│   ├── rateLimiter.js         # Request throttling
+│   └── loginAttemptMonitor.js # Account lockout
+├── scripts/                   # DevOps automation
+│   ├── deploy.sh              # Auto-deploy with rollback
+│   ├── rollback.sh            # Manual rollback
+│   ├── backup_db.sh           # PostgreSQL backup (cron daily)
+│   ├── health_check.sh        # Health monitoring (cron 5min)
+│   └── migrate.js             # Database schema migration
+├── database/initial_data/     # SQL migration files
+├── tests/                     # Test suites
+└── ml_service/                # FastAPI ML inference (Python)
 ```
 
 ---
 
-## 快速開始
+## Getting Started
 
-### 前置需求
+### Prerequisites
 
-- Node.js 20+
-- PostgreSQL 16+
-- npm
+- **Node.js** 20+
+- **PostgreSQL** 16+
+- **npm** (comes with Node.js)
 
-### 安裝
+### Installation
 
 ```bash
 git clone https://github.com/KyleliuNDHU/tree-project-backend.git
 cd tree-project-backend
 npm install
-cp .env.example .env   # 編輯 .env 填入設定值
-npm run dev             # 開發模式 http://localhost:3000
+cp .env.example .env   # Edit .env with your configuration
+npm run dev            # Development mode -> http://localhost:3000
 ```
 
-### 常用指令
+### Commands
 
-```bash
-npm run dev           # 開發模式（nodemon 自動重啟）
-npm start             # 生產模式
-npm test              # 執行所有測試
-npm run test:intent   # 意圖分類測試
-npm run test:sql      # SQL 驗證測試
-```
+| Command | Description |
+|---------|-------------|
+| `npm run dev` | Development mode with hot reload (nodemon) |
+| `npm start` | Production mode |
+| `npm test` | Run intent classification + SQL validation tests |
+| `npm run test:all` | Run all test suites including security audits |
+| `npm run test:regression` | Full feature regression test |
 
 ---
 
-## 環境變數
+## Environment Variables
 
-在專案根目錄建立 `.env`：
+Create a `.env` file in the project root (see `.env.example`):
 
 ```env
-# 資料庫
+# Database
 DATABASE_URL=postgresql://tree_app:<password>@127.0.0.1:5432/tree_survey
 
-# AI API（至少需要一個）
-OPENAI_API_KEY=           # 用於 SQL 生成（必要）
-GEMINI_API_KEY=           # 聊天回應
-SiliconFlow_API_KEY=      # DeepSeek/Qwen 模型
-Claude_API_KEY=           # Claude 模型
+# AI APIs (at least one required for chat features)
+OPENAI_API_KEY=              # Text-to-SQL generation
+GEMINI_API_KEY=              # Chat responses
+SiliconFlow_API_KEY=         # DeepSeek/Qwen models (Agent)
+Claude_API_KEY=              # Claude models
 
-# 認證
-JWT_SECRET=<32+ 字元隨機字串>
+# Authentication
+JWT_SECRET=<64-char random hex string>
 
-# ML Service
-ML_SERVICE_URL=http://<Windows_Tailscale_IP>:8100
+# ML Service (optional — for DBH measurement)
+ML_SERVICE_URL=http://<ml_server_ip>:8100
 ML_API_KEY=
 
-# 圖片服務
+# Cloud Storage (optional — for tree images)
 CLOUDINARY_CLOUD_NAME=
 CLOUDINARY_API_KEY=
 CLOUDINARY_API_SECRET=
 
-# 自動部署
-DEPLOY_WEBHOOK_SECRET=    # GitHub Webhook HMAC-SHA256 密鑰
-
-# 樹種辨識
+# Species Identification (optional)
 PLANTNET_API_KEY=
 
-# 伺服器
+# Auto-Deploy (optional — for GitHub webhook)
+DEPLOY_WEBHOOK_SECRET=
+
+# Server
 PORT=3000
 NODE_ENV=production
 ```
 
 ---
 
-## API 文件
+## API Reference
 
-**Base URL**: `https://100.118.203.75/api`（自架）| `http://localhost:3000/api`（本地開發）
+All endpoints require JWT authentication unless noted. Base URL: `/api`
 
-### 使用者認證
+### Authentication
 
-| 方法 | 端點 | 說明 |
-|------|------|------|
-| POST | `/api/login` | 登入 |
-| GET | `/api/users` | 取得使用者列表 |
-| POST | `/api/users` | 新增使用者 |
-| PUT | `/api/users/:id` | 更新使用者 |
-| DELETE | `/api/users/:id` | 刪除使用者 |
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| POST | `/login` | Authenticate and receive JWT token |
+| GET | `/users` | List all users (admin) |
+| POST | `/users` | Create user account |
+| PUT | `/users/:id` | Update user profile |
 
-### 樹木調查
+### Tree Survey
 
-| 方法 | 端點 | 說明 |
-|------|------|------|
-| GET | `/api/tree_survey` | 取得所有樹木（支援分頁） |
-| GET | `/api/tree_survey/map` | 地圖精簡版（減少 70% 傳輸量） |
-| GET | `/api/tree_survey/by_id/:id` | 單筆查詢 |
-| GET | `/api/tree_survey/by_project/:name` | 依專案查詢 |
-| POST | `/api/tree_survey` | 新增樹木 |
-| POST | `/api/tree_survey/v2` | V2 新增（自動編號） |
-| PUT | `/api/tree_survey/:id` | 更新 |
-| DELETE | `/api/tree_survey/:id` | 刪除 |
-| POST | `/api/tree_survey/batch` | 批次匯入 |
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| GET | `/tree_survey` | List all trees (paginated) |
+| GET | `/tree_survey/map` | Lightweight map view (70% less data) |
+| GET | `/tree_survey/by_id/:id` | Get single tree |
+| GET | `/tree_survey/by_project/:name` | Filter by project |
+| POST | `/tree_survey` | Create tree record |
+| POST | `/tree_survey/v2` | Create with auto-numbering |
+| PUT | `/tree_survey/:id` | Update tree |
+| DELETE | `/tree_survey/:id` | Delete tree |
+| POST | `/tree_survey/batch` | Batch import |
 
-### AI 聊天
+### AI Chat & Agent
 
-| 方法 | 端點 | 說明 |
-|------|------|------|
-| POST | `/api/chat` | Text-to-SQL AI 聊天 |
-| GET | `/api/download/:filename` | 下載查詢結果 Excel |
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| POST | `/chat` | Text-to-SQL AI query |
+| POST | `/agent/chat` | AI Agent with tool calling (ReAct) |
+| GET | `/agent/status` | Agent service health |
+| GET | `/agent/models` | Available LLM models |
+| GET | `/download/:filename` | Download query result as Excel |
 
+**Example — AI Chat:**
 ```json
-// POST /api/chat 請求範例
 {
-  "message": "列出所有胸徑大於 50 公分的樹木",
+  "message": "List all trees with DBH > 50 cm in Kaohsiung Port",
   "userId": "user123",
-  "projectAreas": ["高雄港"],
+  "projectAreas": ["Kaohsiung Port"],
   "model_preference": "deepseek-ai/DeepSeek-V3"
 }
 ```
 
-### 樹種辨識
+**Example — Agent:**
+```json
+{
+  "message": "Calculate total carbon storage for all trees in Kaohsiung Port",
+  "sessionId": "agent_session_001"
+}
+```
 
-| 方法 | 端點 | 說明 |
-|------|------|------|
-| POST | `/api/species/identify` | 圖片辨識樹種 |
-| GET | `/api/species/search` | 學名搜尋 |
-| GET | `/api/species/:id/info` | 物種詳情 |
+### Species Identification
 
-### 報表匯出
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| POST | `/species/identify` | Identify plant from photo |
+| GET | `/species/search` | Search by scientific name |
+| GET | `/species/:id/info` | Species detail (GBIF + iNaturalist) |
 
-| 方法 | 端點 | 說明 |
-|------|------|------|
-| GET | `/api/export/excel?project_codes=xxx` | Excel |
-| GET | `/api/export/pdf?project_codes=xxx` | PDF |
-| GET | `/api/sustainability_report` | 永續報告 |
+### Carbon Analysis
 
-### V3 測量任務
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| POST | `/carbon/sink/calculate` | Calculate carbon storage for given DBH |
+| GET | `/carbon/trading/credit_calculator` | CO2 equivalent statistics |
+| GET | `/carbon/credit_estimation` | Per-species annual carbon sequestration |
+| GET | `/carbon/sink/species` | Species-specific carbon data |
+| GET | `/carbon/optimization/species_recommendation` | Species recommendation by carbon efficiency |
 
-| 方法 | 端點 | 說明 |
-|------|------|------|
-| POST | `/api/pending-measurements/batch` | 批次建立 |
-| GET | `/api/pending-measurements/sessions` | 任務列表 |
-| PATCH | `/api/pending-measurements/:id` | 更新狀態 |
-| GET | `/api/pending-measurements/stats` | 統計 |
+### Reports & Export
 
-### 其他端點
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| GET | `/export/excel?project_codes=xxx` | Excel report |
+| GET | `/export/pdf?project_codes=xxx` | PDF report |
+| GET | `/sustainability_report` | Sustainability report |
 
-| 方法 | 端點 | 說明 |
-|------|------|------|
-| GET | `/api/tree_statistics` | 統計資料 |
-| GET | `/api/tree_species` | 樹種列表 |
-| POST | `/api/tree_images` | 上傳樹木影像 |
-| GET | `/api/project_areas` | 專案區域 |
-| POST | `/api/project_areas/cleanup` | 清理未使用資料 |
-| GET | `/api/project-boundaries` | 專案邊界 (GeoJSON) |
-| POST | `/api/ml-training/batch` | ML 訓練數據上傳 |
-| GET | `/health` | 健康檢查 |
+### Additional Endpoints
+
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| GET | `/tree_statistics` | Aggregated statistics |
+| GET | `/tree_species` | Species reference list |
+| POST | `/tree-images/upload` | Upload tree photo (Cloudinary) |
+| GET | `/project_areas` | Project areas |
+| GET | `/project-boundaries` | Project boundaries (GeoJSON) |
+| POST | `/ml-training/batch` | Upload ML training data |
+| GET | `/ml-service/status` | ML service health & config |
+| GET | `/health` | Backend health check (no auth) |
 
 ---
 
-## 部署
+## ML Service
 
-### 自架伺服器（目前使用）
+The ML service is a FastAPI application that provides computer vision capabilities:
 
-| 項目 | 值 |
-|------|----|
-| Node.js | v20.20.1 |
-| PostgreSQL | 16.13 |
-| PM2 | 6.0.14 (cluster 2) |
-| Nginx | 1.24.0 (reverse proxy + TLS) |
-| OS | Ubuntu 24.04 LTS |
-| Tailscale IP | 100.118.203.75 |
+| Endpoint | Purpose |
+|----------|---------|
+| `POST /api/v1/measure-dbh` | Full DBH measurement pipeline (depth + segmentation + calculation) |
+| `POST /api/v1/estimate-depth` | Monocular depth estimation |
+| `WS /ws/scan` | Real-time WebSocket scanning |
+| `GET /api/v1/health` | Service health check |
 
-#### 自動部署流程
+**Supported Models:**
 
-```
-git push origin main
-   GitHub Webhook (HMAC-SHA256)
-   deploy.sh: git pull  npm install  migrate  pm2 reload
-   Health check (3 retries)
-   失敗自動 rollback
-```
+| Model | Task | Parameters |
+|-------|------|------------|
+| Depth Pro (Apple) | Monocular depth estimation | 350M |
+| Depth Anything V2 | Monocular depth estimation (lightweight) | 97M |
+| SAM 2.1 Small (Meta) | Instance segmentation | 46M |
+| EfficientViT-SAM | Lightweight segmentation | 25M |
 
-設定 GitHub Webhook：
-1. GitHub repo  Settings  Webhooks  Add webhook
-2. URL: `https://<server-ip>/webhook/deploy`
-3. Content type: `application/json`
-4. Secret: 與 `.env` 中 `DEPLOY_WEBHOOK_SECRET` 一致
-5. SSL verification: Disable（自簽憑證）
-6. Events: Just the push event
+**Hardware Acceleration:**
+- Intel Arc GPU via OpenVINO (XMX acceleration)
+- ONNX Runtime for CPU optimization
+
+See `ml_service/` directory for full documentation.
 
 ---
 
-## 維運指令
+## Deployment
 
-所有腳本都支援 `--help` 查看用法。
+### Self-Hosted (Current Production)
 
-### 部署
+The system runs on a dual-machine architecture connected via Tailscale VPN:
 
-```bash
-/opt/tree-app/scripts/deploy.sh              # 自動部署
-/opt/tree-app/scripts/deploy.sh --skip-migrate  # 跳過 migration
-/opt/tree-app/scripts/deploy.sh --dry-run     # 只拉取不重啟
-/opt/tree-app/scripts/deploy.sh --help        # 查看用法
-```
+| Component | Server | Specs |
+|-----------|--------|-------|
+| Node.js Backend + PostgreSQL | Ubuntu 24.04 LTS | i3-8130U, 11GB RAM |
+| ML Service (Depth Pro + SAM) | Windows 11 | Core Ultra 5 125H, 16GB RAM |
 
-### 回滾
+**Auto-deploy:** `git push origin main` triggers GitHub Webhook, which runs `deploy.sh` (git pull, npm install, migrate, pm2 reload, health check, auto-rollback on failure).
 
-```bash
-/opt/tree-app/scripts/rollback.sh              # 回到上次成功 commit
-/opt/tree-app/scripts/rollback.sh <commit>     # 回到指定 commit
-/opt/tree-app/scripts/rollback.sh --list       # 列出最近 10 個 commit
-/opt/tree-app/scripts/rollback.sh --help       # 查看用法
-```
-
-> 注意：回滾只回退程式碼，不回退資料庫。如需 DB 回退，使用 `/opt/tree-app/backups/` 中的備份。
-
-### 備份
+### Operations
 
 ```bash
-/opt/tree-app/scripts/backup_db.sh    # 手動備份（自動每天 3:00 執行）
-/opt/tree-app/scripts/backup_db.sh --help
-```
+# Deploy
+scripts/deploy.sh                    # Full deploy with migration
+scripts/deploy.sh --skip-migrate     # Skip DB migration
+scripts/deploy.sh --dry-run          # Pull only, no restart
 
-### PM2 管理
+# Rollback
+scripts/rollback.sh                  # Rollback to last successful commit
+scripts/rollback.sh <commit-hash>    # Rollback to specific commit
+scripts/rollback.sh --list           # List recent commits
 
-```bash
-pm2 status                     # 服務狀態
-pm2 logs tree-backend          # 查看日誌
-pm2 reload tree-backend        # 零停機重載
-pm2 restart tree-backend       # 重啟
-pm2 monit                      # 即時監控
-```
+# Database
+scripts/backup_db.sh                 # Manual backup (auto: daily 03:00)
+node scripts/migrate.js              # Run schema migrations
 
-### 日誌位置
-
-```
-/opt/tree-app/logs/deploy.log   # 部署日誌
-/opt/tree-app/logs/health.log   # 健康檢查日誌
-/opt/tree-app/logs/app-*.log    # 應用程式日誌 (PM2)
+# PM2
+pm2 status                           # Service status
+pm2 logs tree-backend                # View logs
+pm2 reload tree-backend              # Zero-downtime reload
 ```
 
 ---
 
-## 資料庫
-
-### 主要資料表
-
-```
-tree_survey              # 樹木調查主表
-tree_species             # 樹種資料
-project_areas            # 專案區域
-project_boundaries       # 專案邊界 (PostGIS)
-project_members          # 專案成員
-pending_tree_measurements # V3 測量任務
-tree_images              # 樹木影像
-ml_training_batches      # ML 訓練數據批次
-ml_training_records      # ML 訓練數據記錄
-audit_logs               # 審計日誌
-login_attempts           # 登入嘗試記錄
-```
-
-### 遷移
-
-啟動時自動執行 `scripts/migrate.js`。手動執行：
+## Testing
 
 ```bash
-node scripts/migrate.js
+npm test                    # Intent classification + SQL validation
+npm run test:intent         # Natural language intent classification
+npm run test:sql            # SQL injection prevention validation
+npm run test:integration    # Chat API end-to-end
+npm run test:api            # API contract tests
+npm run test:all            # All suites including security audits
+npm run test:regression     # Full feature regression
 ```
 
-### 備份與還原
+**Test Coverage:**
 
-```bash
-# 備份
-/opt/tree-app/scripts/backup_db.sh
-
-# 還原
-pg_restore -U tree_app -d tree_survey --clean /opt/tree-app/backups/<file>.dump
-```
+| Suite | Focus |
+|-------|-------|
+| Intent Classification | NLP intent detection for query vs. small-talk |
+| SQL Validation | Injection prevention, table whitelist enforcement |
+| Chat Integration | End-to-end: message to intent to SQL to response |
+| Security Audit | XSS, injection, auth bypass, rate limit evasion |
+| Advanced Security | JWT tampering, timing attacks, replay attacks |
+| Extreme Security | Distributed attacks, CORS bypass, dependency vulnerabilities |
 
 ---
 
-## 測試
+## Security
 
-```bash
-npm test                    # 所有測試
-npm run test:intent         # 意圖分類
-npm run test:sql            # SQL 安全驗證
-npm run test:integration    # Chat API 整合
-npm run test:api            # API 整合
+| Category | Measures |
+|----------|----------|
+| **Network** | UFW firewall (Tailscale-only ingress), Nginx reverse proxy, self-signed TLS |
+| **Authentication** | JWT with HS256, bcrypt password hashing, account lockout after 5 failures |
+| **Authorization** | 5-tier RBAC, project-level permissions, per-endpoint role requirements |
+| **Data Protection** | Parameterized SQL queries, table whitelist, keyword blacklist |
+| **Rate Limiting** | Dual Express + Nginx limiting, separate limits for AI/login endpoints |
+| **Monitoring** | Audit log (all data mutations), health check (5-min cron), PM2 log rotation |
+| **Secrets** | `.env` files (chmod 600), excluded from Git, API keys server-side only |
+
+---
+
+## Research Background
+
+### Carbon Sequestration Model
+
+The carbon calculation follows peer-reviewed pantropical allometric equations:
+
+```
+AGB = exp(-2.48 + 2.4835 * ln(DBH))     # Chave et al. (2014)
+Total Biomass = 1.24 * AGB               # Root-to-shoot ratio
+Carbon = 0.50 * Total Biomass            # IPCC carbon fraction
+CO2 Equivalent = Carbon * 3.67           # Molecular weight ratio
+Annual Sequestration = CO2 * 0.03        # Growth rate factor
 ```
 
-185+ 測試案例，涵蓋意圖分類、SQL 注入防護、API 整合、安全審計。
+**Key References:**
+- Chave, J. et al. (2014). Improved allometric models to estimate the aboveground biomass of tropical trees. *Global Change Biology*, 20(10), 3177-3190.
+- IPCC (2006). Guidelines for National Greenhouse Gas Inventories. Vol. 4: Agriculture, Forestry and Other Land Use.
+
+### DBH Measurement Method
+
+Monocular depth estimation + instance segmentation pipeline:
+1. User captures tree photo with smartphone
+2. **Depth Pro** estimates per-pixel metric depth from a single image
+3. **SAM 2.1** segments the tree trunk region
+4. Trunk width in pixels multiplied by depth gives real-world DBH (cm)
+5. EXIF focal length used for camera intrinsics when available
 
 ---
 
-## 版本紀錄
+## Database
 
-完整版本紀錄請見 [CHANGELOG.md](CHANGELOG.md)。
+### Schema (12+ tables)
 
-### 主要版本
+```
+tree_survey                  # Main tree inventory table
+tree_species                 # Species reference data
+tree_carbon_data             # Carbon coefficients by species
+project_areas                # Survey project areas
+project_boundaries           # GeoJSON polygon boundaries
+project_members              # User-project assignments
+pending_tree_measurements    # Queued measurement tasks
+tree_images                  # Photo records (Cloudinary URLs)
+ml_training_batches          # ML training data batches
+ml_training_records          # Individual training samples
+chat_logs                    # AI chat & agent conversation logs
+audit_logs                   # Security audit trail
+login_attempts               # Authentication attempt records
+```
 
-| 版本 | 日期 | 重點 |
-|------|------|------|
-| 18.5 | 2026-03-10 | 自架部署 + 自動部署 + 回滾機制 |
-| 18.4 | 2026-02-22 | Depth Pro + OpenVINO 整合 |
-| 18.3 | 2025-12-14 | 安全性 Phase 4 + 回歸測試 |
-| 18.0 | 2025-12-03 | ID 修復 + ML 訓練數據 API |
-| 16.0 | 2025-12-02 | OpenAI 兼容性修復 |
-| 15.0 | 2025-12-02 | 樹種辨識 API + Text-to-SQL 優化 |
+Migrations run automatically on startup via `scripts/migrate.js`.
 
 ---
 
-## 授權
+## License
 
-ISC License
+[MIT License](LICENSE)
 
-## 聯絡
+## Related
 
-- GitHub: [@KyleliuNDHU](https://github.com/KyleliuNDHU)
-- 專案: [tree-project-backend](https://github.com/KyleliuNDHU/tree-project-backend)
+- **Frontend:** [tree-project-frontend](https://github.com/KyleliuNDHU/tree-project-frontend) — Flutter mobile application
+- **Author:** [@KyleliuNDHU](https://github.com/KyleliuNDHU) — National Dong Hwa University
