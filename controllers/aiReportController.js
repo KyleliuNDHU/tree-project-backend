@@ -12,7 +12,7 @@ const siliconFlowClient = SF_KEY ? new OpenAI({
     baseURL: 'https://api.siliconflow.cn/v1',
 }) : null;
 
-// 報告使用的模型 (SiliconFlow 免費模型，Qwen3-235B 文本生成品質最佳)
+// 報告使用的模型 (不需要 function calling，用更強的文字生成模型)
 const REPORT_MODEL = 'Qwen/Qwen3-235B-A22B';
 
 // Simple in-memory cache
