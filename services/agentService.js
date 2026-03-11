@@ -55,11 +55,12 @@ function getNextClient() {
 // ============================================
 
 const AGENT_MODELS = {
-    // 推薦: Qwen3-235B 支援 function calling 最佳且免費
-    default: 'Qwen/Qwen3-235B-A22B',
+    // 推薦: Qwen2.5-72B function calling 最穩定且免費
+    default: 'Qwen/Qwen2.5-72B-Instruct',
     reasoning: 'Qwen/QwQ-32B',
     fast: 'Qwen/Qwen2.5-7B-Instruct',
     deepseek: 'deepseek-ai/DeepSeek-V3',
+    strong: 'Qwen/Qwen3-235B-A22B',
 };
 
 // ============================================
