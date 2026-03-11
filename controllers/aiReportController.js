@@ -1,18 +1,19 @@
 const db = require('../config/db');
-const openai = require('../services/openaiService');
+const OpenAI = require('openai');
 const PDFDocument = require('pdfkit');
 const fs = require('fs');
 const path = require('path');
 const format = require('pg-format');
 
-// Helper function: 根據模型名稱決定使用 max_tokens 或 max_completion_tokens
-// OpenAI o-系列推理模型 (o1, o3, o4) 需要使用 max_completion_tokens
-function getTokenLimitParams(modelName, tokenLimit) {
-    if (modelName && (modelName.startsWith('o1') || modelName.startsWith('o3') || modelName.startsWith('o4'))) {
-        return { max_completion_tokens: tokenLimit };
-    }
-    return { max_tokens: tokenLimit };
-}
+// 使用 SiliconFlow API (免費) 替代 OpenAI
+const SF_KEY = process.env.SiliconFlow_API_KEY || process.env.Alt1_SiliconFlow_API_KEY;
+const siliconFlowClient = SF_KEY ? new OpenAI({
+    apiKey: SF_KEY,
+    baseURL: 'https://api.siliconflow.cn/v1',
+}) : null;
+
+// 報告使用的模型 (SiliconFlow 免費模型)
+const REPORT_MODEL = 'Qwen/Qwen3-235B-A22B';
 
 // Simple in-memory cache
 const reportCache = new Map();
@@ -314,29 +315,34 @@ ${formattedDbh}
         }
 
 
-        // 調用 OpenAI API - 更換模型並稍微調整參數
-        console.log('[AI Report] Sending request to OpenAI API...');
-        const response = await openai.chat.completions.create({
-            model: "gpt-4-turbo", // 確保使用有效的模型名稱
+        // 調用 SiliconFlow API (免費替代 OpenAI)
+        if (!siliconFlowClient) {
+            return '無法生成 AI 分析報告：SiliconFlow API Key 未設定。';
+        }
+        console.log('[AI Report] Sending request to SiliconFlow API...');
+        const response = await siliconFlowClient.chat.completions.create({
+            model: REPORT_MODEL,
             messages: [{ role: "user", content: prompt }],
             temperature: 0.5,
-            ...getTokenLimitParams("gpt-4-turbo", 1500),
+            max_tokens: 2000,
         });
-        console.log('[AI Report] Received response from OpenAI API.');
+        console.log('[AI Report] Received response from SiliconFlow API.');
 
         // 檢查是否有有效的回應內容
         if (response.choices && response.choices.length > 0 && response.choices[0].message && response.choices[0].message.content) {
-            return response.choices[0].message.content.trim();
+            // Qwen3 可能帶有 <think>...</think> 標籤，需要清除
+            let content = response.choices[0].message.content.trim();
+            content = content.replace(/<think>[\s\S]*?<\/think>/g, '').trim();
+            return content;
         } else {
-            console.error('OpenAI API did not return valid content.');
+            console.error('SiliconFlow API did not return valid content.');
             return "無法生成 AI 分析報告，因為 AI 模型未返回有效內容。";
         }
     } catch (error) {
         console.error('Error generating AI analysis:', error);
-        // 提供更具體的錯誤信息
         if (error.response) {
-            console.error('OpenAI API Error Status:', error.response.status);
-            console.error('OpenAI API Error Data:', error.response.data);
+            console.error('API Error Status:', error.response.status);
+            console.error('API Error Data:', error.response.data);
         }
         return `無法生成 AI 分析報告。錯誤詳情：${error.message}`;
     }

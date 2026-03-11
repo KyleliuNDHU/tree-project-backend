@@ -55,11 +55,11 @@ function getNextClient() {
 // ============================================
 
 const AGENT_MODELS = {
-    // 推薦: 支援 function calling 且免費
-    default: 'deepseek-ai/DeepSeek-V3',
+    // 推薦: Qwen3-235B 支援 function calling 最佳且免費
+    default: 'Qwen/Qwen3-235B-A22B',
     reasoning: 'Qwen/QwQ-32B',
     fast: 'Qwen/Qwen2.5-7B-Instruct',
-    strong: 'Qwen/Qwen3-235B-A22B',
+    deepseek: 'deepseek-ai/DeepSeek-V3',
 };
 
 // ============================================
@@ -243,12 +243,15 @@ async function toolQueryTreeData({ query, project_area }) {
             return { result: '此問題不需要查詢資料庫', query };
         }
 
-        // 如果指定了區域，加入過濾
+        // 如果指定了區域，加入過濾 (透過 executeSecureQuery 的安全機制處理)
         if (project_area) {
-            if (generatedSQL.toUpperCase().includes('WHERE')) {
-                generatedSQL = generatedSQL.replace(/WHERE/i, `WHERE project_location ILIKE '%${project_area.replace(/'/g, "''")}%' AND`);
-            } else {
-                generatedSQL = generatedSQL.replace(/FROM\s+(\w+)/i, `FROM $1 WHERE project_location ILIKE '%${project_area.replace(/'/g, "''")}%'`);
+            const safeArea = project_area.replace(/[^\u4e00-\u9fff\u3400-\u4dbfa-zA-Z0-9\s]/g, '');
+            if (safeArea) {
+                if (generatedSQL.toUpperCase().includes('WHERE')) {
+                    generatedSQL = generatedSQL.replace(/WHERE/i, `WHERE project_location ILIKE '%${safeArea}%' AND`);
+                } else {
+                    generatedSQL = generatedSQL.replace(/FROM\s+(\w+)/i, `FROM $1 WHERE project_location ILIKE '%${safeArea}%'`);
+                }
             }
         }
 
@@ -508,23 +511,27 @@ async function toolCarbonCreditEstimate({ project_area, methodology = 'vcs_ar', 
 
 const AGENT_SYSTEM_PROMPT = `你是「碳匯永續智慧助理」，一個專門服務於台灣港務公司(TIPC)永續碳匯管理系統的 AI Agent。
 
-你具備以下能力:
-1. 查詢樹木資料庫 (胸徑、樹高、碳儲存、樹種分布)
-2. 計算碳匯指標 (碳儲存量、CO₂ 當量、年碳吸存)
-3. 查詢樹種碳匯參數
-4. 生成專案統計摘要
-5. 估算碳信用額度 (VCS/Gold Standard/台灣碳權)
+## 核心規則 (必須遵守)
+1. **你必須使用工具查詢數據，絕對不可以編造或猜測任何數字。**
+2. 即使是簡單的問題（例如「有多少棵樹」），也必須先調用工具取得真實數據再回答。
+3. 當使用者的問題涉及多個面向時，你應該調用多個工具分別取得數據，再綜合回答。
+4. 如果工具傳回錯誤，嘗試換一種方式查詢，或誠實告知使用者查詢失敗。
 
-使用準則:
-- 當使用者問數據問題時，使用工具查詢，不要編造數據
-- 回答時引用實際查詢結果
+## 可用工具
+1. **query_tree_data** — 查詢樹木資料庫 (胸徑、樹高、碳儲存、樹種分布等)
+2. **calculate_carbon** — 計算碳匯指標 (碳儲存量、CO₂ 當量、年碳吸存)
+3. **species_carbon_info** — 查詢特定樹種的碳匯參數
+4. **project_summary** — 取得專案區域統計摘要
+5. **carbon_credit_estimate** — 估算碳信用額度 (VCS/Gold Standard/台灣碳權)
+
+## 回答準則
+- 回答時必須引用工具返回的實際數據
 - 碳匯計算要說明使用的方法學和公式
 - 涉及碳交易時要聲明「此為估算，需經第三方驗證」
 - 用繁體中文回答，語氣專業但友善
 - 可以結合多個工具回答複雜問題
-- 如果工具傳回錯誤，嘗試換一種方式查詢或誠實告知
 
-你服務的對象包括:
+## 服務對象
 - 環境學院教授和研究生 (學術研究)
 - TIPC 永續發展部門 (碳盤查和碳交易)
 - 林業調查員 (現場數據管理)`;
@@ -584,8 +591,8 @@ async function runAgent(message, userId, chatHistory = [], options = {}) {
                 model,
                 messages,
                 tools: AGENT_TOOLS,
-                tool_choice: step === 0 ? 'auto' : 'auto',
-                temperature: 0.7,
+                tool_choice: step === 0 ? 'required' : 'auto',
+                temperature: 0.1,
                 max_tokens: 2000,
             });
 
@@ -618,7 +625,12 @@ async function runAgent(message, userId, chatHistory = [], options = {}) {
                 console.log(`[Agent] Step ${step + 1}: ${fnName}(${JSON.stringify(fnArgs).substring(0, 100)})`);
 
                 const result = await executeToolCall(fnName, fnArgs);
-                const resultStr = JSON.stringify(result).substring(0, 3000); // 限制結果大小
+                // 限制結果大小: 先截斷資料陣列，再 stringify，避免產生無效 JSON
+                let resultForMsg = result;
+                if (result && result.data && Array.isArray(result.data) && result.data.length > 50) {
+                    resultForMsg = { ...result, data: result.data.slice(0, 50), truncated: true, totalRows: result.data.length };
+                }
+                const resultStr = JSON.stringify(resultForMsg).substring(0, 4000);
 
                 allToolCalls.push({
                     tool: fnName,
@@ -637,9 +649,10 @@ async function runAgent(message, userId, chatHistory = [], options = {}) {
             
             // 如果是 API key 錯誤，嘗試切換 key
             if (err.status === 401 || err.status === 429) {
-                const newClient = getNextClient();
-                if (newClient) {
-                    siliconFlowClient = newClient;
+                const nextClient = getNextClient();
+                if (nextClient) {
+                    // 使用局部 client 變數避免模組級變數的競態問題
+                    Object.assign(client, { apiKey: SF_KEYS[currentKeyIndex] });
                     console.log(`[Agent] 切換到備用 SiliconFlow API Key (index ${currentKeyIndex})`);
                     continue; // 重試這一步
                 }
@@ -665,7 +678,7 @@ async function runAgent(message, userId, chatHistory = [], options = {}) {
                 ...messages,
                 { role: 'user', content: '請根據以上工具結果，給出最終的完整回答。' },
             ],
-            temperature: 0.7,
+            temperature: 0.3,
             max_tokens: 2000,
         });
         return {
