@@ -592,7 +592,7 @@ async function runAgent(message, userId, chatHistory = [], options = {}) {
                 model,
                 messages,
                 tools: AGENT_TOOLS,
-                tool_choice: step === 0 ? 'required' : 'auto',
+                tool_choice: 'auto',
                 temperature: 0.1,
                 max_tokens: 2000,
             });
