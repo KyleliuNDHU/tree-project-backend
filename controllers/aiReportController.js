@@ -13,7 +13,7 @@ const siliconFlowClient = SF_KEY ? new OpenAI({
 }) : null;
 
 // 報告使用的模型 (不需要 function calling，用更強的文字生成模型)
-const REPORT_MODEL = 'Qwen/Qwen3-235B-A22B';
+const REPORT_MODEL = 'Qwen/Qwen3-235B-A22B-Instruct-2507';
 
 // Simple in-memory cache
 const reportCache = new Map();

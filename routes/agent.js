@@ -28,7 +28,7 @@ const agentLimiter = rateLimit({
 // ============================================
 router.post('/chat', requireRole('調查管理員'), agentLimiter, async (req, res) => {
     try {
-        const userId = req.user.id;
+        const userId = req.user.user_id;
         const { message, sessionId, model } = req.body;
 
         if (!message || typeof message !== 'string' || message.trim().length === 0) {
@@ -108,7 +108,7 @@ router.post('/chat', requireRole('調查管理員'), agentLimiter, async (req, r
 // GET /agent/status - Agent 狀態
 // ============================================
 router.get('/status', requireRole('調查管理員'), (req, res) => {
-    const userId = req.user.id;
+    const userId = req.user.user_id;
     const hasBudget = checkTokenBudget(userId);
     const sfConfigured = !!(
         process.env.SiliconFlow_API_KEY ||

@@ -89,13 +89,16 @@ router.get('/status', async (req, res) => {
             });
         }
 
-        // 把 Render 上的環境變數派發給前端 App
+        // 派發 ML 設定給前端 App
+        // ML_SERVICE_PUBLIC_URL: 給 App 用的公開 URL（ngrok / Tailscale Funnel）
+        // ML_SERVICE_URL: 給後端 proxy 用的內部 URL（Tailscale 直連）
+        const publicUrl = process.env.ML_SERVICE_PUBLIC_URL || mlUrl;
         return res.json({
             success: true,
             configured: true,
-            ml_service_url: mlUrl,
-            ml_api_key: mlApiKey, // 前端會拿到這個 key 去連線家裡的電腦
-            online: true,         // 前端拿到網址後自己去測
+            ml_service_url: publicUrl,
+            ml_api_key: mlApiKey,
+            online: true,
         });
     } catch (err) {
         console.error('[ML Proxy] /status error:', err);

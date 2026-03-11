@@ -169,9 +169,11 @@ router.post('/login', loginLimiter, async (req, res) => {
         }
 
         // ML Service 設定（所有已登入使用者都可取得，確保 App 無需手動設定）
+        // 優先用公開 URL（ngrok/Funnel），讓手機 App 能直接連線
         const mlConfig = {};
-        if (process.env.ML_SERVICE_URL) {
-            mlConfig.url = process.env.ML_SERVICE_URL;
+        const mlPublicUrl = process.env.ML_SERVICE_PUBLIC_URL || process.env.ML_SERVICE_URL;
+        if (mlPublicUrl) {
+            mlConfig.url = mlPublicUrl;
         }
         if (process.env.ML_API_KEY) {
             mlConfig.apiKey = process.env.ML_API_KEY;

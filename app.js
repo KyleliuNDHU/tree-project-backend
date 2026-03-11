@@ -78,7 +78,15 @@ app.use(cors({
     allowedHeaders: ['Content-Type', 'Authorization', 'X-Admin-Token', 'X-API-Key'],
 }));
 app.use(helmet());
-app.use(express.json({ limit: '10mb' })); // 縮小到 10MB，防止 DoS
+app.use(express.json({
+    limit: '10mb',
+    // 保存 raw body 供 webhook 簽名驗證使用
+    verify: (req, _res, buf) => {
+        if (req.originalUrl && req.originalUrl.startsWith('/webhook')) {
+            req.rawBody = buf;
+        }
+    },
+}));
 app.use(express.urlencoded({ extended: true, limit: '10mb' }));
 
 // --- 路由 (Routes) ---

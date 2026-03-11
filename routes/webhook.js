@@ -22,6 +22,7 @@ const DEPLOY_SCRIPT = path.resolve(__dirname, '../scripts/deploy.sh');
 
 /**
  * 驗證 GitHub webhook 簽名 (HMAC-SHA256)
+ * 使用 rawBody (由 express.json verify 回調儲存) 避免重新序列化差異
  */
 function verifySignature(req) {
     const secret = process.env.DEPLOY_WEBHOOK_SECRET;
@@ -30,10 +31,15 @@ function verifySignature(req) {
     const signature = req.headers['x-hub-signature-256'];
     if (!signature) return false;
 
-    const body = JSON.stringify(req.body);
+    // 優先使用原始 body bytes，避免 JSON 序列化差異
+    const body = req.rawBody || JSON.stringify(req.body);
     const expected = 'sha256=' + crypto.createHmac('sha256', secret).update(body).digest('hex');
 
-    return crypto.timingSafeEqual(Buffer.from(signature), Buffer.from(expected));
+    try {
+        return crypto.timingSafeEqual(Buffer.from(signature), Buffer.from(expected));
+    } catch {
+        return false;
+    }
 }
 
 /**
