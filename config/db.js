@@ -1,7 +1,7 @@
 const { Pool } = require('pg');
 require('dotenv').config();
 
-// SSL 設定：生產環境應設定 DB_SSL_REJECT_UNAUTHORIZED=true（預設 false 以相容 Render）
+// SSL 設定：生產環境應設定 DB_SSL_REJECT_UNAUTHORIZED=true
 const sslConfig = process.env.DATABASE_URL
   ? {
       rejectUnauthorized: process.env.DB_SSL_REJECT_UNAUTHORIZED === 'true',

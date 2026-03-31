@@ -98,11 +98,10 @@ def create_result_image(original: Image.Image,
               fill=(255, 255, 0), width=2)
 
     # Add text annotations at bottom
-    # Try multiple font paths (Linux/Render, macOS, Windows)
+    # Try multiple font paths (Linux, macOS, Windows)
     font = None
     font_small = None
     for font_path in [
-        "/opt/render/project/src/../Noto_Sans_TC/static/NotoSansTC-Regular.ttf",
         "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
         "/usr/share/fonts/truetype/liberation/LiberationSans-Regular.ttf",
         "arial.ttf",

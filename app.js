@@ -42,8 +42,7 @@ const app = express();
     }
 })();
 
-// 設定信任反向代理，修復 express-rate-limit 在 Render.com 上的問題
-// 數字 1 表示信任第一個躍點的代理
+// 設定信任反向代理（Nginx / Tailscale Funnel 等反向代理）
 app.set('trust proxy', 1);
 
 // 健康檢查端點 (Health Check)

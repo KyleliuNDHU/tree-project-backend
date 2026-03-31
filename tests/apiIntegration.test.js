@@ -8,7 +8,7 @@
 
 const https = require('https');
 
-const BASE_URL = 'https://tree-app-backend-prod.onrender.com/api';
+const BASE_URL = process.env.TEST_BASE_URL || 'https://richardhualienserver.tail124a1b.ts.net/api';
 const TEST_USER_ID = 'test-' + Date.now();
 const VERBOSE = process.argv.includes('-v') || process.argv.includes('--verbose');
 

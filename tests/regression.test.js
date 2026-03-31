@@ -41,7 +41,7 @@ const VERBOSE = ARGS.includes('--verbose') || ARGS.includes('-v');
 const SECTION = ARGS.find(a => a.startsWith('--section='))?.split('=')[1];
 
 const BASE_URL = process.env.TEST_BASE_URL || 
-    (IS_LOCAL ? 'http://localhost:3001/api' : 'https://tree-app-backend-prod.onrender.com/api');
+    (IS_LOCAL ? 'http://localhost:3001/api' : 'https://richardhualienserver.tail124a1b.ts.net/api');
 
 const TEST_ADMIN_USER = process.env.TEST_ADMIN_USER || 'admin';
 const TEST_ADMIN_PASS = process.env.TEST_ADMIN_PASS || '12345';

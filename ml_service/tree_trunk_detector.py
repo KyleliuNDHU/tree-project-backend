@@ -507,10 +507,7 @@ def create_detection_visualization(image: 'Image.Image',
     import os as _os
     script_dir = _os.path.dirname(_os.path.abspath(__file__))
     for font_path in [
-        # Render deployment path
-        "/opt/render/project/src/../Noto_Sans_TC/static/NotoSansTC-Regular.ttf",
-        "/opt/render/project/src/Noto_Sans_TC/static/NotoSansTC-Regular.ttf",
-        # Local dev: font is in backend/Noto_Sans_TC/
+        # Self-hosted server / local dev: font is in backend/Noto_Sans_TC/
         _os.path.join(script_dir, "..", "Noto_Sans_TC", "static", "NotoSansTC-Regular.ttf"),
         # System fonts
         "/usr/share/fonts/truetype/noto/NotoSansCJK-Regular.ttc",

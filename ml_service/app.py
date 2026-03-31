@@ -47,7 +47,7 @@ if not ML_API_KEY:
 ALLOWED_ORIGINS = [
     o.strip() for o in os.environ.get(
         "ML_CORS_ORIGINS",
-        "http://localhost:3000,http://localhost:8080,https://tree-app-backend-prod.onrender.com"
+        "http://localhost:3000,http://localhost:8080,https://richardhualienserver.tail124a1b.ts.net"
     ).split(",") if o.strip() and o.strip() != "*"
 ]
 
