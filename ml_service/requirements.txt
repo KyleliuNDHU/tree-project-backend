@@ -24,7 +24,9 @@ openvino>=2025.0
 
 # SAM 2.1 Segmentation
 # Pixel-perfect trunk segmentation. Set ML_ENABLE_SAM=true to enable.
-# sam2               # Or install from source: pip install -e ./sam2
+# Option A: HuggingFace transformers (already included above, uses Sam2Model)
+# Option B: Native Facebook SAM2 package (requires Python>=3.10, PyTorch>=2.5.1)
+sam2
 
 # Ellipse fitting for trunk cross-section
 scikit-image>=0.21.0

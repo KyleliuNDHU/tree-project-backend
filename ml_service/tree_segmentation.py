@@ -3,22 +3,16 @@ Tree Segmentation Service (SAM 2.1 Integration)
 =================================================
 Provides pixel-perfect tree trunk segmentation using SAM 2.1.
 
-STATUS: SKELETON — SAM 2.1 is NOT yet installed.
-This file is ready to use once you install SAM 2.1.
+STATUS: READY — Full implementation with fallback chain.
 
-INSTALLATION:
-  pip install sam2                    # Requires Python>=3.10, PyTorch>=2.5.1
-  # OR from source for latest:
-  git clone https://github.com/facebookresearch/sam2.git
-  cd sam2 && pip install -e .
-  # Download checkpoint:
-  cd checkpoints && ./download_ckpts.sh
+ENABLEMENT:
+  1. pip install sam2  (or install transformers>=4.45.0 for HuggingFace path)
+  2. Set ML_ENABLE_SAM=true (start.ps1 does this by default)
+  3. Set ML_SEG_MODEL=sam2_tiny (start.ps1 does this by default)
+  4. Model weights auto-download from facebook/sam2.1-hiera-tiny on first run
 
-ACTIVATION:
-  1. Install SAM 2.1 (above)
-  2. Set environment variable: ML_ENABLE_SAM=true
-  3. Restart the ML service
-  4. (Optional) Set ML_SEG_MODEL=sam2_tiny in model_registry.py
+FALLBACK CHAIN:
+  SAM2ImagePredictor (OpenVINO/Hybrid) → HuggingFace Sam2Model → Depth heuristic
 
 STRATEGIES:
   A. Auto-prompt: depth map → find foreground center → SAM point prompt

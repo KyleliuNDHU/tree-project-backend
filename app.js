@@ -106,8 +106,8 @@ const carbonRoutes = require('./routes/carbon');
 const adminRoutes = require('./routes/admin');
 const locationRoutes = require('./routes/location');
 const managementRoutes = require('./routes/management');
-const carbonDataRoutes = require('./routes/carbon_data'); // 引入新的路由
-const knowledgeRoutes = require('./routes/knowledge'); // 引入知識庫路由
+const carbonDataRoutes = require('./routes/carbon_data'); 
+const knowledgeRoutes = require('./routes/knowledge'); 
 const speciesIdentificationRoutes = require('./routes/speciesIdentification'); // 樹種辨識路由
 const pendingMeasurementsRoutes = require('./routes/pending_measurements'); // 待測量樹木路由
 const projectBoundariesRoutes = require('./routes/project_boundaries'); // V3 專案邊界路由
@@ -170,7 +170,7 @@ app.use((err, req, res, next) => {
 // --- 啟動伺服器 ---
 const PORT = process.env.PORT || 3000;
 
-// 產環必要環境變數檢查
+// 必要環境變數檢查
 if (process.env.NODE_ENV === 'production') {
     const required = ['DATABASE_URL', 'JWT_SECRET'];
     const missing = required.filter(key => !process.env[key]);

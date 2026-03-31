@@ -12,7 +12,7 @@
 
 param(
     [ValidateSet('default', 'pro', 'openvino', 'pro_ov')]
-    [string]$Preset = 'default',
+    [string]$Preset = 'pro_ov',
 
     [switch]$Verify,
     [switch]$Debug,

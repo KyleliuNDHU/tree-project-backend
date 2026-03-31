@@ -107,9 +107,9 @@ router.post('/chat', requireRole('調查管理員'), agentLimiter, async (req, r
 // ============================================
 // GET /agent/status - Agent 狀態
 // ============================================
-router.get('/status', requireRole('調查管理員'), (req, res) => {
+router.get('/status', requireRole('調查管理員'), async (req, res) => {
     const userId = req.user.user_id;
-    const hasBudget = checkTokenBudget(userId);
+    const hasBudget = await checkTokenBudget(userId);
     const sfConfigured = !!(
         process.env.SiliconFlow_API_KEY ||
         process.env.Alt1_SiliconFlow_API_KEY

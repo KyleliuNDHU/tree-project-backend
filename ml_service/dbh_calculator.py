@@ -476,7 +476,7 @@ def cylindrical_correction(chord_length_m: float,
     A camera looking at a cylinder sees a chord, not the full diameter.
     The chord is always shorter than the diameter.
 
-    Formula (Xiang et al. 2025):
+    Standard tangent-to-cylinder geometry (cf. Xiang et al. 2025):
         d = l * p / sqrt(p² - l²/4)
 
     Where:
