@@ -212,18 +212,13 @@ const AGENT_TOOLS = [
         type: 'function',
         function: {
             name: 'carbon_credit_estimate',
-            description: '估算樹木碳匯效益與減碳貢獻。根據調查資料，以國際認可的方法學(VCS造林再造林、黃金標準、台灣抵換專案)評估林木碳吸存潛力與環境效益，適用於永續發展學術研究與環境評估報告。',
+            description: '統計樹木碳匯效益。根據調查資料彙總碳儲存量與 CO₂ 當量，計算方法基於 Chave et al. (2014) 方程。僅提供碳吸存量科學統計，不提供碳權定價或方法學折減率（實際碳信用額度需經授權驗證機構 VVB 核證）。',
             parameters: {
                 type: 'object',
                 properties: {
                     project_area: {
                         type: 'string',
                         description: '專案區域名稱',
-                    },
-                    methodology: {
-                        type: 'string',
-                        enum: ['vcs_ar', 'gold_standard', 'taiwan_offset'],
-                        description: '評估方法學: vcs_ar (VCS 造林再造林方法學), gold_standard (黃金標準環境認證), taiwan_offset (台灣環境部碳費配套)',
                     },
                     period_years: {
                         type: 'number',
@@ -454,8 +449,11 @@ async function toolProjectSummary({ project_area }) {
     }
 }
 
-// --- Tool: carbon_credit_estimate ---
-async function toolCarbonCreditEstimate({ project_area, methodology = 'vcs_ar', period_years = 10 }) {
+// --- Tool: carbon_credit_estimate (已重構：僅提供碳吸存科學統計) ---
+// [2026-04-13] 移除原先未經驗證的方法學折減率(VCS/Gold Standard/台灣抵換)及碳權定價。
+// 原因：Gold Standard 無 buffer pool 機制，VCS 折減率因專案而異(10-60%)，
+//       碳價數據無明確出處。改為僅回傳碳儲存量與 CO₂ 當量的科學計算結果。
+async function toolCarbonCreditEstimate({ project_area, period_years = 10 }) {
     try {
         let whereClause = '';
         const params = [];
@@ -482,43 +480,17 @@ async function toolCarbonCreditEstimate({ project_area, methodology = 'vcs_ar', 
         const totalCarbonKg = parseFloat(stats.total_carbon_kg) || 0;
         const annualSeqKg = parseFloat(stats.annual_seq_kg) || 0;
 
-        // CO2 當量
+        // CO2 當量 (分子量比 44/12 = 3.667)
         const currentCO2_ton = (totalCarbonKg * 3.667) / 1000;
         const annualCO2_ton = (annualSeqKg * 3.667) / 1000;
         const periodCO2_ton = annualCO2_ton * period_years;
 
-        // 方法學差異
-        const methodologies = {
-            vcs_ar: {
-                name: 'VCS 造林/再造林 (AR-ACM0003)',
-                discount: 0.80, // 20% buffer pool
-                price_usd: { min: 5, max: 15 },
-                description: '國際自願碳市場最廣泛使用的方法學',
-            },
-            gold_standard: {
-                name: 'Gold Standard 碳信用',
-                discount: 0.75,
-                price_usd: { min: 10, max: 30 },
-                description: '環境和社會效益的最高標準',
-            },
-            taiwan_offset: {
-                name: '台灣碳權抵換 (國內碳費)',
-                discount: 0.90,
-                price_usd: { min: 3, max: 10 },
-                description: '依據台灣環境部碳費徵收配套',
-            },
-        };
-
-        const method = methodologies[methodology] || methodologies.vcs_ar;
-        const creditableCO2 = periodCO2_ton * method.discount;
-        const usdToTwd = 32;
-
         return {
             project: project_area || '全部區域',
             tree_count: parseInt(stats.tree_count),
+            avg_dbh_cm: parseFloat(stats.avg_dbh) || 0,
             period_years,
-            methodology: method.name,
-            methodology_description: method.description,
+            methodology: 'Chave et al. (2014) 泛熱帶方程 + IPCC (2006) 碳含量係數',
             current_stock: {
                 carbon_ton: Math.round(totalCarbonKg / 1000 * 100) / 100,
                 co2_equivalent_ton: Math.round(currentCO2_ton * 100) / 100,
@@ -526,17 +498,10 @@ async function toolCarbonCreditEstimate({ project_area, methodology = 'vcs_ar', 
             projected: {
                 annual_co2_ton: Math.round(annualCO2_ton * 100) / 100,
                 period_co2_ton: Math.round(periodCO2_ton * 100) / 100,
-                creditable_co2_ton: Math.round(creditableCO2 * 100) / 100,
-                buffer_deduction: `${((1 - method.discount) * 100).toFixed(0)}%`,
             },
-            value_estimate: {
-                min_usd: Math.round(creditableCO2 * method.price_usd.min),
-                max_usd: Math.round(creditableCO2 * method.price_usd.max),
-                min_twd: Math.round(creditableCO2 * method.price_usd.min * usdToTwd),
-                max_twd: Math.round(creditableCO2 * method.price_usd.max * usdToTwd),
-                carbon_price_range: `USD ${method.price_usd.min}-${method.price_usd.max}/tCO₂e`,
-            },
-            disclaimer: '此為估算值，實際碳信用額度需經授權驗證機構 (VVB) 查驗及核證。碳價參考國際市場行情，可能隨時變動。',
+            note: '碳儲存量基於 Chave et al. (2014) 方程計算，CO₂ 當量以分子量比 44/12 換算。'
+                + '實際碳信用額度需經授權驗證機構 (VVB) 依特定方法學核證後方可取得，'
+                + '本系統不提供碳權定價或方法學折減率估算。',
         };
     } catch (err) {
         return { error: err.message };
@@ -560,13 +525,14 @@ const AGENT_SYSTEM_PROMPT = `你是「碳匯永續智慧助理」，一個專門
 2. **calculate_carbon** — 計算碳匯指標 (碳儲存量、CO₂ 當量、年碳吸存)
 3. **species_carbon_info** — 查詢特定樹種的碳匯參數
 4. **project_summary** — 取得專案區域統計摘要
-5. **carbon_credit_estimate** — 評估樹木碳匯效益與減碳貢獻 (VCS/Gold Standard/台灣抵換)
+5. **carbon_credit_estimate** — 統計樹木碳匯效益 (碳儲存量與 CO₂ 當量，不含碳權定價)
 
 ## 回答準則
 - 回答時必須引用工具返回的實際數據
 - 碳匯計算要說明使用的方法學和公式
 - 涉及碳匯效益評估時要聲明「此為學術估算，需經第三方驗證」
-- 當使用者詢問「碳權」「碳匯價值」「減碳效益」「碳吸存評估」等問題時，務必調用 carbon_credit_estimate 工具
+- 當使用者詢問「碳匯」「減碳效益」「碳吸存評估」「碳儲存統計」等問題時，務必調用 carbon_credit_estimate 工具
+- 若使用者詢問「碳權價格」「碳交易價值」等碳權定價問題，應說明本系統僅提供碳吸存量科學統計，碳信用額度與定價需經授權驗證機構 (VVB) 核證
 - 用繁體中文回答，語氣專業但友善
 - 可以結合多個工具回答複雜問題
 
