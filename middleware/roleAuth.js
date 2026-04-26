@@ -45,23 +45,17 @@ function hasMinimumRole(userRole, requiredRole) {
 /**
  * 角色權限中間件工廠
  * 產生一個中間件，要求使用者角色 >= 指定的最低角色
- * 
- * 也支援 X-Admin-Token（僅透過 Header，給腳本/API 使用，視為系統管理員）
- * 
+ *
+ * [T2 / 2026-04-27] 移除 X-Admin-Token fallback。
+ * 原因：hard-coded API token 在 admin UI 及腳本裡文本儲存、無法輪換、不能連到個人。
+ * 現在全面改用 JWT + role 驗證。唯一例外是 /webhook/status（GitHub auto-deploy
+ * 部署診斷）仍走 token，與 admin UI 完全無關。
+ *
  * @param {string} minimumRole - 最低要求角色
  * @returns {Function} Express 中間件
  */
 function requireRole(minimumRole) {
     return (req, res, next) => {
-        // 1. X-Admin-Token 驗證（僅 Header，不接受 query string 避免 token 洩漏）
-        const token = req.headers['x-admin-token'];
-        const validToken = process.env.ADMIN_API_TOKEN;
-        if (token && validToken && safeCompare(token, validToken)) {
-            req.isAdmin = true;
-            return next();
-        }
-
-        // 2. JWT 使用者角色檢查
         if (!req.user || !req.user.role) {
             return res.status(401).json({
                 success: false,
@@ -81,21 +75,6 @@ function requireRole(minimumRole) {
         req.isAdmin = getRoleLevel(userRole) >= getRoleLevel('專案管理員');
         next();
     };
-}
-
-/**
- * 常數時間字串比較，防止 timing attack
- */
-function safeCompare(a, b) {
-    const crypto = require('crypto');
-    if (typeof a !== 'string' || typeof b !== 'string') return false;
-    if (a.length !== b.length) {
-        // 長度不同時仍做一次比較避免洩漏長度資訊
-        const dummy = Buffer.alloc(a.length, 0);
-        crypto.timingSafeEqual(dummy, Buffer.from(a));
-        return false;
-    }
-    return crypto.timingSafeEqual(Buffer.from(a), Buffer.from(b));
 }
 
 module.exports = {
