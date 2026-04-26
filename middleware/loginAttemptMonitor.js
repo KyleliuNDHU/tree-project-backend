@@ -9,6 +9,7 @@
 
 const db = require('../config/db');
 const AuditLogService = require('../services/auditLogService');
+const { recordLoginFailureIP } = require('../services/ipBlacklistService');
 
 // 設�?
 const MAX_LOGIN_ATTEMPTS = 5;
@@ -18,6 +19,14 @@ const LOCKOUT_DURATION_MINUTES = 30;
  * 記�??�入失�?
  */
 async function recordLoginFailure(username, req) {
+    // [T8.2] 同步記錄 IP 失敗計數（用於分散帳號的 brute force 偵測）
+    // fire-and-forget — 不要因為 IP 紀錄失敗而擋下既有帳號層流程
+    if (req && req.ip) {
+        recordLoginFailureIP(req.ip, req).catch((e) =>
+            console.error('[LoginMonitor] recordLoginFailureIP failed:', e.message)
+        );
+    }
+
     try {
         const result = await db.query(
             `UPDATE users 

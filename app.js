@@ -3,13 +3,15 @@ const express = require('express');
 const cors = require('cors');
 const helmet = require('helmet');
 const path = require('path');
-const { apiLimiter, loginLimiter } = require('./middleware/rateLimiter');
+const { apiLimiter, burstLimiter, loginLimiter } = require('./middleware/rateLimiter');
 const { jwtAuth } = require('./middleware/jwtAuth');
+const { ipBlacklistGuard } = require('./middleware/ipBlacklistGuard');
 const {
     cleanupUnusedProjectAreas,
     cleanupUnusedSpecies,
     cleanupOrphanedPlaceholders,
-    cleanupOldChatLogs
+    cleanupOldChatLogs,
+    cleanupOldLoginAttempts
 } = require('./utils/cleanup');
 const { scheduledSynonymMaintenance } = require('./services/speciesSynonymService');
 const migrate = require('./scripts/migrate'); // Import migration script
@@ -145,7 +147,8 @@ const webhookRoutes = require('./routes/webhook');
 app.use('/webhook', webhookRoutes);
 
 // 將所有 API 路由應用速率限制並掛載到 /api
-app.use('/api', apiLimiter, jwtAuth, apiRouter);
+// 順序：ipBlacklistGuard（IP 黑名單）→ burstLimiter（10秒爆量）→ apiLimiter（一般 rate limit）→ jwtAuth → 路由
+app.use('/api', ipBlacklistGuard, burstLimiter, apiLimiter, jwtAuth, apiRouter);
 
 
 // --- 靜態檔案服務 (可選) ---
@@ -192,6 +195,7 @@ app.listen(PORT, () => {
         try { await cleanupUnusedSpecies(); } catch (e) { console.error('[Scheduler] cleanupUnusedSpecies error:', e.message); }
         try { await cleanupUnusedProjectAreas(); } catch (e) { console.error('[Scheduler] cleanupUnusedProjectAreas error:', e.message); }
         try { await cleanupOldChatLogs(); } catch (e) { console.error('[Scheduler] cleanupOldChatLogs error:', e.message); }
+        try { await cleanupOldLoginAttempts(); } catch (e) { console.error('[Scheduler] cleanupOldLoginAttempts error:', e.message); }
         try { await scheduledSynonymMaintenance(); } catch (e) { console.error('[Scheduler] scheduledSynonymMaintenance error:', e.message); }
         console.log('[Scheduler] Hourly cleanup tasks finished.');
     }, cleanupInterval);

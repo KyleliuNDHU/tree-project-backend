@@ -1,4 +1,5 @@
 const db = require('../config/db');
+const { cleanupOldLoginAttempts } = require('../services/ipBlacklistService');
 
 const cleanupUnusedProjectAreas = async () => {
   try {
@@ -94,4 +95,5 @@ module.exports = {
     cleanupUnusedSpecies,
     cleanupOrphanedPlaceholders,
     cleanupOldChatLogs,
+    cleanupOldLoginAttempts,
 };
