@@ -88,6 +88,21 @@ async function initTable() {
 (async () => {
   await initTable();
 
+  // [T6][Phase1.5] 補上 updated_at 欄位 + trigger，為樂觀鎖使用
+  try {
+    await pool.query(`
+      ALTER TABLE pending_tree_measurements
+        ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ NOT NULL DEFAULT now();
+      DROP TRIGGER IF EXISTS pending_measurements_set_updated_at ON pending_tree_measurements;
+      CREATE TRIGGER pending_measurements_set_updated_at
+        BEFORE UPDATE ON pending_tree_measurements
+        FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
+    `);
+    console.log('[pending-measurements] updated_at column + trigger ready');
+  } catch (e) {
+    console.warn('[pending-measurements] updated_at migration skipped:', e.message);
+  }
+
   try {
     await pool.query(`
       DO $$
@@ -407,65 +422,123 @@ router.get('/:id', async (req, res) => {
 /**
  * PATCH /api/pending-measurements/:id
  * 更新測量結果
+ * [T6][Phase1.5] 支援樂觀鎖：body.expected_updated_at 不符 → 409；row 不存在 → 410
+ * 不送 expected_updated_at 時退化舊行為（向後相容）
  */
 router.patch('/:id', async (req, res) => {
   const { id } = req.params;
   const updates = req.body;
-  
+  const expectedUpdatedAt = updates.expected_updated_at;
+
   const allowedFields = [
     'status', 'measured_dbh_cm', 'measurement_confidence',
     'measurement_method', 'measurement_notes', 'completed_at',
     'assigned_to', 'species_name', 'measurement_type',
     'project_area', 'project_code', 'project_name'
   ];
-  
+
   const setClauses = [];
   const values = [];
   let paramIndex = 1;
-  
+
   for (const field of allowedFields) {
     if (updates[field] !== undefined) {
       setClauses.push(`${field} = $${paramIndex++}`);
       values.push(updates[field]);
     }
   }
-  
+
   if (setClauses.length === 0) {
-    return res.status(400).json({ 
-      success: false, 
-      message: '沒有可更新的欄位' 
+    return res.status(400).json({
+      success: false,
+      message: '沒有可更新的欄位'
     });
   }
-  
-  values.push(id);
-  
+
   try {
-    const result = await pool.query(`
-      UPDATE pending_tree_measurements 
-      SET ${setClauses.join(', ')}
-      WHERE id = $${paramIndex}
-      RETURNING *
-    `, values);
-    
-    if (result.rows.length === 0) {
-      return res.status(404).json({ 
-        success: false, 
-        message: '記錄不存在' 
+    // [T6] 先查存在：不在 → 410 DELETED
+    const existing = await pool.query(
+      'SELECT * FROM pending_tree_measurements WHERE id = $1',
+      [id]
+    );
+    if (existing.rows.length === 0) {
+      return res.status(410).json({
+        success: false,
+        code: 'DELETED',
+        message: '資料已不存在或已被刪除'
       });
     }
-    
+
+    // [T6] 樂觀鎖比對
+    if (expectedUpdatedAt) {
+      const serverTs = new Date(existing.rows[0].updated_at).getTime();
+      const clientTs = new Date(expectedUpdatedAt).getTime();
+      if (Number.isFinite(serverTs) && Number.isFinite(clientTs) && serverTs !== clientTs) {
+        return res.status(409).json({
+          success: false,
+          code: 'CONFLICT',
+          message: '資料已被其他人修改，請重新整理',
+          serverVersion: existing.rows[0]
+        });
+      }
+    }
+
+    values.push(id);
+    const idIdx = paramIndex++;
+    let sql;
+    if (expectedUpdatedAt) {
+      values.push(expectedUpdatedAt);
+      const tsIdx = paramIndex++;
+      sql = `
+        UPDATE pending_tree_measurements
+        SET ${setClauses.join(', ')}
+        WHERE id = $${idIdx} AND updated_at = $${tsIdx}
+        RETURNING *
+      `;
+    } else {
+      sql = `
+        UPDATE pending_tree_measurements
+        SET ${setClauses.join(', ')}
+        WHERE id = $${idIdx}
+        RETURNING *
+      `;
+    }
+
+    const result = await pool.query(sql, values);
+
+    if (result.rows.length === 0) {
+      // SELECT 和 UPDATE 之間被動過 → 重查判斷 410 / 409
+      const recheck = await pool.query(
+        'SELECT * FROM pending_tree_measurements WHERE id = $1',
+        [id]
+      );
+      if (recheck.rows.length === 0) {
+        return res.status(410).json({
+          success: false,
+          code: 'DELETED',
+          message: '資料已不存在或已被刪除'
+        });
+      }
+      return res.status(409).json({
+        success: false,
+        code: 'CONFLICT',
+        message: '資料已被其他人修改，請重新整理',
+        serverVersion: recheck.rows[0]
+      });
+    }
+
     res.json({
       success: true,
       message: '更新成功',
       data: result.rows[0]
     });
-    
+
   } catch (error) {
     console.error('[pending-measurements] 更新失敗:', error);
-    res.status(500).json({ 
-      success: false, 
+    res.status(500).json({
+      success: false,
       message: '更新失敗',
-      error: '操作失敗，請稍後再試' 
+      error: '操作失敗，請稍後再試'
     });
   }
 });
