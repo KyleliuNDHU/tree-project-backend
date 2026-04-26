@@ -368,31 +368,7 @@ async function test_CreateTreeV2() {
     };
 }
 
-async function test_CreateTreeLegacy() {
-    const treeData = {
-        project_location: `測試區域Legacy_${TEST_ID}`,
-        project_code: `LEGACY_${TEST_ID}`,
-        project_name: `Legacy測試專案_${TEST_ID}`,
-        species_name: 'Legacy測試樹種',
-        x_coord: 121.5655,
-        y_coord: 25.0331,
-        tree_height_m: 12.0,
-        dbh_cm: 30.5,
-        status: '良好',
-        survey_notes: 'Legacy API 測試'
-    };
-    
-    const r = await api.post('tree_survey', treeData, adminToken);
-    
-    if (r.statusCode !== 201 && r.statusCode !== 200) {
-        throw new Error(`HTTP ${r.statusCode}: ${JSON.stringify(r.body)}`);
-    }
-    
-    return { 
-        details: `Created via Legacy API: ID=${r.body.id || r.body.data?.id}`,
-        response: r.body
-    };
-}
+// [T6 cleanup] test_CreateTreeLegacy / test_UpdateTreeLegacy 已移除，後端 V1 routes 已刪
 
 async function test_GetTreeById() {
     if (!createdTreeId) {
@@ -433,24 +409,6 @@ async function test_UpdateTreeV2() {
         details: `Updated tree ${createdTreeId}`,
         response: r.body
     };
-}
-
-async function test_UpdateTreeLegacy() {
-    if (!createdTreeId) {
-        throw new Error('No tree ID available');
-    }
-    
-    const updateData = {
-        survey_notes: 'Legacy API 更新測試'
-    };
-    
-    const r = await api.put(`tree_survey/${createdTreeId}`, updateData, adminToken);
-    
-    if (r.statusCode !== 200) {
-        throw new Error(`HTTP ${r.statusCode}`);
-    }
-    
-    return { details: `Updated via Legacy API` };
 }
 
 async function test_DeleteTree() {
@@ -872,10 +830,8 @@ async function main() {
         section('樹木 CRUD 測試 (Tree Operations)');
         await runTest('取得所有樹木', test_GetAllTrees);
         await runTest('新增樹木 (V2 API)', test_CreateTreeV2);
-        await runTest('新增樹木 (Legacy API)', test_CreateTreeLegacy);
         await runTest('依 ID 查詢樹木', test_GetTreeById);
         await runTest('更新樹木 (V2 API)', test_UpdateTreeV2);
-        await runTest('更新樹木 (Legacy API)', test_UpdateTreeLegacy);
         await runTest('刪除樹木', test_DeleteTree);
         await runTest('確認刪除成功', test_VerifyTreeDeleted);
     }
