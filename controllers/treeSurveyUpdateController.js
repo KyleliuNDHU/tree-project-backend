@@ -31,23 +31,42 @@ exports.updateTreeV2 = async (req, res) => {
             survey_time,
             carbon_storage,
             carbon_sequestration_per_year,
+            expected_updated_at, // [T6] 樂觀鎖：前端編輯前讀到的 updated_at
         } = req.body;
 
-        // 檢查至少有一項可更新的數據
-        const bodyKeys = Object.keys(req.body);
+        // [T6] expected_updated_at 不算「要更新的欄位」
+        const bodyKeys = Object.keys(req.body).filter(k => k !== 'expected_updated_at');
         if (bodyKeys.length === 0) {
             return res.status(400).json({ success: false, message: '沒有提供要更新的資料' });
         }
 
         await client.query('BEGIN');
 
-        // 首先，檢查該樹木記錄是否存在
-        const checkExist = await client.query('SELECT id, project_code FROM tree_survey WHERE id = $1', [id]);
+        // [T6] 取整列 + updated_at，用於樂觀鎖比對 + 衝突時回傳 server 版本給前端
+        const checkExist = await client.query('SELECT * FROM tree_survey WHERE id = $1', [id]);
         if (checkExist.rows.length === 0) {
             await client.query('ROLLBACK');
-            return res.status(404).json({ success: false, message: '找不到指定的樹木資料' });
+            // S5：A 刪了 / B 改 → 410 Gone（前端應提示「資料已被刪除」）
+            return res.status(410).json({ success: false, message: '資料已不存在或已被刪除', code: 'DELETED' });
         }
         const existingTree = checkExist.rows[0];
+
+        // [T6][S1] 樂觀鎖：若前端有送 expected_updated_at，比對 server 端
+        // - 不送 → 退化為舊行為（後寫贏）以維持向後相容
+        // - 送了但不符 → 409，附 server 最新版本給前端做三選一對話框
+        if (expected_updated_at) {
+            const serverTs = new Date(existingTree.updated_at).getTime();
+            const clientTs = new Date(expected_updated_at).getTime();
+            if (Number.isFinite(serverTs) && Number.isFinite(clientTs) && serverTs !== clientTs) {
+                await client.query('ROLLBACK');
+                return res.status(409).json({
+                    success: false,
+                    code: 'CONFLICT',
+                    message: '資料已被其他人修改，請重新整理',
+                    serverVersion: existingTree,
+                });
+            }
+        }
 
         // 準備專案關聯 (如果提供了 project_code)
         let projectId = null;
@@ -143,11 +162,36 @@ exports.updateTreeV2 = async (req, res) => {
             return res.status(400).json({ success: false, message: '沒有有效的更新欄位' });
         }
         
-        values.push(id); // 最後一個參數是 WHERE 條件的 id
+        values.push(id); // 倒數第二個參數是 WHERE 條件的 id
+        const idIndex = queryIndex++;
 
-        const sql = `UPDATE tree_survey SET ${updates.join(', ')} WHERE id = $${queryIndex}`;
+        // [T6][S1] UPDATE 時再用 updated_at 做一次保險（避免 SELECT/UPDATE 之間又有人寫）
+        // [T6][S5] 用 RETURNING 取得新 updated_at；若 rowCount=0 視為被刪 → 410
+        let sql;
+        if (expected_updated_at) {
+            values.push(expected_updated_at);
+            const tsIndex = queryIndex++;
+            sql = `UPDATE tree_survey SET ${updates.join(', ')} WHERE id = $${idIndex} AND updated_at = $${tsIndex} RETURNING id, updated_at`;
+        } else {
+            sql = `UPDATE tree_survey SET ${updates.join(', ')} WHERE id = $${idIndex} RETURNING id, updated_at`;
+        }
 
-        await client.query(sql, values);
+        const updateRes = await client.query(sql, values);
+        if (updateRes.rowCount === 0) {
+            await client.query('ROLLBACK');
+            // SELECT 後 UPDATE 前，資料被改或被刪
+            const reCheck = await db.query('SELECT * FROM tree_survey WHERE id = $1', [id]);
+            if (reCheck.rows.length === 0) {
+                return res.status(410).json({ success: false, code: 'DELETED', message: '資料已不存在或已被刪除' });
+            }
+            return res.status(409).json({
+                success: false,
+                code: 'CONFLICT',
+                message: '資料已被其他人修改，請重新整理',
+                serverVersion: reCheck.rows[0],
+            });
+        }
+        const newUpdatedAt = updateRes.rows[0].updated_at;
         await client.query('COMMIT');
 
         // Audit Log
@@ -167,7 +211,7 @@ exports.updateTreeV2 = async (req, res) => {
         res.status(200).json({
             success: true,
             message: '樹木資料更新成功 (V2)',
-            data: { id: id, ...req.body }
+            data: { id: id, ...req.body, updated_at: newUpdatedAt }
         });
 
     } catch (err) {
