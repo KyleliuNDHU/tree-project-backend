@@ -69,7 +69,8 @@ router.get('/', projectAuthFilter, async (req, res) => {
 
 // 根據專案區位獲取專案列表
 // [Phase A] 優先從 projects 表查詢
-router.get('/by_area/:area', async (req, res) => {
+// [T7] 加 projectAuthFilter：Lvl<4 只能看被授權的專案
+router.get('/by_area/:area', projectAuthFilter, async (req, res) => {
     const { area } = req.params;
     try {
         let rows = [];
@@ -99,6 +100,10 @@ router.get('/by_area/:area', async (req, res) => {
             rows = fallback.rows;
         }
 
+        // [T7] 依 projectFilter 過濾；null = 無限制
+if (Array.isArray(req.projectFilter)) {
+    rows = rows.filter(r => req.projectFilter.includes(r.code));
+}
         res.json({ success: true, data: rows });
     } catch (err) {
         console.error(`取得區位[${area}]的專案列表錯誤:`, err);
@@ -108,7 +113,8 @@ router.get('/by_area/:area', async (req, res) => {
 
 // 根據專案名稱獲取專案資訊 (主要用於檢查專案是否存在)
 // [Phase A] 優先從 projects 表查詢
-router.get('/by_name/:name', async (req, res) => {
+// [T7] 加 projectAuthFilter：Lvl<4 看不到未被授權專案
+router.get('/by_name/:name', projectAuthFilter, async (req, res) => {
     const { name } = req.params;
     try {
         let row = null;
@@ -141,6 +147,10 @@ router.get('/by_name/:name', async (req, res) => {
         }
 
         if (row) {
+            // [T7] 未被授權則回 404，避免泄露專案存在
+            if (Array.isArray(req.projectFilter) && !req.projectFilter.includes(row.code)) {
+                return res.status(404).json({ success: false, message: '找不到指定的專案' });
+            }
             res.json({ success: true, data: row });
         } else {
             res.status(404).json({ success: false, message: '找不到指定的專案' });
@@ -154,7 +164,8 @@ router.get('/by_name/:name', async (req, res) => {
 
 // 根據專案代碼獲取專案資訊
 // [Phase A] 優先從 projects 表查詢
-router.get('/by_code/:code', async (req, res) => {
+// [T7] 加 projectAuthFilter：Lvl<4 看不到未被授權專案
+router.get('/by_code/:code', projectAuthFilter, async (req, res) => {
     const { code } = req.params;
     try {
         let row = null;
@@ -187,6 +198,10 @@ router.get('/by_code/:code', async (req, res) => {
         }
 
         if (row) {
+            // [T7] 未被授權則回 404
+            if (Array.isArray(req.projectFilter) && !req.projectFilter.includes(row.code)) {
+                return res.status(404).json({ success: false, message: '找不到指定的專案' });
+            }
             res.json({ success: true, data: row });
         } else {
             res.status(404).json({ success: false, message: '找不到指定的專案' });

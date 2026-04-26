@@ -512,7 +512,8 @@ router.delete('/:id', requireRole('專案管理員'), projectAuth, async (req, r
 
 
 // 獲取下一個系統樹木編號
-router.get('/next_system_number', async (req, res) => {
+// [T7] 加 requireRole：避免 Lvl 1 探測 ID 序列
+router.get('/next_system_number', requireRole('調查管理員'), async (req, res) => {
     try {
         // [FIX v17.1] 排除佔位記錄 (PLACEHOLDER-*) 以確保 ID 序列正確
         const query = `
@@ -531,7 +532,12 @@ router.get('/next_system_number', async (req, res) => {
 });
 
 // 獲取下一個專案樹木編號（根據專案代碼）
-router.get('/next_project_number/:projectCode', async (req, res) => {
+// [T7] 加 requireRole + projectAuth：避免偵察別專案 ID
+router.get('/next_project_number/:projectCode', requireRole('調查管理員'), async (req, res, next) => {
+    // 把 :projectCode 暴露給 projectAuth 用
+    req.params.project_code = req.params.projectCode;
+    next();
+}, projectAuth, async (req, res) => {
     const { projectCode } = req.params;
     try {
         // [FIX v17.1] 排除佔位記錄 (PT-0) 以確保第一筆實際資料為 PT-1
@@ -553,7 +559,11 @@ router.get('/next_project_number/:projectCode', async (req, res) => {
 });
 
 // 獲取專案的常見樹種
-router.get('/common_species/:projectCode', async (req, res) => {
+// [T7] 加 projectAuth：避免低權限看別專案常見樹種統計
+router.get('/common_species/:projectCode', async (req, res, next) => {
+    req.params.project_code = req.params.projectCode;
+    next();
+}, projectAuth, async (req, res) => {
     const { projectCode } = req.params;
     const query = `
       SELECT 
@@ -577,7 +587,8 @@ router.get('/common_species/:projectCode', async (req, res) => {
 
 
 // 批量匯入 (調查管理員以上)
-router.post('/import', requireRole('調查管理員'), upload.single('file'), async (req, res) => {
+// [T7] 升級為專案管理員：CSV 可橫跨專案，避免低權限使用者匯入別專案資料
+router.post('/import', requireRole('專案管理員'), upload.single('file'), async (req, res) => {
     if (!req.file) {
       return res.status(400).json({ success: false, message: '請選擇要上傳的文件' });
     }
