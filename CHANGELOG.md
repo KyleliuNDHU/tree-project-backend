@@ -4,6 +4,33 @@
 
 ---
 
+## v18.5.1 (2026-04-28) — County detection + V3 species + docs cleanup
+
+### 縣市自動判斷統一化
+- `utils/geo.js` 為唯一的縣市解析來源（內政部 1140318 官方界線，22 縣市）
+- `routes/project_areas.js`：POST /api/project_areas 自動寫入 finalCity；新增 GET /api/project_areas/county_by_coords?lng=&lat=
+- `routes/location.js` 重構為呼叫 `utils/geo.js`，移除舊 inline turf 載入 + 名稱裁切 hack
+- `scripts/backfill_county.js`：批次補齊舊資料的 county（dry-run 預設，加 `--apply` 才寫入）
+
+### V3 樹種辨識自動建檔
+- `services/speciesIdentificationService.autoAddSpeciesFromIdentification`：主名改用學名 (scientificName)，所有 commonNames 寫進 species_synonyms
+
+### 公開文件 / 機敏資料清理
+- README 重寫含完整架構圖 + 8 個功能流程圖（已升級為 Mermaid）
+- 新增 `ml_service/README.md`
+- 移除所有 source 中硬寫的 Tailscale hostname/IP（webhook.js 註解、ml_service/app.py 預設 CORS、tests）
+- `tests/regression.test.js` + `tests/apiIntegration.test.js`：TEST_BASE_URL 改為必填，並自動載 `.env`
+
+### 變更檔案（精簡）
+| 類型 | 檔案 |
+|------|------|
+| feat | `routes/project_areas.js` · `utils/geo.js` · `data/tw_county.geojson` · `scripts/backfill_county.js` |
+| refactor | `routes/location.js` · `services/speciesIdentificationService.js` |
+| docs | `README.md` · `ml_service/README.md` |
+| chore | `routes/webhook.js` · `ml_service/app.py` · `tests/*.test.js` |
+
+---
+
 ## v18.5.0 (2026-03-10) - Self-Hosted Deployment & Auto-Deploy
 
 ### 自架伺服器部署
