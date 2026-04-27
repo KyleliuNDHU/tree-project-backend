@@ -24,13 +24,25 @@ async function initializeTable() {
             id SERIAL PRIMARY KEY,
             project_name VARCHAR(255) NOT NULL UNIQUE,
             project_code VARCHAR(50),
+            project_area VARCHAR(50),
             boundary_coordinates JSONB NOT NULL,
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
         );
         
         CREATE INDEX IF NOT EXISTS idx_project_boundaries_name ON project_boundaries(project_name);
         CREATE INDEX IF NOT EXISTS idx_project_boundaries_code ON project_boundaries(project_code);
+
+        -- [Phase 2b] 補上 project_area 欄位（舊資料表升級）
+        ALTER TABLE project_boundaries ADD COLUMN IF NOT EXISTS project_area VARCHAR(50);
+
+        -- [Phase 2c] updated_at 改 TIMESTAMPTZ + trigger，供樂觀鎖使用
+        ALTER TABLE project_boundaries ALTER COLUMN updated_at TYPE TIMESTAMPTZ;
+        ALTER TABLE project_boundaries ALTER COLUMN updated_at SET DEFAULT now();
+        DROP TRIGGER IF EXISTS project_boundaries_set_updated_at ON project_boundaries;
+        CREATE TRIGGER project_boundaries_set_updated_at
+            BEFORE UPDATE ON project_boundaries
+            FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
     `;
     
     try {
@@ -51,7 +63,7 @@ initializeTable();
 router.get('/', projectAuthFilter, async (req, res) => {
     try {
         let query = `
-            SELECT id, project_name, project_code, boundary_coordinates, created_at, updated_at
+            SELECT id, project_name, project_code, project_area, boundary_coordinates, created_at, updated_at
             FROM project_boundaries
         `;
         const params = [];
@@ -136,7 +148,7 @@ router.get('/:projectName', async (req, res) => {
  * }
  */
 router.post('/', requireRole('專案管理員'), async (req, res) => {
-    const { projectName, projectCode, coordinates } = req.body;
+    const { projectName, projectCode, projectArea, coordinates } = req.body;
     
     // 驗證輸入
     if (!projectName) {
@@ -164,6 +176,27 @@ router.post('/', requireRole('專案管理員'), async (req, res) => {
     const client = await db.pool.connect();
     try {
         await client.query('BEGIN');
+        
+        // [Phase 2c] 樂觀鎖：若 client 帶了 expectedUpdatedAt，
+        // 且目前 DB 裡已有該 project_name，則必須相符才允許覆蓋
+        const expectedUpdatedAt = req.body.expectedUpdatedAt;
+        const { rows: existingRows } = await client.query(
+            'SELECT * FROM project_boundaries WHERE project_name = $1',
+            [projectName]
+        );
+        if (expectedUpdatedAt && existingRows.length > 0) {
+            const serverTs = new Date(existingRows[0].updated_at).getTime();
+            const clientTs = new Date(expectedUpdatedAt).getTime();
+            if (Number.isFinite(serverTs) && Number.isFinite(clientTs) && serverTs !== clientTs) {
+                await client.query('ROLLBACK');
+                return res.status(409).json({
+                    success: false,
+                    code: 'CONFLICT',
+                    message: '邊界已被其他人修改，請重新整理',
+                    serverVersion: existingRows[0]
+                });
+            }
+        }
         
         // 檢查該專案是否已有現有樹木資料
         const { rows: existingTrees } = await client.query(
@@ -210,17 +243,39 @@ router.post('/', requireRole('專案管理員'), async (req, res) => {
             }
         }
         
+        // [Phase 2b] 自動解析 project_area：
+        // 1) request 帶了 → 使用 request 值
+        // 2) 未帶但帶了 projectCode → 從 projects + project_areas 查
+        // 3) 仍無 → NULL（允許，以後能補）
+        let resolvedArea = projectArea || null;
+        if (!resolvedArea && projectCode) {
+            try {
+                const r = await client.query(`
+                    SELECT pa.area_name
+                    FROM projects p
+                    LEFT JOIN project_areas pa ON pa.id = p.area_id
+                    WHERE p.project_code = $1
+                `, [projectCode]);
+                if (r.rows.length > 0 && r.rows[0].area_name) {
+                    resolvedArea = r.rows[0].area_name;
+                }
+            } catch (e) {
+                console.warn('[project_boundaries] resolve project_area 失敗:', e.message);
+            }
+        }
+        
         // 使用 UPSERT 語法
         const { rows } = await client.query(`
-            INSERT INTO project_boundaries (project_name, project_code, boundary_coordinates, updated_at)
-            VALUES ($1, $2, $3, CURRENT_TIMESTAMP)
+            INSERT INTO project_boundaries (project_name, project_code, project_area, boundary_coordinates, updated_at)
+            VALUES ($1, $2, $3, $4, CURRENT_TIMESTAMP)
             ON CONFLICT (project_name) 
             DO UPDATE SET 
                 project_code = EXCLUDED.project_code,
+                project_area = EXCLUDED.project_area,
                 boundary_coordinates = EXCLUDED.boundary_coordinates,
                 updated_at = CURRENT_TIMESTAMP
             RETURNING *
-        `, [projectName, projectCode, JSON.stringify(coordinates)]);
+        `, [projectName, projectCode, resolvedArea, JSON.stringify(coordinates)]);
         
         await client.query('COMMIT');
         
@@ -258,6 +313,68 @@ router.delete('/:projectName', requireRole('專案管理員'), async (req, res) 
         }
     } catch (err) {
         console.error('[project_boundaries] 刪除專案邊界錯誤:', err);
+        res.status(500).json({ success: false, message: '刪除專案邊界失敗' });
+    }
+});
+
+// ─────────────────────────────────────────────────────────────────────────
+// [Phase 2d] 軟性 by_code 端點 — 以 project_code 為主鍵的查/刪
+// 不替換 by-name 端點，雙軌並存。
+// ─────────────────────────────────────────────────────────────────────────
+
+/**
+ * 取得特定專案的邊界（依 project_code）
+ * GET /api/project_boundaries/by_code/:projectCode
+ */
+router.get('/by_code/:projectCode', async (req, res) => {
+    const { projectCode } = req.params;
+    try {
+        const { rows } = await db.query(
+            'SELECT * FROM project_boundaries WHERE project_code = $1',
+            [projectCode]
+        );
+        if (rows.length === 0) {
+            return res.status(404).json({
+                success: false,
+                message: '找不到該專案代碼的邊界',
+                hasBoundary: false,
+            });
+        }
+        const boundary = rows[0];
+        res.json({
+            success: true,
+            data: {
+                ...boundary,
+                boundary_coordinates: typeof boundary.boundary_coordinates === 'string'
+                    ? JSON.parse(boundary.boundary_coordinates)
+                    : boundary.boundary_coordinates,
+            },
+            hasBoundary: true,
+        });
+    } catch (err) {
+        console.error('[project_boundaries][by_code] 取得錯誤:', err);
+        res.status(500).json({ success: false, message: '取得專案邊界失敗' });
+    }
+});
+
+/**
+ * 刪除專案邊界（依 project_code） — 專案管理員以上
+ * DELETE /api/project_boundaries/by_code/:projectCode
+ */
+router.delete('/by_code/:projectCode', requireRole('專案管理員'), async (req, res) => {
+    const { projectCode } = req.params;
+    try {
+        const { rowCount } = await db.query(
+            'DELETE FROM project_boundaries WHERE project_code = $1',
+            [projectCode]
+        );
+        if (rowCount > 0) {
+            res.json({ success: true, message: '專案邊界已刪除' });
+        } else {
+            res.status(404).json({ success: false, message: '找不到要刪除的專案邊界' });
+        }
+    } catch (err) {
+        console.error('[project_boundaries][by_code] 刪除錯誤:', err);
         res.status(500).json({ success: false, message: '刪除專案邊界失敗' });
     }
 });
@@ -347,7 +464,7 @@ router.post('/find_project', async (req, res) => {
     
     try {
         const { rows: allBoundaries } = await db.query(
-            'SELECT project_name, project_code, boundary_coordinates FROM project_boundaries'
+            'SELECT project_name, project_code, project_area, boundary_coordinates FROM project_boundaries'
         );
         
         const matchingProjects = [];
@@ -367,7 +484,8 @@ router.post('/find_project', async (req, res) => {
                 if (turf.booleanPointInPolygon(point, polygon)) {
                     matchingProjects.push({
                         projectName: boundary.project_name,
-                        projectCode: boundary.project_code
+                        projectCode: boundary.project_code,
+                        projectArea: boundary.project_area
                     });
                 }
             } catch (e) {
@@ -410,7 +528,7 @@ router.post('/batch_match', async (req, res) => {
     
     try {
         const { rows: allBoundaries } = await db.query(
-            'SELECT project_name, project_code, boundary_coordinates FROM project_boundaries'
+            'SELECT project_name, project_code, project_area, boundary_coordinates FROM project_boundaries'
         );
         
         // 預處理所有多邊形
@@ -427,6 +545,7 @@ router.post('/batch_match', async (req, res) => {
                 polygons.push({
                     projectName: boundary.project_name,
                     projectCode: boundary.project_code,
+                    projectArea: boundary.project_area,
                     polygon: turf.polygon([polygonCoords])
                 });
             } catch (e) {
@@ -450,9 +569,9 @@ router.post('/batch_match', async (req, res) => {
             const point = turf.point([lng, lat]);
             const matchedProjects = [];
             
-            for (const { projectName, projectCode, polygon } of polygons) {
+            for (const { projectName, projectCode, projectArea, polygon } of polygons) {
                 if (turf.booleanPointInPolygon(point, polygon)) {
-                    matchedProjects.push({ projectName, projectCode });
+                    matchedProjects.push({ projectName, projectCode, projectArea });
                 }
             }
             
@@ -471,7 +590,8 @@ router.post('/batch_match', async (req, res) => {
                     lng,
                     matched: true,
                     projectName: matchedProjects[0].projectName,
-                    projectCode: matchedProjects[0].projectCode
+                    projectCode: matchedProjects[0].projectCode,
+                    projectArea: matchedProjects[0].projectArea
                 };
             } else {
                 // 多個匹配，返回第一個並標記有多個匹配
@@ -482,6 +602,7 @@ router.post('/batch_match', async (req, res) => {
                     matched: true,
                     projectName: matchedProjects[0].projectName,
                     projectCode: matchedProjects[0].projectCode,
+                    projectArea: matchedProjects[0].projectArea,
                     multipleMatches: matchedProjects.length,
                     allMatches: matchedProjects
                 };

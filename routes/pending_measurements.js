@@ -16,6 +16,26 @@ const express = require('express');
 const router = express.Router();
 const db = require('../config/db');
 const pool = db.pool;
+const { projectAuthFilter, hasProjectPermission } = require('../middleware/projectAuth');
+
+// 內部小工具：把 req.projectFilter 套用到 SQL
+// 回傳 { clause, params, nextIdx }
+function applyProjectFilter(req, baseParamIdx) {
+    const filter = req.projectFilter;
+    if (filter == null) {
+        return { clause: '', params: [], nextIdx: baseParamIdx };
+    }
+    if (filter.length === 0) {
+        // 強制 0 = 1 永遠空集
+        return { clause: ' AND 1=0', params: [], nextIdx: baseParamIdx };
+    }
+    return {
+        clause: ` AND project_code = ANY($${baseParamIdx}::text[])`,
+        params: [filter],
+        nextIdx: baseParamIdx + 1,
+    };
+}
+
 
 /**
  * 初始化資料表 (如果不存在)
@@ -195,7 +215,7 @@ async function initTable() {
  * POST /api/pending-measurements/batch
  * 批量創建待測量記錄
  */
-router.post('/batch', async (req, res) => {
+router.post('/batch', projectAuthFilter, async (req, res) => {
   const { measurements } = req.body;
   
   if (!measurements || !Array.isArray(measurements) || measurements.length === 0) {
@@ -207,6 +227,23 @@ router.post('/batch', async (req, res) => {
 
   if (measurements.length > 500) {
     return res.status(400).json({ success: false, message: '批次上限 500 筆' });
+  }
+
+  // 權限檢查：若 user 有 filter，所有指定的 project_code 必須在 filter 內
+  // null/undefined 視為「未匹配」，允許（後續可在 session 層補上指派）
+  if (req.projectFilter != null) {
+    const codes = [...new Set(
+      measurements
+        .map(m => m.project_code)
+        .filter(c => c != null && c !== '')
+    )];
+    const denied = codes.filter(c => !req.projectFilter.includes(c));
+    if (denied.length > 0) {
+      return res.status(403).json({
+        success: false,
+        message: `無權限存取以下專案：${denied.join(', ')}`
+      });
+    }
   }
   
   const client = await pool.connect();
@@ -289,8 +326,18 @@ router.post('/batch', async (req, res) => {
  * GET /api/pending-measurements/sessions
  * 獲取所有測量批次
  */
-router.get('/sessions', async (req, res) => {
+router.get('/sessions', projectAuthFilter, async (req, res) => {
   try {
+    const filter = req.projectFilter;
+    let where = '';
+    const params = [];
+    if (filter != null) {
+      if (filter.length === 0) {
+        return res.json([]);
+      }
+      where = `WHERE project_code = ANY($1::text[])`;
+      params.push(filter);
+    }
     const result = await pool.query(`
       SELECT 
         session_id,
@@ -302,9 +349,10 @@ router.get('/sessions', async (req, res) => {
         COUNT(*) FILTER (WHERE status = 'completed') as completed_trees,
         'system' as created_by
       FROM pending_tree_measurements
+      ${where}
       GROUP BY session_id
       ORDER BY MIN(created_at) DESC
-    `);
+    `, params);
     
     res.json(result.rows);
     
@@ -322,7 +370,7 @@ router.get('/sessions', async (req, res) => {
  * GET /api/pending-measurements/trees
  * 獲取待測量樹木列表
  */
-router.get('/trees', async (req, res) => {
+router.get('/trees', projectAuthFilter, async (req, res) => {
   const { session_id, status } = req.query;
   
   try {
@@ -339,6 +387,11 @@ router.get('/trees', async (req, res) => {
       query += ` AND status = $${paramIndex++}`;
       params.push(status);
     }
+    
+    const f = applyProjectFilter(req, paramIndex);
+    query += f.clause;
+    params.push(...f.params);
+    paramIndex = f.nextIdx;
     
     query += ' ORDER BY priority ASC, created_at ASC';
     
@@ -360,8 +413,18 @@ router.get('/trees', async (req, res) => {
  * GET /api/pending-measurements/stats/overview
  * 獲取統計資訊（必須在 /:id 之前，否則 'stats' 會被當作 id）
  */
-router.get('/stats/overview', async (req, res) => {
+router.get('/stats/overview', projectAuthFilter, async (req, res) => {
   try {
+    const filter = req.projectFilter;
+    let where = '';
+    const params = [];
+    if (filter != null) {
+      if (filter.length === 0) {
+        return res.json({ total: 0, pending: 0, in_progress: 0, completed: 0, skipped: 0, failed: 0, transferred: 0, total_sessions: 0 });
+      }
+      where = `WHERE project_code = ANY($1::text[])`;
+      params.push(filter);
+    }
     const result = await pool.query(`
       SELECT 
         COUNT(*) as total,
@@ -373,7 +436,8 @@ router.get('/stats/overview', async (req, res) => {
         COUNT(*) FILTER (WHERE status = 'transferred') as transferred,
         COUNT(DISTINCT session_id) as total_sessions
       FROM pending_tree_measurements
-    `);
+      ${where}
+    `, params);
     
     res.json(result.rows[0]);
     
@@ -391,7 +455,7 @@ router.get('/stats/overview', async (req, res) => {
  * GET /api/pending-measurements/:id
  * 獲取單筆待測量記錄
  */
-router.get('/:id', async (req, res) => {
+router.get('/:id', projectAuthFilter, async (req, res) => {
   const { id } = req.params;
   
   try {
@@ -407,7 +471,15 @@ router.get('/:id', async (req, res) => {
       });
     }
     
-    res.json(result.rows[0]);
+    // 權限檢查：req.projectFilter==null 看全部；否則必須包含此 row 的 project_code
+    const row = result.rows[0];
+    if (req.projectFilter != null) {
+      if (!row.project_code || !req.projectFilter.includes(row.project_code)) {
+        return res.status(403).json({ success: false, message: '權限不足' });
+      }
+    }
+    
+    res.json(row);
     
   } catch (error) {
     console.error('[pending-measurements] 獲取記錄失敗:', error);
@@ -425,7 +497,7 @@ router.get('/:id', async (req, res) => {
  * [T6][Phase1.5] 支援樂觀鎖：body.expected_updated_at 不符 → 409；row 不存在 → 410
  * 不送 expected_updated_at 時退化舊行為（向後相容）
  */
-router.patch('/:id', async (req, res) => {
+router.patch('/:id', projectAuthFilter, async (req, res) => {
   const { id } = req.params;
   const updates = req.body;
   const expectedUpdatedAt = updates.expected_updated_at;
@@ -467,6 +539,19 @@ router.patch('/:id', async (req, res) => {
         code: 'DELETED',
         message: '資料已不存在或已被刪除'
       });
+    }
+
+    // 權限檢查：req.projectFilter==null 看全部；否則 row.project_code 必須在 filter 內
+    if (req.projectFilter != null) {
+      const rowCode = existing.rows[0].project_code;
+      if (!rowCode || !req.projectFilter.includes(rowCode)) {
+        return res.status(403).json({ success: false, message: '權限不足' });
+      }
+      // 若使用者試圖把 row 改到自己沒權限的專案 → 拒絕
+      if (updates.project_code !== undefined && updates.project_code !== null
+          && !req.projectFilter.includes(updates.project_code)) {
+        return res.status(403).json({ success: false, message: '無目標專案的權限' });
+      }
     }
 
     // [T6] 樂觀鎖比對
@@ -569,7 +654,7 @@ function buildSurveyNotes(p) {
  * - 使用 advisory lock 確保 ID 不碰撞
  * - 使用 ?? 取代 || 避免 falsy 值被覆蓋 (例如 dbh=0)
  */
-router.post('/transfer', async (req, res) => {
+router.post('/transfer', projectAuthFilter, async (req, res) => {
   const { session_id } = req.body;
   
   if (!session_id) {
@@ -583,6 +668,20 @@ router.post('/transfer', async (req, res) => {
   
   try {
     await client.query('BEGIN');
+    
+    // 權限檢查：session 中所有 row 的 project_code 都必須在 filter 內
+    if (req.projectFilter != null) {
+      const codesRes = await client.query(
+        'SELECT DISTINCT project_code FROM pending_tree_measurements WHERE session_id = $1',
+        [session_id]
+      );
+      const sessionCodes = codesRes.rows.map(r => r.project_code);
+      const denied = sessionCodes.filter(c => !c || !req.projectFilter.includes(c));
+      if (denied.length > 0) {
+        await client.query('ROLLBACK');
+        return res.status(403).json({ success: false, message: '權限不足：有記錄屬於您無權限的專案' });
+      }
+    }
     
     // 獲取已完成的記錄
     const pendingResult = await client.query(`
@@ -772,7 +871,7 @@ router.post('/transfer', async (req, res) => {
  * PATCH /api/pending-measurements/session/:sessionId/project
  * 批量更新整個 session 的專案資訊（單次 SQL，取代 N+1 逐筆 PATCH）
  */
-router.patch('/session/:sessionId/project', async (req, res) => {
+router.patch('/session/:sessionId/project', projectAuthFilter, async (req, res) => {
   const { sessionId } = req.params;
   const { project_area, project_code, project_name } = req.body;
 
@@ -784,6 +883,23 @@ router.patch('/session/:sessionId/project', async (req, res) => {
   }
 
   try {
+    // 權限檢查：user 必須能看到 session 中所有 row 的原 project_code
+    // 並且能存取新指定的 project_code
+    if (req.projectFilter != null) {
+      const codesRes = await pool.query(
+        'SELECT DISTINCT project_code FROM pending_tree_measurements WHERE session_id = $1',
+        [sessionId]
+      );
+      const sessionCodes = codesRes.rows.map(r => r.project_code);
+      const denied = sessionCodes.filter(c => c && !req.projectFilter.includes(c));
+      if (denied.length > 0) {
+        return res.status(403).json({ success: false, message: '權限不足' });
+      }
+      if (project_code && !req.projectFilter.includes(project_code)) {
+        return res.status(403).json({ success: false, message: '無目標專案的權限' });
+      }
+    }
+
     const result = await pool.query(
       `UPDATE pending_tree_measurements
        SET project_area = $1, project_code = $2, project_name = $3
@@ -807,10 +923,23 @@ router.patch('/session/:sessionId/project', async (req, res) => {
  * DELETE /api/pending-measurements/session/:sessionId
  * 刪除整個測量批次
  */
-router.delete('/session/:sessionId', async (req, res) => {
+router.delete('/session/:sessionId', projectAuthFilter, async (req, res) => {
   const { sessionId } = req.params;
   
   try {
+    // 權限檢查：session 中所有 row project_code 需在 filter 內
+    if (req.projectFilter != null) {
+      const codesRes = await pool.query(
+        'SELECT DISTINCT project_code FROM pending_tree_measurements WHERE session_id = $1',
+        [sessionId]
+      );
+      const sessionCodes = codesRes.rows.map(r => r.project_code);
+      const denied = sessionCodes.filter(c => !c || !req.projectFilter.includes(c));
+      if (denied.length > 0) {
+        return res.status(403).json({ success: false, message: '權限不足' });
+      }
+    }
+    
     const result = await pool.query(
       'DELETE FROM pending_tree_measurements WHERE session_id = $1 RETURNING id',
       [sessionId]
