@@ -77,7 +77,7 @@ async function migrate() {
         const records = parse(csvData, { columns: true, skip_empty_lines: true });
         const header = Object.keys(records[0]).map(h => `"${h}"`).join(', ');
 
-        const copyCommand = `COPY tree_survey(${header}) FROM STDIN WITH (FORMAT CSV, HEADER, FORCE_NULL(survey_time))`;
+        const copyCommand = `COPY tree_survey(${header}) FROM STDIN WITH (FORMAT CSV, HEADER, FORCE_NULL(survey_time, tree_height_m, dbh_cm, x_coord, y_coord, carbon_storage, carbon_sequestration_per_year))`;
         
         // Use the copyFrom helper to create a writable stream
         const stream = client.query(copyFrom(copyCommand));
