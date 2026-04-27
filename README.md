@@ -10,6 +10,10 @@
 
 Developed for Taiwan International Ports Corporation (TIPC) to digitize tree surveys, automate DBH (Diameter at Breast Height) measurement via computer vision, and calculate carbon storage using peer-reviewed allometric equations.
 
+本專案為臺灣港務股份有限公司 (TIPC) 開發之樹木調查數位化平台。以電腦視覺自動量測胸徑 (DBH)，並使用同儲評閱之異速生長模型計算碳匯。生產環境現果 7,062 棵樹木、 37 個專案邊界，全天候透過 Tailscale Funnel 提供服務。
+
+> **📖 For a project-wide bilingual overview see the root [README](../../README.md). · 中英雙語完整總覽請見根目錄 [README](../../README.md)。**
+
 ---
 
 ## Table of Contents
@@ -481,7 +485,8 @@ Migrations run automatically on startup via `scripts/migrate.js`.
 
 [MIT License](LICENSE)
 
-## Related
+## Related · 相關連結
 
-- **Frontend:** [tree-project-frontend](https://github.com/KyleliuNDHU/tree-project-frontend) — Flutter mobile application
-- **Author:** [@KyleliuNDHU](https://github.com/KyleliuNDHU) — National Dong Hwa University
+- **Frontend:** [tree-project-frontend](https://github.com/KyleliuNDHU/tree-project-frontend) — Flutter mobile application · 行動應用程式
+- **Root README:** [../../README.md](../../README.md) — Project overview (bilingual) · 專案總覽（中英雙語）
+- **Author:** [@KyleliuNDHU](https://github.com/KyleliuNDHU) — National Dong Hwa University · 國立東華大學
