@@ -12,40 +12,25 @@ PM2 cluster-mode supervision (see `ecosystem.config.js`).
 
 ## Architecture overview
 
-```
-                Flutter app (sustainable_treeai, Android / iOS)
-                                  │
-              ┌───────────────────┼───────────────────┐
-              │ HTTPS (TLS)       │ HTTPS + X-ML-API-Key
-              ▼                   ▼
-  ┌──────────────────────────┐  ┌──────────────────────────────┐
-  │ Reverse proxy (Nginx)    │  │ Reverse proxy (Nginx)        │
-  │ on backend host          │  │ on ML host (separate machine │
-  │ :443 → Node :3000        │  │ in the same private network) │
-  │ :8443 → /webhook/deploy  │  │ :443 → uvicorn :8100         │
-  └────────────┬─────────────┘  └─────────────┬────────────────┘
-               │                              │
-               ▼                              ▼
-   ┌─────────────────────┐         ┌────────────────────────────┐
-   │ backend (this repo) │         │ ml_service/ (Python FastAPI)│
-   │ Node 20 + Express   │         │ Depth Pro 350 M (PyTorch    │
-   │ PM2 cluster ×2      │         │   or OpenVINO INT8-W on Arc │
-   │ ecosystem.config.js │         │   iGPU) + SAM 2.1 Tiny      │
-   └─────────┬───────────┘         │ start.ps1 (Win) / venv      │
-             │                     └────────────────────────────┘
-             ▼
-   ┌────────────────────────────────────────────────────────────┐
-   │ PostgreSQL 14+    Cloudinary    PlantNet / GBIF /          │
-   │ (DATABASE_URL)    (image CDN)   iNaturalist / OpenAI /     │
-   │                                 Anthropic / Gemini /        │
-   │                                 SiliconFlow                 │
-   └────────────────────────────────────────────────────────────┘
-
-GitHub push (main) ──► webhook (HMAC-SHA256) ──► scripts/deploy.sh
-                                                  └─ git pull → npm install
-                                                     → migrate → pm2 reload
-                                                     → /health check
-                                                     → auto-rollback on fail
+```mermaid
+flowchart TB
+  app["Flutter app<br/>sustainable_treeai (Android / iOS)"]
+  subgraph backendHost["Backend host (Ubuntu)"]
+    nbe["Nginx<br/>:443 → Node :3000<br/>:8443 → /webhook/deploy"]
+    be["backend (this repo)<br/>Node 20 + Express<br/>PM2 cluster ×2 · ecosystem.config.js"]
+    nbe --> be
+  end
+  subgraph mlHost["ML host (separate machine, private network)"]
+    nml["Nginx<br/>:443 → uvicorn :8100"]
+    ml["ml_service/ (FastAPI)<br/>Depth Pro 350M (PyTorch fp16 or<br/>OpenVINO INT8-W on Intel Arc iGPU)<br/>+ SAM 2.1 Tiny"]
+    nml --> ml
+  end
+  ext[("PostgreSQL 14+ · Cloudinary · PlantNet / GBIF /<br/>iNaturalist · OpenAI / Anthropic / Gemini / SiliconFlow")]
+  app -- "HTTPS (TLS)" --> nbe
+  app -- "HTTPS + X-ML-API-Key" --> nml
+  be --> ext
+  gh["GitHub push (main)"] -- "HMAC-SHA256" --> nbe
+  be -. triggers .-> deploy["scripts/deploy.sh<br/>git pull → npm install → migrate<br/>→ pm2 reload → /health → auto-rollback"]
 ```
 
 **Two independent services.** The Flutter app talks to the Node backend
@@ -68,59 +53,37 @@ the database / external services. Bracketed paths are files in this repo.
 
 ### 1. Authentication (`POST /api/login`)
 
-```
-Flutter LoginPage
-      │ {email, password}
-      ▼
-[middleware/loginRateLimiter] — 10 req / 15 min / IP
-      │
-      ▼
-[middleware/ipBlacklist]
-      │
-      ▼
-[routes/users.js  POST /login]
-      │  bcrypt.compare(password, users.password_hash)
-      ▼
-PostgreSQL  users (id, role, email, name, …)
-      │
-      ▼
-JWT (HS256, 24 h, payload = {id, role, email})
-      │  +  ML_SERVICE_PUBLIC_URL  +  ML_API_KEY
-      ▼
-{token, user, mlServiceUrl, mlApiKey}
-      ▼
-flutter_secure_storage  (auth_jwt_token, user_info)
-SharedPreferences       (ml_service_url, ml_api_key)
+```mermaid
+flowchart TB
+  fp["Flutter LoginPage<br/>{email, password}"]
+  rl["middleware/loginRateLimiter<br/>10 req / 15 min / IP"]
+  bl["middleware/ipBlacklist"]
+  rt["routes/users.js POST /login<br/>bcrypt.compare(password, users.password_hash)"]
+  db[("PostgreSQL · users<br/>(id, role, email, name, …)")]
+  jwt["JWT (HS256, 24 h)<br/>payload = {id, role, email}<br/>+ ML_SERVICE_PUBLIC_URL + ML_API_KEY"]
+  resp["{token, user, mlServiceUrl, mlApiKey}"]
+  st["flutter_secure_storage (auth_jwt_token, user_info)<br/>SharedPreferences (ml_service_url, ml_api_key)"]
+  fp --> rl --> bl --> rt --> db --> jwt --> resp --> st
 ```
 
 Logout is client-side only (delete token + clear ML credentials).
 
 ### 2. Tree survey CRUD with image upload
 
-```
-Flutter survey form (V2 / V3)
-      │ multipart/form-data: fields + photo[]
-      ▼
-[middleware/jwtAuth]  →  attaches req.user
-      │
-      ▼
-[middleware/upload (multer)]  — memoryStorage, 10 MB / file, image/* only
-      │
-      ▼
-[routes/trees.js  POST /api/trees]
-      │  ┌─────────────────────────────────────────────┐
-      │  │ for each photo:                              │
-      │  │   cloudinary.uploader.upload_stream(buffer) │
-      │  │   → tree_photos (cloudinary_url, public_id) │
-      │  └─────────────────────────────────────────────┘
-      │
-      │  resolveCountyByLngLat(lng, lat)  ← [utils/geo.js]
-      │  └ data/tw_county.geojson (22 counties, MOI 1140318)
-      │
-      ▼
-PostgreSQL  trees + tree_photos  (single transaction)
-      ▼
-{ tree, photos[] }
+```mermaid
+flowchart TB
+  fm["Flutter survey form (V2 / V3)<br/>multipart/form-data: fields + photo[]"]
+  jw["middleware/jwtAuth → req.user"]
+  up["middleware/upload (multer)<br/>memoryStorage · 10 MB · image/* only"]
+  rt["routes/trees.js POST /api/trees"]
+  cl["Cloudinary upload_stream(buffer)<br/>→ tree_photos (cloudinary_url, public_id)"]
+  geo["resolveCountyByLngLat(lng, lat)<br/>utils/geo.js + data/tw_county.geojson<br/>(22 counties, MOI 1140318)"]
+  db[("PostgreSQL · trees + tree_photos<br/>single transaction")]
+  out["{ tree, photos[] }"]
+  fm --> jw --> up --> rt
+  rt --> cl
+  rt --> geo
+  rt --> db --> out
 ```
 
 GET / PUT / DELETE follow the same auth + ownership-check pattern in
@@ -128,28 +91,19 @@ GET / PUT / DELETE follow the same auth + ownership-check pattern in
 
 ### 3. AI chat — Text-to-SQL with SSE streaming
 
-```
-Flutter ChatPage
-      │ POST /api/ai-chat   {question, sessionId}
-      ▼
-[middleware/jwtAuth]                 [middleware/aiRateLimiter] — 30/min/user
-      │
-      ▼
-[routes/aiChat.js]
-      │
-      ├─► [services/intentClassifier]  → {sql | report | smalltalk}
-      │
-      ├─► [services/openaiService]     → SQL draft (model whitelist: gpt-4o-mini, …)
-      │
-      ├─► [utils/sqlValidator]         → AST whitelist (SELECT only, table allow-list,
-      │                                  no UNION / comment / multi-stmt, row LIMIT 500)
-      │
-      ├─► PostgreSQL (read-only role recommended)
-      │
-      └─► [services/openaiService] (stream)  ←  rows + question
-              │ Server-Sent Events: data: {chunk}\n\n
-              ▼
-       Flutter SSE client (flutter_client_sse)
+```mermaid
+flowchart TB
+  cp["Flutter ChatPage<br/>POST /api/ai-chat {question, sessionId}"]
+  jw["jwtAuth + aiRateLimiter (30/min/user)"]
+  rt["routes/aiChat.js"]
+  ic["services/intentClassifier<br/>→ {sql | report | smalltalk}"]
+  os1["services/openaiService<br/>SQL draft (model whitelist: gpt-4o-mini, …)"]
+  sv["utils/sqlValidator (AST whitelist)<br/>SELECT only · table allow-list<br/>no UNION/comment/multi-stmt · LIMIT 500"]
+  db[("PostgreSQL<br/>(read-only role recommended)")]
+  os2["services/openaiService (stream)"]
+  sse["SSE: data: {chunk}\\n\\n"]
+  cli["Flutter SSE client (flutter_client_sse)"]
+  cp --> jw --> rt --> ic --> os1 --> sv --> db --> os2 --> sse --> cli
 ```
 
 Audit trail: every Q/A pair + classified intent + final SQL is written to
@@ -158,78 +112,59 @@ Audit trail: every Q/A pair + classified intent + final SQL is written to
 
 ### 4. AI agent — tool-using (`/api/agent/*`)
 
-```
-Flutter AgentPage
-      │ POST /api/agent/chat   {messages, tools?}
-      ▼
-[routes/agent.js]
-      │
-      ▼
-[services/agentService]   ─── ReAct loop, max 6 turns ───┐
-      │                                                  │
-      ├─► tool: query_trees     → routes/trees.js logic  │
-      ├─► tool: get_project     → routes/projects.js     │
-      ├─► tool: identify_species → PlantNet API          │
-      ├─► tool: generate_report → routes/aiReport.js     │
-      └─► tool: web_search      → SerpAPI (optional)    ─┘
-              │
-              ▼
-SiliconFlow chat-completion (4 keys, automatic rotation on 429 / quota)
-              │  fallback ─► OpenAI / Claude / Gemini per `provider` flag
-              ▼
-JSON {final_answer, trace[]}
+```mermaid
+flowchart TB
+  ap["Flutter AgentPage<br/>POST /api/agent/chat {messages, tools?}"]
+  rt["routes/agent.js"]
+  svc["services/agentService<br/>ReAct loop · max 6 turns"]
+  t1["tool: query_trees → routes/trees.js"]
+  t2["tool: get_project → routes/projects.js"]
+  t3["tool: identify_species → PlantNet API"]
+  t4["tool: generate_report → routes/aiReport.js"]
+  t5["tool: web_search → SerpAPI (optional)"]
+  llm["SiliconFlow chat-completion<br/>(4 keys, auto-rotate on 429/quota)<br/>fallback → OpenAI / Claude / Gemini per `provider`"]
+  out["JSON {final_answer, trace[]}"]
+  ap --> rt --> svc
+  svc --> t1 --> svc
+  svc --> t2 --> svc
+  svc --> t3 --> svc
+  svc --> t4 --> svc
+  svc --> t5 --> svc
+  svc --> llm --> out
 ```
 
 ### 5. ML pipeline — Auto DBH measurement
 
+```mermaid
+flowchart TB
+  fp["Flutter measurement page (V3)<br/>POST https://&lt;ml-host&gt;/api/v1/auto-measure-dbh<br/>X-ML-API-Key · image + reference distance"]
+  app2["ml_service/app.py<br/>verify_api_key (hmac.compare_digest)<br/>RateLimitMiddleware (120 req/hr/IP)"]
+  de["depth_estimation.py<br/>Depth Pro 350M (fp16 / OpenVINO INT8-W on Arc iGPU)<br/>→ metric depth map (focal-length aware)"]
+  seg["tree_segmentation.py<br/>SAM 2.1 Tiny (38.9M) auto-prompt centre<br/>→ trunk binary mask"]
+  dbh["dbh_calculator.py<br/>tangent-pair on mask;<br/>distance = depth at mask centroid"]
+  out["{ dbh_cm, trunk_distance_m, mask_png_b64,<br/>depth_visualisation_b64, confidence,<br/>processing_ms_per_stage }"]
+  ui["Flutter overlay → user confirms<br/>→ backend stores DBH on tree row"]
+  fp --> app2 --> de --> seg --> dbh --> out --> ui
 ```
-Flutter measurement page (V3)
-      │ POST  https://<ml-host>/api/v1/auto-measure-dbh
-      │ headers: X-ML-API-Key: <key from /login>
-      │ body: image + reference distance
-      ▼
-[ml_service/app.py]
-      │
-      ├─ verify_api_key()   ← hmac.compare_digest(ML_API_KEY)
-      ├─ RateLimitMiddleware (120 req / hr / IP)
-      │
-      ▼
-[depth_estimation.py]
-      │   Depth Pro 350 M  (PyTorch fp16 OR OpenVINO INT8-W on Intel Arc iGPU)
-      │   → metric depth map (focal-length aware)
-      ▼
-[tree_segmentation.py]
-      │   SAM 2.1 Tiny (38.9 M) — auto prompt at image centre
-      │   → trunk binary mask
-      ▼
-[dbh_calculator.py]
-      │   tangent-pair method on the mask;
-      │   trunk distance taken from the depth map at mask-centroid
-      ▼
-{ dbh_cm, trunk_distance_m, mask_png_b64, depth_visualisation_b64,
-  confidence, processing_ms_per_stage }
-      ▼
-Flutter displays overlay; user confirms; backend stores DBH on the tree row
-```
+
+Live mode reuses the same pipeline via `WebSocket /ws/scan` (~5 fps preview, no persist).
 
 Live mode uses `WebSocket /ws/scan` for ~5 fps preview without saving.
 
 ### 6. Species identification (`/api/species/*`)
 
-```
-Flutter SpeciesIdentifyPage
-      │ POST /api/species/identify   image
-      ▼
-[routes/speciesIdentification.js]
-      │
-      ▼
-[services/speciesIdentificationService]
-      │   ├─ PlantNet REST API   (org=tree, lang=zh-tw)
-      │   └─ on hit:  autoAddSpeciesFromIdentification()
-      │                ├─ insert into  tree_species (scientific_name, …)
-      │                └─ insert all   common_names → tree_species_synonyms
-      ▼
-{ candidates[], top: {species_id, scientific_name, common_name, score} }
+```mermaid
+flowchart TB
+  sp["Flutter SpeciesIdentifyPage<br/>POST /api/species/identify (image)"]
+  rt["routes/speciesIdentification.js"]
+  svc["services/speciesIdentificationService"]
+  pn["PlantNet REST API<br/>(org=tree, lang=zh-tw)"]
+  add["autoAddSpeciesFromIdentification()<br/>insert tree_species (scientific_name, …)<br/>insert common_names → tree_species_synonyms"]
+  out["{ candidates[],<br/>top: {species_id, scientific_name,<br/>common_name, score} }"]
+  sp --> rt --> svc
+  svc --> pn --> svc
+  svc --> add
+  svc --> out
 ```
 
 V3 form auto-creates a species row at submit time
@@ -238,19 +173,13 @@ so the user never has to "save species" manually.
 
 ### 7. County auto-detection
 
-```
-client                       backend
-  │ GET /api/project_areas/county_by_coords?lng=&lat=
-  ▼
-[routes/project_areas.js]
-  │
-  ▼
-[utils/geo.js  resolveCountyByLngLat]
-  │   ├─ data/tw_county.geojson  (cached on first call)
-  │   ├─ bbox prefilter
-  │   └─ booleanPointInPolygon  (@turf/turf)
-  ▼
-{ name: '嘉義縣', code: '10010', eng: 'Chiayi County' }   or  null
+```mermaid
+flowchart TB
+  cl["client<br/>GET /api/project_areas/county_by_coords?lng=&lat="]
+  rt["routes/project_areas.js"]
+  geo["utils/geo.js · resolveCountyByLngLat<br/>data/tw_county.geojson (cached on first call)<br/>bbox prefilter → booleanPointInPolygon (@turf/turf)"]
+  out["{ name: '嘉義縣', code: '10010',<br/>eng: 'Chiayi County' } or null"]
+  cl --> rt --> geo --> out
 ```
 
 `scripts/backfill_county.js --apply` re-runs the helper for every
@@ -258,24 +187,22 @@ client                       backend
 
 ### 8. Auto-deploy (GitHub webhook → production)
 
-```
-GitHub  push to main
-      │ POST  https://<webhook-host>:8443/webhook/deploy
-      │       X-Hub-Signature-256: sha256=…
-      ▼
-[routes/webhook.js]
-      │  hmac(DEPLOY_WEBHOOK_SECRET) — timing-safe
-      ▼
-spawn  bash scripts/deploy.sh           (timeout 120 s, log → logs/deploy.log)
-      │
-      ├─ /health check          → save SHA to .last_good_commit
-      ├─ git pull origin main
-      ├─ npm install --production
-      ├─ run pending migrations (skipped with --skip-migrate)
-      ├─ pm2 reload ecosystem.config.js (zero-downtime)
-      └─ curl /health
-            │ fail → git reset --hard $LAST_GOOD ; pm2 reload ; alert
-            └ ok   → done
+```mermaid
+flowchart TB
+  gh["GitHub push to main<br/>POST https://&lt;webhook-host&gt;:8443/webhook/deploy<br/>X-Hub-Signature-256: sha256=…"]
+  wh["routes/webhook.js<br/>hmac(DEPLOY_WEBHOOK_SECRET) timing-safe"]
+  sp["spawn bash scripts/deploy.sh<br/>(timeout 120 s, log → logs/deploy.log)"]
+  s1["/health check<br/>save SHA → .last_good_commit"]
+  s2["git pull origin main"]
+  s3["npm install --production"]
+  s4["run pending migrations<br/>(skip with --skip-migrate)"]
+  s5["pm2 reload ecosystem.config.js<br/>(zero-downtime)"]
+  s6{"curl /health"}
+  ok(["done"])
+  rb["git reset --hard $LAST_GOOD<br/>pm2 reload · alert"]
+  gh --> wh --> sp --> s1 --> s2 --> s3 --> s4 --> s5 --> s6
+  s6 -- pass --> ok
+  s6 -- fail --> rb
 ```
 
 `GET /webhook/status` (Bearer `ADMIN_API_TOKEN`) returns the tail of
