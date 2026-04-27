@@ -36,7 +36,8 @@ const migrationFiles = [
   'tree_images.pg.sql', // [New] 樹木影像資料表 - 關聯到 tree_survey 與 pending_measurements
   'species_synonyms.pg.sql', // [New] 樹種同義詞/名稱變體對照表 - 統一不同量測員的命名差異
   '03_user_projects.pg.sql', // [Phase A] user_projects junction table + 從 associated_projects 遷移 + 填充 projects 表
-  '05_ip_blacklist.pg.sql' // [T8.2] IP 黑名單與登入失敗計數
+  '05_ip_blacklist.pg.sql', // [T8.2] IP 黑名單與登入失敗計數
+  '06_project_boundaries_seed.pg.sql' // [Data] 35 個港務專案邊界 (convex hull from tree GPS, +10m buffer)
 ];
 
 // Define the order for view creation
