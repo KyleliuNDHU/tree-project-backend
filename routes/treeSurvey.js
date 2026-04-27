@@ -247,6 +247,9 @@ router.get('/by_project/:projectName', projectAuthFilter, async (req, res) => {
                 carbon_sequestration_per_year AS "推估年碳吸存量"
             FROM tree_survey 
             WHERE project_name = $1
+              AND (is_placeholder IS NULL OR is_placeholder = false)
+              AND species_name != '__PLACEHOLDER__'
+              AND species_name != '預設樹種'
         `;
         const params = [projectName];
         let paramIdx = 2;
