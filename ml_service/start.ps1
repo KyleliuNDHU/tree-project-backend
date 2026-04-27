@@ -112,7 +112,17 @@ if ($env:VIRTUAL_ENV) {
 }
 
 # --- GPU 偵測 ---
-$gpuInfo = & $PythonExe -c "
+# 使用 try/catch + 暫時放寬 ErrorActionPreference，避免 torch 的 stderr warning
+# (例如 "XPU device count is zero") 被 $ErrorActionPreference='Stop' 當成致命錯誤終止腳本。
+$gpuInfo = $null
+try {
+    $prevPref = $ErrorActionPreference
+    $ErrorActionPreference = 'Continue'
+    # 用環境變數抑制 Python warnings + 同時把 stderr 丟掉
+    $env:PYTHONWARNINGS = 'ignore'
+    $gpuInfo = & $PythonExe -c "
+import warnings
+warnings.filterwarnings('ignore')
 try:
     import torch
     if hasattr(torch, 'xpu') and torch.xpu.is_available():
@@ -125,9 +135,15 @@ try:
         print(f'CUDA: {name} ({mem:.1f} GB)')
     else:
         print('CPU only')
-except:
+except Exception:
     print('CPU only')
 " 2>$null
+} catch {
+    $gpuInfo = 'CPU only (detection skipped)'
+} finally {
+    $ErrorActionPreference = $prevPref
+}
+if (-not $gpuInfo) { $gpuInfo = 'CPU only' }
 $gpuColor = if ($gpuInfo -and $gpuInfo -notmatch 'CPU only') { 'Green' } else { 'DarkGray' }
 Write-Host "  GPU:       $gpuInfo" -ForegroundColor $gpuColor
 

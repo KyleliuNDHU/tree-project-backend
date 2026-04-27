@@ -522,76 +522,52 @@ class _HybridSAM2Predictor:
 
 
 class _OVDepthModelWrapper:
-    """Wrapper for raw OpenVINO depth model to mimic PyTorch model outputs."""
-    def __init__(self, compiled_model):
-        self.compiled_model = compiled_model
-    
-    def __call__(self, **kwargs):
-        # Convert PyTorch tensors to numpy
-        inputs = {k: v.numpy() if hasattr(v, 'numpy') else v for k, v in kwargs.items()}
-        # OpenVINO inference
-        res = self.compiled_model(inputs)
-        # Convert output back to something that looks like PyTorch model output
-        class DummyOutput:
-            pass
-        out = DummyOutput()
-        # Assume the first output is predicted_depth, or map by names
-        if isinstance(res, dict):
-            # Try to find depth, focal, fov if present
-            vals = list(res.values())
-            out.predicted_depth = vals[0]
-            if len(vals) > 1:
-                # Based on DepthPro output order: depth, focal_length, fov (or similar)
-                pass # The post processor will handle it if it's a proper object, but let's just dict it
-        # transformers post_processor usually expects a specific output object, but for DepthPro:
-        # DepthProDepthEstimatorOutput has predicted_depth, focal_length, field_of_view
-        # Let's try to mimic it by just assigning attributes from the raw tensor
-        # Actually, let's just make it dict-like or object-like
-        out.predicted_depth = list(res.values())[0]
-        # if Depth Pro has more outputs, map them
-        names = [out_node.any_name for out_node in self.compiled_model.outputs]
-        for name, val in res.items():
-            name_str = name.any_name if hasattr(name, "any_name") else str(name)
-            if "focal" in name_str.lower():
-                out.focal_length = val
-            elif "fov" in name_str.lower() or "field_of_view" in name_str.lower():
-                out.field_of_view = val
-                
-        # If the above name mapping didn't work, just blindly assign if there are 3 outputs
-        vals = list(res.values())
-        if len(vals) == 3 and not hasattr(out, "focal_length"):
-            # Assume depth, fov, focal (need to check actual order, but let's just pass them)
-            # DepthPro outputs: predicted_depth, focal_length, field_of_view
-            out.predicted_depth = vals[0]
-            out.focal_length = vals[1]
-            out.field_of_view = vals[2]
-            
-        return out
+    """Wrapper for raw OpenVINO depth model to mimic PyTorch model outputs.
 
-class _OVDepthModelWrapper:
-    """Wrapper for raw OpenVINO depth model to mimic PyTorch model outputs."""
+    Maps outputs by tensor NAME (not positional index) so it works whether
+    the exported IR has 1/2/3 heads (e.g. DA V2 has only predicted_depth,
+    DepthPro-INT8W has [predicted_depth, field_of_view], full DepthPro has
+    all three). HF post_process_depth_estimation computes focal_length
+    internally from field_of_view if the focal head is absent.
+    """
     def __init__(self, compiled_model):
         self.compiled_model = compiled_model
-    
+
     def __call__(self, **kwargs):
         import numpy as np
-        # Convert PyTorch tensors to numpy
+        import torch
         inputs = {k: v.numpy() if hasattr(v, 'numpy') else v for k, v in kwargs.items()}
-        # OpenVINO inference
         res = self.compiled_model(inputs)
-        
+
         class DummyOutput:
             pass
         out = DummyOutput()
-        
-        # DepthPro outputs: predicted_depth, focal_length, field_of_view
-        vals = list(res.values())
-        out.predicted_depth = vals[0]
-        if len(vals) > 1:
-            out.focal_length = vals[1]
-        if len(vals) > 2:
-            out.field_of_view = vals[2]
-            
+
+        # Build name->value map (convert numpy -> torch tensor so HF post_process works)
+        def _to_torch(v):
+            if isinstance(v, np.ndarray):
+                return torch.from_numpy(v)
+            return v
+
+        named: dict = {}
+        for k, v in res.items():
+            key = k.any_name if hasattr(k, "any_name") else str(k)
+            named[key] = _to_torch(v)
+
+        depth_keys = [n for n in named if "depth" in n.lower()]
+        focal_keys = [n for n in named if "focal" in n.lower()]
+        fov_keys = [n for n in named if "field_of_view" in n.lower() or n.lower() == "fov"]
+
+        if depth_keys:
+            out.predicted_depth = named[depth_keys[0]]
+        else:
+            out.predicted_depth = list(named.values())[0]
+
+        if focal_keys:
+            out.focal_length = named[focal_keys[0]]
+        if fov_keys:
+            out.field_of_view = named[fov_keys[0]]
+
         return out
 
 class _ModelRegistry:

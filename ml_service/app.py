@@ -656,19 +656,34 @@ async def measure_dbh_endpoint(
 
         bbox = BoundingBox(x1=sx1, y1=sy1, x2=sx2, y2=sy2)
 
-        # Compute focal length from EXIF if available
-        effective_focal_px = focal_length_px
+        # Compute focal length from EXIF if available.
+        # NOTE: form field `focal_length_px` is given in ORIGINAL image pixels
+        # (e.g. Xiang 1428 px for a 1440-wide image). Since bbox/depth/mask
+        # are all measured in resized pixels, focal must be scaled too or we
+        # systematically under-estimate DBH by (1/scale) ≈ 25 %.
+        if focal_length_px is not None and scale != 1.0:
+            effective_focal_px = focal_length_px * scale
+            focal_source_extra = f" (scaled ×{scale:.3f})"
+        else:
+            effective_focal_px = focal_length_px
+            focal_source_extra = ""
         effective_fov = fov_degrees
         focal_source = "default"
 
+        # 注意：PHONE_SENSORS 中的 sensor_width_mm 是感測器「長軸」(landscape 寬)。
+        # 但 exif_transpose 將直拍照片旋轉為 portrait 後，W 變成短軸。
+        # 必須用 max(W, H)（長軸像素數）對齊 sensor_width_mm，否則 f_px 會偏小
+        # 約 25% (4:3 感測器)，導致 DBH 被系統性高估。
+        long_dim_px = max(W, H)
+
         if effective_focal_px is None and focal_length_mm is not None:
             # Use EXIF focal length + sensor width to compute focal_length_px
-            # f_px = f_mm * W_px / sensor_width_mm
+            # f_px = f_mm * long_dim_px / sensor_width_mm
             sensor_w, sensor_match = match_phone_sensor(
                 phone_make or "", phone_model or ""
             )
             effective_focal_px = focal_length_from_exif(
-                focal_length_mm, sensor_w, W
+                focal_length_mm, sensor_w, long_dim_px
             )
             focal_source = f"exif_mm ({focal_length_mm}mm, sensor={sensor_w}mm [{sensor_match}])"
 
@@ -798,6 +813,17 @@ async def auto_measure_dbh_endpoint(
     mask_pixel_width: Optional[float] = Form(default=None,
         description="Trunk pixel width computed on-device from YOLOv8-seg mask. "
                     "Overrides depth-edge detection when provided."),
+    trunk_mask_base64: Optional[str] = Form(default=None,
+        description="Base64-encoded PNG of the on-device YOLO-seg trunk mask "
+                    "(grayscale, same width as JPEG). When provided the server "
+                    "measures DBH on every multi-row sample directly from this "
+                    "mask instead of the depth-edge fallback. This is the "
+                    "recommended way: SAM on server is no longer needed."),
+    preview_width_px: Optional[float] = Form(default=None,
+        description="Preview frame portrait width (short-side px) on which the "
+                    "on-device YOLO mask was computed. Required for correct "
+                    "scaling when preview and JPEG resolutions differ (iOS, "
+                    "low-end Android). If omitted, assume preview == JPEG."),
     return_visualization: bool = Form(default=True,
         description="Return annotated visualization image"),
     return_detection_visualization: bool = Form(default=True,
@@ -838,17 +864,27 @@ async def auto_measure_dbh_endpoint(
         pil_image, scale = _resize_for_processing(pil_image_orig)
         W, H = pil_image.size
 
-        # Compute focal length
-        effective_focal_px = focal_length_px
+        # Compute focal length. See /measure-dbh: rescale provided focal_length_px
+        # to match the resized image space (mask/depth/bbox are all in resized px).
+        if focal_length_px is not None and scale != 1.0:
+            effective_focal_px = focal_length_px * scale
+            focal_source_extra = f" (scaled ×{scale:.3f})"
+        else:
+            effective_focal_px = focal_length_px
+            focal_source_extra = ""
         effective_fov = fov_degrees
         focal_source = "default"
+
+        # See note in /measure-dbh endpoint: must use long-axis pixel count
+        # to match sensor_width_mm which is the sensor's long axis.
+        long_dim_px = max(W, H)
 
         if effective_focal_px is None and focal_length_mm is not None:
             sensor_w, sensor_match = match_phone_sensor(
                 phone_make or "", phone_model or ""
             )
             effective_focal_px = focal_length_from_exif(
-                focal_length_mm, sensor_w, W
+                focal_length_mm, sensor_w, long_dim_px
             )
             focal_source = f"exif_mm ({focal_length_mm}mm, sensor={sensor_w}mm [{sensor_match}])"
 
@@ -978,7 +1014,6 @@ async def auto_measure_dbh_endpoint(
                           f"(method={sam_seg_result.method}, conf={sam_seg_result.confidence:.2f})")
             except Exception as e:
                 print(f"[AutoMeasure] SAM segmentation failed: {e}")
-                import traceback
                 traceback.print_exc()
         elif ENABLE_SAM_SEGMENTATION:
             # No YOLO bbox — use depth-based auto-prompt
@@ -999,6 +1034,38 @@ async def auto_measure_dbh_endpoint(
                 print(f"[AutoMeasure] SAM auto-prompt failed: {e}")
         seg_time = time.time() - t_seg
 
+        # ── Decode on-device YOLO-seg mask PNG if provided ──
+        # This is the recommended path (replaces server-side SAM). When the
+        # phone sends us a precise trunk mask we feed it into measure_dbh so
+        # every sampled row is measured FROM THE MASK (not depth edges).
+        on_device_mask_np = None
+        if trunk_mask_base64:
+            try:
+                import base64
+                raw = base64.b64decode(trunk_mask_base64)
+                m_img = Image.open(io.BytesIO(raw)).convert("L")
+                # IMPORTANT: the mask must live in the SAME coordinate space
+                # as ``depth_map`` and ``bbox`` (processed / resized space),
+                # because dbh_calculator indexes it as
+                # ``trunk_mask[row, bbox.x1:bbox.x2]``. ``pil_image`` is the
+                # ORIGINAL upload; depth/bbox are in processed space.
+                target_wh = (depth_map.shape[1], depth_map.shape[0])  # (W, H)
+                if m_img.size != target_wh:
+                    m_img = m_img.resize(target_wh, Image.NEAREST)
+                on_device_mask_np = (np.array(m_img) > 127).astype(np.uint8)
+                print(f"[AutoMeasure] Decoded on-device mask: shape={on_device_mask_np.shape} "
+                      f"positive_px={int(on_device_mask_np.sum())} "
+                      f"(resized to depth_map space {target_wh})")
+            except Exception as e:
+                print(f"[AutoMeasure] Failed to decode on-device mask: {e}")
+                on_device_mask_np = None
+
+        # Prefer on-device mask > SAM mask (if SAM ran) for measurement
+        effective_mask_np = on_device_mask_np
+        if effective_mask_np is None and sam_seg_result is not None \
+                and sam_seg_result.confidence > 0.3:
+            effective_mask_np = (sam_seg_result.mask > 0).astype(np.uint8)
+
         # Step 4: Measure DBH using auto-detected bbox
         t2 = time.time()
         result = measure_dbh_multi_row(
@@ -1006,6 +1073,7 @@ async def auto_measure_dbh_endpoint(
             focal_length_px=effective_focal_px,
             image_width_px=W,
             fov_degrees=effective_fov,
+            trunk_mask=effective_mask_np,
         )
         calc_time = time.time() - t2
 
@@ -1043,8 +1111,24 @@ async def auto_measure_dbh_endpoint(
         # Only use on-device mask_pixel_width as fallback when SAM was not applied.
         if not seg_mask_applied and mask_pixel_width is not None and mask_pixel_width > 10.0:
             try:
-                # Convert from photo-space pixels to processed-image-space pixels
-                mask_pixel_width_proc = mask_pixel_width * scale
+                # 座標空間校正：mask_pixel_width 是在前端 camera preview 幀上計算的，
+                # preview 解析度未必等於上傳的 JPEG 解析度（iOS / 低階 Android 會分離）。
+                # 正確做法：若前端有送 preview_width_px，則以比例重新對應到 processed 空間。
+                # 若沒有送，則回退為舊行為 (假設 preview 幀尺寸 == JPEG 尺寸)。
+                if preview_width_px is not None and preview_width_px > 0:
+                    # preview -> processed 比例 = W_processed / preview_width_px
+                    mask_pixel_width_proc = mask_pixel_width * (float(W) / float(preview_width_px))
+                    mask_scale_note = (
+                        f"preview {mask_pixel_width:.1f}px (@{preview_width_px:.0f}) "
+                        f"→ processed {mask_pixel_width_proc:.1f}px (@{W})"
+                    )
+                else:
+                    mask_pixel_width_proc = mask_pixel_width * scale
+                    mask_scale_note = (
+                        f"photo {mask_pixel_width:.1f}px → processed "
+                        f"{mask_pixel_width_proc:.1f}px (scale={scale:.3f}); "
+                        f"assumed preview==JPEG"
+                    )
                 mask_chord_m = pixel_width_to_metric(
                     mask_pixel_width_proc, result.trunk_depth_m, result.focal_length_px
                 )
@@ -1060,24 +1144,45 @@ async def auto_measure_dbh_endpoint(
                     measurement_row=result.measurement_row,
                     method=f"{result.method}+seg_mask",
                     notes=result.notes + [
-                        f"方案A: on-device mask width {mask_pixel_width:.1f}px (photo) "
-                        f"→ {mask_pixel_width_proc:.1f}px (processed, scale={scale:.3f}); "
-                        f"depth-edge was {old_depth_edge_px:.1f}px"
+                        f"方案A: {mask_scale_note}; depth-edge was {old_depth_edge_px:.1f}px"
                     ],
                 )
                 seg_mask_applied = True
             except Exception as e:
                 result.notes.append(f"方案A mask override skipped: {e}")
 
+        # ── Quality guard: warn when we have NO segmentation at all ──
+        # Without a trunk mask or on-device mask_pixel_width, measurement
+        # relied purely on depth-gradient inside the bbox. After removing the
+        # bbox*0.7 rectangular fallback, such measurements will return dbh=0
+        # when the three depth strategies all fail. We annotate it so the
+        # response is transparent (caller can display a "please re-aim" hint).
+        no_mask_available = (
+            on_device_mask_np is None
+            and not seg_mask_applied
+            and (mask_pixel_width is None or mask_pixel_width <= 10.0)
+        )
+        if no_mask_available:
+            result.notes.append(
+                "WARNING: no segmentation mask available — measurement is based "
+                "on depth edges only; accuracy may be degraded."
+            )
+
         # Step 4.5: Subpixel + Ellipse refinement (mode-dependent)
-        # Skip when 方案A seg-mask override was applied: the on-device YOLOv8-seg
-        # mask width is more accurate than depth-gradient refinement, and running
-        # subpixel/ellipse would negate the improvement.
+        # Skip when ANY seg mask was applied (SAM override OR on-device
+        # YOLOv8-seg mask fed into measure_dbh). The mask width is more
+        # accurate than depth-gradient refinement, and running subpixel
+        # would silently overwrite the mask width with a noisier estimate.
         active_preset = get_preset(mode) if mode else get_preset("balanced")
         subpixel_width = None
         ellipse_width = None
+        refinement_skip_due_to_mask = (
+            seg_mask_applied or on_device_mask_np is not None
+        )
 
-        if not seg_mask_applied and active_preset.use_subpixel and result.measurement_row is not None:
+        if (not refinement_skip_due_to_mask
+                and active_preset.use_subpixel
+                and result.measurement_row is not None):
             try:
                 gray = np.array(pil_image.convert("L")).astype(np.float64)
                 fg_mask = (depth_map < np.percentile(depth_map, 40)).astype(np.uint8)
@@ -1107,7 +1212,7 @@ async def auto_measure_dbh_endpoint(
             except Exception as e:
                 result.notes.append(f"Subpixel refinement skipped: {e}")
 
-        if not seg_mask_applied and active_preset.use_ellipse_fit and result.measurement_row is not None:
+        if not refinement_skip_due_to_mask and active_preset.use_ellipse_fit and result.measurement_row is not None:
             try:
                 fg_mask = (depth_map < np.percentile(depth_map, 40)).astype(np.uint8)
                 ell_w = ellipse_corrected_width(fg_mask, result.measurement_row)
@@ -1145,15 +1250,18 @@ async def auto_measure_dbh_endpoint(
         
         if _ref is not None and _inst is not None:
             deviation = abs(_ref - _inst) / _inst if _inst > 0 else float('inf')
-            if deviation < 0.5:
-                # GPS and instrument agree within 50% — use GPS (more precise for actual position)
+            # Tighter tolerance: GPS 水平精度通常 ±5-10m，但拍樹距離多在 1-5m。
+            # 15% 偏差 (例如 3m vs 3.45m) 已是顯著落差，此時信任儀器 HD。
+            # 原本 50% 太寬鬆 → 50cm 樹被錯放成 75cm 的風險。
+            if deviation < 0.15:
+                # GPS 與儀器吻合 → 用 GPS (實際位置誤差較小時)
                 chosen_distance = _ref
                 depth_source = "gps_validated"
                 correction_notes.append(
                     f"GPS ({_ref:.2f}m) validated by instrument HD ({_inst:.2f}m), deviation {deviation:.0%}"
                 )
             else:
-                # Large disagreement — trust instrument HD (calibrated device)
+                # 分歧大 → 信任儀器 HD (校正過的光學測距)
                 chosen_distance = _inst
                 depth_source = "instrument_preferred"
                 correction_notes.append(

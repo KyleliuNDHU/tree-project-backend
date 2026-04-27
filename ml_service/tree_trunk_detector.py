@@ -94,13 +94,23 @@ def detect_trunks(depth_map: np.ndarray,
 
     # Replace NaN/Inf with median
     if np.any(~np.isfinite(depth_map)):
+        bad_count = int(np.sum(~np.isfinite(depth_map)))
         finite_mask = np.isfinite(depth_map)
         if np.any(finite_mask):
             median_val = float(np.median(depth_map[finite_mask]))
         else:
             median_val = 5.0
+            print("[detect_trunks] WARNING: depth map has NO finite values, "
+                  "using fallback median 5.0m — trunk detection unreliable.")
         depth_map = np.where(np.isfinite(depth_map), depth_map, median_val)
-        notes.append("Replaced NaN/Inf values in depth map")
+        ratio = bad_count / float(H * W)
+        if ratio > 0.05:
+            print(f"[detect_trunks] WARNING: {bad_count}/{H*W} "
+                  f"({ratio*100:.1f}%) depth pixels were NaN/Inf, "
+                  f"replaced with median {median_val:.2f}m. Results may be degraded.")
+        notes.append(
+            f"Replaced {bad_count} NaN/Inf values in depth map (median={median_val:.2f}m)"
+        )
 
     # Step 1: Compute depth statistics
     depth_stats = {

@@ -57,6 +57,20 @@ venv/
 ml_service/venv/
 ml_service/logs/
 
+# --- ML Service research/debug artifacts (not committed) ---
+ml_service/benchmark_*.csv
+ml_service/analyze_xiang.py
+ml_service/benchmark_xiang.py
+ml_service/calibrate_depth.py
+ml_service/debug_one.py
+ml_service/diagnose_depth.py
+ml_service/diag_output.txt
+ml_service/inspect_seg.py
+ml_service/inspect_xiang.py
+ml_service/probe_ov_outputs.py
+ml_service/test_dbh_full_pipeline.py
+ml_service/ml_service.err
+
 # --- ML Models (Too large for Git) ---
 ml_service/models/
 ml_service/openvino_models/

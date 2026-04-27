@@ -52,6 +52,7 @@ _processor = None
 _device = None
 _model_id = None
 _backend_type = None  # "pytorch", "depth_pro", "openvino", "onnx"
+_is_depth_pro = False  # True when active model is Apple DepthPro (any backend)
 _detected_backend_cache = None
 
 
@@ -178,9 +179,11 @@ def load_model(model_id_override: str = None):
     _device = "cpu" if not ENABLE_OPENVINO else "openvino"
     
     # Check if it loaded OpenVINO
+    global _is_depth_pro
+    _is_depth_pro = bool(_model_id and ("DepthPro" in _model_id or "depth_pro" in _model_id))
     if hasattr(_model, "compile") or type(_model).__name__ == "_OVDepthModelWrapper":
         _backend_type = "openvino"
-    elif "DepthPro" in _model_id or "depth_pro" in _model_id:
+    elif _is_depth_pro:
         _backend_type = "depth_pro"
     else:
         _backend_type = "pytorch_cpu"
@@ -370,7 +373,10 @@ def estimate_depth_rich(image: Image.Image) -> DepthResult:
     config = get_depth_config()
 
     # ── Depth Pro path: uses post_process_depth_estimation ────
-    if _backend_type == "depth_pro":
+    # NOTE: route by _is_depth_pro (model identity) NOT _backend_type,
+    # because Depth Pro running on OpenVINO still requires DepthPro post-processing
+    # to convert raw outputs to metric depth + pixel focal length.
+    if _is_depth_pro:
         return _infer_depth_pro(image, model, processor)
 
     # ── OpenVINO / ONNX / Standard PyTorch ────────────────────
@@ -463,12 +469,25 @@ def _infer_standard(
 
     depth_map = prediction.cpu().numpy()
 
+    def _to_scalar(v):
+        if v is None:
+            return None
+        try:
+            if isinstance(v, torch.Tensor):
+                v = v.detach().cpu().numpy()
+            arr = np.asarray(v).squeeze()
+            if arr.ndim == 0:
+                return float(arr)
+            return float(arr.reshape(-1)[0])
+        except Exception:
+            return None
+
     auto_focal = None
     auto_fov = None
     if hasattr(outputs, "focal_length"):
-        auto_focal = float(outputs.focal_length)
+        auto_focal = _to_scalar(outputs.focal_length)
     if hasattr(outputs, "field_of_view"):
-        auto_fov = float(outputs.field_of_view)
+        auto_fov = _to_scalar(outputs.field_of_view)
 
     return DepthResult(
         depth_map=depth_map,
