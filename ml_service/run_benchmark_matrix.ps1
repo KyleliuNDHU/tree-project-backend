@@ -57,44 +57,79 @@ $cases = @(
 )
 
 function Stop-MLService {
-    Get-Process -Name 'python','python3' -ErrorAction SilentlyContinue |
-        Where-Object { $_.CommandLine -match 'uvicorn|app:app' -or $_.MainWindowTitle -match 'ml_service' } |
-        ForEach-Object {
-            Write-Host "[matrix] Stopping uvicorn pid=$($_.Id)" -ForegroundColor Yellow
-            Stop-Process -Id $_.Id -Force -ErrorAction SilentlyContinue
-        }
-    # Also kill anything bound to the port
-    $conn = Get-NetTCPConnection -LocalPort 8100 -ErrorAction SilentlyContinue |
-        Select-Object -First 1
-    if ($conn) {
-        try { Stop-Process -Id $conn.OwningProcess -Force -ErrorAction SilentlyContinue } catch {}
+    # Kill any process listening on port 8100
+    $conns = Get-NetTCPConnection -LocalPort 8100 -State Listen -ErrorAction SilentlyContinue
+    foreach ($c in $conns) {
+        try {
+            Write-Host "[matrix] Stopping pid=$($c.OwningProcess) (port 8100)" -ForegroundColor Yellow
+            Stop-Process -Id $c.OwningProcess -Force -ErrorAction SilentlyContinue
+        } catch {}
     }
+    # Mop up any lingering python.exe started by us (best-effort, silent if none)
+    Get-CimInstance Win32_Process -Filter "Name='python.exe'" -ErrorAction SilentlyContinue |
+        Where-Object { $_.CommandLine -match 'uvicorn.+app:app' } |
+        ForEach-Object {
+            Write-Host "[matrix] Stopping uvicorn pid=$($_.ProcessId)" -ForegroundColor Yellow
+            Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue
+        }
     Start-Sleep -Seconds 2
 }
 
 function Start-MLService {
     param([string]$Model, [string]$LogPath)
-    Write-Host "[matrix] Starting ml_service with ML_DEPTH_MODEL=$Model" -ForegroundColor Cyan
-    # Build a single-line command for Start-Process
-    $cmd = @(
-        "`$env:ML_DEPTH_MODEL='$Model';"
-        "`$env:ML_ENABLE_SAM='false';"
-        "`$env:ML_SEG_MODEL='depth_heuristic';"
-        ".\start.ps1 *>&1 | Tee-Object -FilePath '$LogPath'"
-    ) -join ' '
-    return Start-Process -FilePath 'powershell.exe' `
-        -ArgumentList @('-NoProfile','-NoExit','-Command', $cmd) `
+    Write-Host "[matrix] Starting ml_service (uvicorn direct) with ML_DEPTH_MODEL=$Model" -ForegroundColor Cyan
+    # Only depth_pro has a prebuilt OpenVINO export; force PyTorch path for others.
+    $useOV = if ($Model -eq 'depth_pro') { 'true' } else { 'false' }
+
+    # Set the env vars in THIS process; Start-Process will inherit them.
+    $env:ML_DEPTH_MODEL  = $Model
+    $env:ML_USE_OPENVINO = $useOV
+    $env:ML_ENABLE_SAM   = 'false'
+    $env:ML_SEG_MODEL    = 'depth_heuristic'
+    $env:PYTHONUNBUFFERED = '1'
+    if (-not $env:PORT) { $env:PORT = '8100' }
+
+    # Also load the rest of .env (but never override what's already set).
+    $envFile = Join-Path $here '.env'
+    if (Test-Path $envFile) {
+        Get-Content $envFile | ForEach-Object {
+            $line = $_.Trim()
+            if ($line -and -not $line.StartsWith('#')) {
+                $parts = $line -split '=', 2
+                if ($parts.Count -eq 2) {
+                    $name = $parts[0].Trim()
+                    if (-not [Environment]::GetEnvironmentVariable($name, 'Process')) {
+                        [Environment]::SetEnvironmentVariable($name, $parts[1].Trim(), 'Process')
+                    }
+                }
+            }
+        }
+    }
+
+    # Wipe / start the log file so it's truncated for each run.
+    Set-Content -Path $LogPath -Value "" -NoNewline -Encoding UTF8
+
+    $py = Join-Path $here 'venv\Scripts\python.exe'
+    $errLog = [System.IO.Path]::ChangeExtension($LogPath, '.err.log')
+    Set-Content -Path $errLog -Value "" -NoNewline -Encoding UTF8
+
+    return Start-Process -FilePath $py `
+        -ArgumentList @('-m','uvicorn','app:app','--host','0.0.0.0','--port',$env:PORT,'--workers','1') `
         -WorkingDirectory $here `
+        -WindowStyle Hidden `
         -PassThru `
-        -WindowStyle Minimized
+        -RedirectStandardOutput $LogPath `
+        -RedirectStandardError $errLog
 }
 
 function Wait-HealthOk {
     param([string]$Expect, [int]$TimeoutSec)
+    $headers = @{}
+    if ($env:ML_API_KEY) { $headers['X-ML-API-Key'] = $env:ML_API_KEY }
     $deadline = (Get-Date).AddSeconds($TimeoutSec)
     while ((Get-Date) -lt $deadline) {
         try {
-            $h = Invoke-RestMethod -Uri "$Url/health" -TimeoutSec 5 -ErrorAction Stop
+            $h = Invoke-RestMethod -Uri "$Url/health" -TimeoutSec 5 -Headers $headers -ErrorAction Stop
             if ($h.status -eq 'ok' -and $h.model -match $Expect) {
                 Write-Host "[matrix]   /health OK -> $($h.model) ($($h.model_params_m)M)" -ForegroundColor Green
                 return $true

@@ -32,7 +32,12 @@ if (Test-Path $EnvFile) {
         if ($line -and -not $line.StartsWith('#')) {
             $parts = $line -split '=', 2
             if ($parts.Count -eq 2 -and $parts[0].Trim() -and $parts[1].Trim()) {
-                [Environment]::SetEnvironmentVariable($parts[0].Trim(), $parts[1].Trim(), 'Process')
+                $name = $parts[0].Trim()
+                # Don't override variables that are already set in the parent shell.
+                # This lets the matrix benchmark driver inject ML_DEPTH_MODEL etc.
+                if (-not [Environment]::GetEnvironmentVariable($name, 'Process')) {
+                    [Environment]::SetEnvironmentVariable($name, $parts[1].Trim(), 'Process')
+                }
             }
         }
     }
