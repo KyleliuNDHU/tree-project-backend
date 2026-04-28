@@ -50,10 +50,14 @@ $ExpectModel = @{
 }
 
 $cases = @(
-    @{ tag='nomask__nodist';  ref=$false; mask=$false },
-    @{ tag='nomask__refdist'; ref=$true;  mask=$false },
-    @{ tag='gtmask__nodist';  ref=$false; mask=$true  },
-    @{ tag='gtmask__refdist'; ref=$true;  mask=$true  }
+    @{ tag='nomask__nodist';     ref=$false; mask='none'   },
+    @{ tag='nomask__refdist';    ref=$true;  mask='none'   },
+    @{ tag='gtmask__nodist';     ref=$false; mask='gt'     },
+    @{ tag='gtmask__refdist';    ref=$true;  mask='gt'     },
+    @{ tag='yolomask__nodist';   ref=$false; mask='yolo'   },
+    @{ tag='yolomask__refdist';  ref=$true;  mask='yolo'   },
+    @{ tag='yolomaskm__nodist';  ref=$false; mask='yolom'  },
+    @{ tag='yolomaskm__refdist'; ref=$true;  mask='yolom'  }
 )
 
 function Stop-MLService {
@@ -88,6 +92,7 @@ function Start-MLService {
     $env:ML_USE_OPENVINO = $useOV
     $env:ML_ENABLE_SAM   = 'false'
     $env:ML_SEG_MODEL    = 'depth_heuristic'
+    $env:ML_RATE_LIMIT   = '1000000'   # benchmark: effectively disabled
     $env:PYTHONUNBUFFERED = '1'
     if (-not $env:PORT) { $env:PORT = '8100' }
 
@@ -188,8 +193,10 @@ foreach ($model in $Models) {
             '--timeout', $PerCaseTimeoutSec
         )
         if ($Limit -gt 0)  { $argList += @('--limit', $Limit) }
-        if ($c.ref)        { $argList += '--use-ref-distance' }
-        if ($c.mask)       { $argList += '--use-gt-mask' }
+        if ($c.ref)              { $argList += '--use-ref-distance' }
+        if ($c.mask -eq 'gt')    { $argList += '--use-gt-mask' }
+        elseif ($c.mask -eq 'yolo')  { $argList += '--use-yolo-mask' }
+        elseif ($c.mask -eq 'yolom') { $argList += '--use-yolo-mask-m' }
 
         Write-Host "`n[matrix] >>> $tag" -ForegroundColor Cyan
         $caseStart = Get-Date
