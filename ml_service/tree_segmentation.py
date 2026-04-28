@@ -371,7 +371,6 @@ def _run_sam_point_prompt(
     masks = processor.post_process_masks(
         outputs.pred_masks,
         inputs["original_sizes"],
-        inputs["reshaped_input_sizes"],
     )
 
     scores = outputs.iou_scores[0][0]
@@ -439,7 +438,6 @@ def _run_sam_bbox_prompt(
     masks = processor.post_process_masks(
         outputs.pred_masks,
         inputs["original_sizes"],
-        inputs["reshaped_input_sizes"],
     )
 
     scores = outputs.iou_scores[0][0]

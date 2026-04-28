@@ -1042,7 +1042,6 @@ async def auto_measure_dbh_endpoint(
         on_device_mask_np = None
         if trunk_mask_base64:
             try:
-                import base64
                 raw = base64.b64decode(trunk_mask_base64)
                 m_img = Image.open(io.BytesIO(raw)).convert("L")
                 # IMPORTANT: the mask must live in the SAME coordinate space
