@@ -424,7 +424,10 @@ def print_config_summary():
     print(f"  Model ID:     {depth.model_id}")
     print(f"  License:      {depth.license}")
     print(f"  Est. Time:    ~{depth.expected_cpu_time_s}s on CPU")
-    print(f"  Segmentation: {seg.display_name}")
+    if ENABLE_SAM_SEGMENTATION:
+        print(f"  Segmentation: {seg.display_name}")
+    else:
+        print(f"  Segmentation: on-device YOLOv8-seg (server SAM disabled)")
     print(f"  ONNX Runtime: {'Enabled' if USE_ONNX_RUNTIME else 'Disabled'}")
     print(f"  OpenVINO:     {'Enabled' if ENABLE_OPENVINO else 'Disabled'}")
     print(f"  CPU Threads:  {CPU_THREADS}")

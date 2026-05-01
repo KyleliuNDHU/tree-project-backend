@@ -113,9 +113,85 @@ setInterval(() => {
     }
 }, 30 * 60 * 1000); // 每 30 分鐘檢查一次
 
+// ============================================
+// [NEW] Chat Sessions API — server-side per-user history
+// ============================================
+// 將原本前端 SharedPreferences 的對話列表搬到後端，
+// 透過 JWT 取得 user_id 來保證跨裝置/同裝置不同帳號互相隔離。
+
+// GET /chat/sessions — 列出當前使用者所有對話 session（最新 50 筆）
+router.get('/chat/sessions', requireRole('調查管理員'), async (req, res) => {
+    try {
+        const userId = String(req.user.user_id);
+        const result = await db.query(
+            `SELECT
+                session_id,
+                MIN(created_at) AS created_at,
+                MAX(created_at) AS updated_at,
+                COUNT(*)::int AS exchange_count,
+                (
+                    SELECT message FROM chat_logs
+                    WHERE user_id = $1 AND session_id = cl.session_id
+                    ORDER BY created_at ASC LIMIT 1
+                ) AS first_message
+             FROM chat_logs cl
+             WHERE user_id = $1 AND session_id IS NOT NULL AND session_id <> ''
+             GROUP BY session_id
+             ORDER BY MAX(created_at) DESC
+             LIMIT 50`,
+            [userId]
+        );
+        res.json({ success: true, sessions: result.rows });
+    } catch (err) {
+        console.error('[Chat Sessions] 列表查詢失敗:', err.message);
+        res.status(500).json({ success: false, error: '對話列表取得失敗' });
+    }
+});
+
+// GET /chat/sessions/:sessionId — 取得單一 session 的完整對話內容
+router.get('/chat/sessions/:sessionId', requireRole('調查管理員'), async (req, res) => {
+    try {
+        const userId = String(req.user.user_id);
+        const { sessionId } = req.params;
+        const result = await db.query(
+            `SELECT id, message, response, model_used, created_at
+             FROM chat_logs
+             WHERE user_id = $1 AND session_id = $2
+             ORDER BY created_at ASC`,
+            [userId, sessionId]
+        );
+        res.json({ success: true, session_id: sessionId, exchanges: result.rows });
+    } catch (err) {
+        console.error('[Chat Sessions] 對話內容取得失敗:', err.message);
+        res.status(500).json({ success: false, error: '對話內容取得失敗' });
+    }
+});
+
+// DELETE /chat/sessions/:sessionId — 刪除單一 session（僅刪除自己的）
+router.delete('/chat/sessions/:sessionId', requireRole('調查管理員'), async (req, res) => {
+    try {
+        const userId = String(req.user.user_id);
+        const { sessionId } = req.params;
+        const result = await db.query(
+            `DELETE FROM chat_logs WHERE user_id = $1 AND session_id = $2`,
+            [userId, sessionId]
+        );
+        res.json({ success: true, deleted: result.rowCount });
+    } catch (err) {
+        console.error('[Chat Sessions] 刪除失敗:', err.message);
+        res.status(500).json({ success: false, error: '對話刪除失敗' });
+    }
+});
+
 router.post('/chat', requireRole('調查管理員'), aiLimiter, async (req, res) => {
     try {
         let { message, userId, projectAreas, model_preference = 'gpt-4.1-nano', sessionId } = req.body;
+
+        // [Security] 強制使用 JWT 帶來的 user_id，避免前端偽造或裝置共用 ID 造成跨帳號讀取對話。
+        // 保留 req.body.userId 僅作為相容性輸入，會被覆寫。
+        if (req.user && req.user.user_id != null) {
+            userId = String(req.user.user_id);
+        }
 
         if (!message || typeof message !== 'string' || message.trim() === '') {
             return res.status(400).json({ success: false, error: '請提供有效的訊息內容' });

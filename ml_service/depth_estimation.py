@@ -725,16 +725,32 @@ def _infer_da3_ov(image: Image.Image, model, config) -> DepthResult:
         x = proc
 
     H, W = int(x.shape[-2]), int(x.shape[-1])
+    pad_top = pad_left = 0
+    crop_h, crop_w = H, W
     if (H, W) != (expect_h, expect_w):
-        # Likely a non-portrait image; OV IR is fixed-shape so we must skip OV.
-        raise RuntimeError(
-            f"input shape {H}x{W} != IR static shape {expect_h}x{expect_w}"
+        # IR is static; letterbox-pad (replicate) to expected shape so OV path
+        # still works for arbitrary aspect ratios (e.g. 9:16 phone photos).
+        if H > expect_h or W > expect_w:
+            raise RuntimeError(
+                f"input shape {H}x{W} larger than IR static shape "
+                f"{expect_h}x{expect_w} (preprocess sized incorrectly)"
+            )
+        pad_top = (expect_h - H) // 2
+        pad_bottom = expect_h - H - pad_top
+        pad_left = (expect_w - W) // 2
+        pad_right = expect_w - W - pad_left
+        x = torch.nn.functional.pad(
+            x, (pad_left, pad_right, pad_top, pad_bottom), mode="replicate"
         )
 
     arr = x.numpy().astype(np.float32)
     out_node = _da3_ov_compiled.outputs[0]
     raw = _da3_ov_compiled([arr])[out_node]
-    depth = np.asarray(raw, dtype=np.float32).squeeze()  # (H, W)
+    depth = np.asarray(raw, dtype=np.float32).squeeze()  # (expect_h, expect_w)
+
+    # Crop out the padded border before resize.
+    if (pad_top, pad_left) != (0, 0) or depth.shape != (crop_h, crop_w):
+        depth = depth[pad_top:pad_top + crop_h, pad_left:pad_left + crop_w]
 
     # 2) Resize to original.
     if depth.shape != (target_h, target_w):
