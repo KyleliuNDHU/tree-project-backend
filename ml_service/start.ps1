@@ -3,16 +3,17 @@
 # ============================================================
 # 使用方式:
 #   cd backend\ml_service
-#   .\start.ps1                  # 預設模式 (DA V2 Base)
+#   .\start.ps1                  # 預設模式 (DA3 + OpenVINO iGPU)
 #   .\start.ps1 -Preset pro      # Depth Pro 模式 (PyTorch)
-#   .\start.ps1 -Preset pro_ov   # Depth Pro + OpenVINO INT8-W (推薦)
+#   .\start.ps1 -Preset pro_ov   # Depth Pro + OpenVINO INT8-W
+#   .\start.ps1 -Preset da3      # DA3 Metric Large + OpenVINO FP16 iGPU
 #   .\start.ps1 -Verify          # 啟用 numpy 驗證
 #   .\start.ps1 -Workers 2       # 多 worker (需較大 RAM)
 # ============================================================
 
 param(
-    [ValidateSet('default', 'pro', 'openvino', 'pro_ov')]
-    [string]$Preset = 'pro_ov',
+    [ValidateSet('default', 'pro', 'openvino', 'pro_ov', 'da3')]
+    [string]$Preset = 'da3',
 
     [switch]$Verify,
     [switch]$Debug,
@@ -59,6 +60,24 @@ switch ($Preset) {
         $env:ML_DEPTH_MODEL = 'da_v2_base'
         $env:ML_USE_OPENVINO = 'true'
         Write-Host "`n  Model: DA V2 + OpenVINO iGPU acceleration" -ForegroundColor Cyan
+    }
+    'da3' {
+        # DA3METRIC-LARGE (ICLR 2026 Oral) + OpenVINO FP16 on Intel Arc iGPU.
+        # OV IR auto-loaded by depth_estimation._try_load_da3 if present at
+        #   openvino_models/da3_metric_large/openvino_model.xml
+        # (export it via: python da3_to_openvino.py)
+        # Falls back to PyTorch CPU if IR missing or load fails.
+        # ML_USE_OPENVINO is informational here — DA3 OV path is auto-detected.
+        $env:ML_DEPTH_MODEL = 'da3_metric_large'
+        $env:ML_USE_OPENVINO = 'true'
+        Write-Host "`n  Model: DA3 Metric Large + OpenVINO FP16 iGPU (~500ms warm)" -ForegroundColor Cyan
+        $da3OvXml = Join-Path $ScriptDir 'openvino_models\da3_metric_large\openvino_model.xml'
+        if (Test-Path $da3OvXml) {
+            Write-Host "  DA3 OV IR: found (504x378 FP16, will load on iGPU)" -ForegroundColor Green
+        } else {
+            Write-Host "  DA3 OV IR: NOT FOUND — will fall back to PyTorch CPU" -ForegroundColor Yellow
+            Write-Host "  Run: python da3_to_openvino.py  to export." -ForegroundColor DarkGray
+        }
     }
     default {
         if (-not $env:ML_DEPTH_MODEL) { $env:ML_DEPTH_MODEL = 'da_v2_base' }

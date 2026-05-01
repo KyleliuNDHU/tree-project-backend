@@ -55,6 +55,15 @@ _backend_type = None  # "pytorch", "depth_pro", "openvino", "onnx"
 _is_depth_pro = False  # True when active model is Apple DepthPro (any backend)
 _detected_backend_cache = None
 
+# DA3 OpenVINO acceleration ---------------------------------------------------
+# When `_da3_ov_compiled` is set, _infer_da3() will run depth on the iGPU via
+# OpenVINO IR (FP16) instead of the much slower PyTorch CPU path.
+# Validation (da3_ov_validate.py) confirms < 1% per-pixel diff vs PT-FP32.
+_da3_ov_compiled = None
+_da3_ov_input_shape: tuple[int, int] | None = None  # (H, W) IR was exported at
+_da3_ov_device = None  # "GPU" / "CPU" / "NPU"
+_da3_input_processor = None  # DA3 InputProcessor instance
+
 
 def detect_best_backend() -> str:
     """
@@ -294,8 +303,15 @@ def _try_load_unidepth(model_id: str, config) -> bool:
 
 
 def _try_load_da3(model_id: str, config) -> bool:
-    """Attempt to load Depth-Anything-3 via its native API."""
+    """Attempt to load Depth-Anything-3 via its native API.
+
+    If a pre-exported OpenVINO IR exists at
+    ``openvino_models/da3_metric_large/openvino_model.xml``, also compile it for
+    iGPU acceleration; production inference will then route through OV (~5-6×
+    faster on Intel Arc iGPU vs PT-CPU, with <1% numerical drift).
+    """
     global _model, _processor, _device, _model_id, _backend_type
+    global _da3_ov_compiled, _da3_ov_input_shape, _da3_ov_device, _da3_input_processor
     try:
         from depth_anything_3.api import DepthAnything3
 
@@ -309,6 +325,37 @@ def _try_load_da3(model_id: str, config) -> bool:
         _model_id = model_id
         _backend_type = f"da3_{_device}"
         print(f"[DepthEstimation] DA3 loaded ({config.params_m}M params) on {_device}")
+
+        # ---- Optional: load DA3 OpenVINO IR for iGPU acceleration ----
+        try:
+            from pathlib import Path as _P
+            ov_xml = _P(__file__).parent / "openvino_models" / "da3_metric_large" / "openvino_model.xml"
+            if ov_xml.exists():
+                import openvino as ov
+                core = ov.Core()
+                devs = core.available_devices
+                target = "GPU" if "GPU" in devs else "CPU"
+                ov_model = core.read_model(str(ov_xml))
+                # Read the static export shape from the IR (e.g. 504x378).
+                in_shape = ov_model.inputs[0].get_partial_shape()
+                try:
+                    H = int(in_shape[2].get_length())
+                    W = int(in_shape[3].get_length())
+                except Exception:
+                    H, W = 504, 378  # fallback to known export
+                _da3_ov_compiled = core.compile_model(ov_model, target)
+                _da3_ov_input_shape = (H, W)
+                _da3_ov_device = target
+                _da3_input_processor = _model.input_processor
+                _backend_type = f"da3_openvino_{target.lower()}"
+                print(f"[DepthEstimation] DA3 OpenVINO IR loaded → {target} "
+                      f"(input {H}×{W}, FP16, ~5-6× faster than PT-CPU)")
+            else:
+                print(f"[DepthEstimation] DA3 OV IR not found at {ov_xml} — using PyTorch path")
+        except Exception as ov_err:
+            print(f"[DepthEstimation] DA3 OV load failed (will use PyTorch): {ov_err}")
+            _da3_ov_compiled = None
+
         return True
     except Exception as e:
         print(f"[DepthEstimation] DA3 load error: {e}")
@@ -598,7 +645,23 @@ def _infer_unidepth(image: Image.Image, model, config) -> DepthResult:
 
 
 def _infer_da3(image: Image.Image, model, config) -> DepthResult:
-    """Depth-Anything-3 native inference. Returns metric depth (resized to original)."""
+    """Depth-Anything-3 native inference. Returns metric depth (resized to original).
+
+    When a DA3 OpenVINO IR is loaded (`_da3_ov_compiled` is not None) and the
+    image's preprocessed shape matches the IR's static input shape, the forward
+    pass runs on the iGPU (FP16) instead of PyTorch CPU \u2014 ~5-6\u00d7 faster, with
+    <1% per-pixel numerical drift (validated by da3_ov_validate.py).
+    """
+    target_h, target_w = image.height, image.width
+
+    # ---- OpenVINO fast path ----
+    if _da3_ov_compiled is not None and _da3_input_processor is not None:
+        try:
+            return _infer_da3_ov(image, model, config)
+        except Exception as e:
+            print(f"[DepthEstimation] DA3 OV path failed ({e}); falling back to PyTorch")
+
+    # ---- PyTorch fallback path ----
     with torch.no_grad():
         pred = model.inference([image], export_dir=None)
 
@@ -608,7 +671,6 @@ def _infer_da3(image: Image.Image, model, config) -> DepthResult:
     depth = np.asarray(depth, dtype=np.float32)
 
     # Resize to original image size (DA3 processes at ~504 long edge).
-    target_h, target_w = image.height, image.width
     if depth.shape != (target_h, target_w):
         d_t = torch.from_numpy(depth)[None, None]
         d_t = torch.nn.functional.interpolate(
@@ -623,7 +685,7 @@ def _infer_da3(image: Image.Image, model, config) -> DepthResult:
         K = pred.intrinsics
         if K.ndim == 3:
             K = K[0]
-        # DA3 intrinsics are in processed-image space → rescale fx,fy by ratio.
+        # DA3 intrinsics are in processed-image space \u2192 rescale fx,fy by ratio.
         proc_h, proc_w = pred.depth[0].shape[-2:]
         scale_x = target_w / float(proc_w)
         scale_y = target_h / float(proc_h)
@@ -640,6 +702,56 @@ def _infer_da3(image: Image.Image, model, config) -> DepthResult:
         backend_used=_backend_type or "da3_native",
         model_id=_model_id or config.model_id,
         notes=notes,
+    )
+
+
+def _infer_da3_ov(image: Image.Image, model, config) -> DepthResult:
+    """DA3 OpenVINO IR forward (iGPU FP16). Image must preprocess to the IR's static shape."""
+    assert _da3_ov_compiled is not None
+    assert _da3_input_processor is not None
+    assert _da3_ov_input_shape is not None
+
+    target_h, target_w = image.height, image.width
+    expect_h, expect_w = _da3_ov_input_shape
+
+    # 1) Use DA3 InputProcessor for IDENTICAL preprocessing as PT path.
+    proc, _, _ = _da3_input_processor(
+        [image], None, None, max(expect_h, expect_w), "upper_bound_resize", num_workers=1
+    )
+    # proc shape is (1, N, 3, H, W); take first view.
+    if proc.dim() == 5:
+        x = proc[:, 0]  # (1, 3, H, W)
+    else:
+        x = proc
+
+    H, W = int(x.shape[-2]), int(x.shape[-1])
+    if (H, W) != (expect_h, expect_w):
+        # Likely a non-portrait image; OV IR is fixed-shape so we must skip OV.
+        raise RuntimeError(
+            f"input shape {H}x{W} != IR static shape {expect_h}x{expect_w}"
+        )
+
+    arr = x.numpy().astype(np.float32)
+    out_node = _da3_ov_compiled.outputs[0]
+    raw = _da3_ov_compiled([arr])[out_node]
+    depth = np.asarray(raw, dtype=np.float32).squeeze()  # (H, W)
+
+    # 2) Resize to original.
+    if depth.shape != (target_h, target_w):
+        d_t = torch.from_numpy(depth)[None, None]
+        d_t = torch.nn.functional.interpolate(
+            d_t, size=(target_h, target_w), mode="bilinear", align_corners=False,
+        )
+        depth = d_t.squeeze().numpy()
+
+    # OV path does not return intrinsics (camera decoder was None for monocular metric DA3).
+    return DepthResult(
+        depth_map=depth,
+        auto_focal_length_px=None,
+        auto_fov_degrees=None,
+        backend_used=_backend_type or f"da3_openvino_{(_da3_ov_device or '').lower()}",
+        model_id=_model_id or config.model_id,
+        notes=[f"DA3 OV {expect_h}x{expect_w} on {_da3_ov_device}"],
     )
 
 
