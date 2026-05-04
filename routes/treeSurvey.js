@@ -220,9 +220,13 @@ router.get('/by_id/:id', projectAuthFilter, async (req, res) => {
     }
 });
 
-// 根據專案名稱獲取樹木 (依使用者權限過濾)
-router.get('/by_project/:projectName', projectAuthFilter, async (req, res) => {
-    const { projectName } = req.params;
+// 根據專案名稱或專案代碼獲取樹木 (依使用者權限過濾)
+// [P3 / Bug 3] 改成 name OR code 解析：
+//   - 透過 projects 表把 name → code，避免 projects.name='X（B1）'
+//     vs tree_survey.project_name='X' 字串漂移時整段查不到
+//   - 保留直接 project_name 比對當 fallback (相容沒 projects 列的歷史資料)
+router.get('/by_project/:projectNameOrCode', projectAuthFilter, async (req, res) => {
+    const { projectNameOrCode } = req.params;
     try {
         let sql = `
             SELECT 
@@ -246,12 +250,18 @@ router.get('/by_project/:projectName', projectAuthFilter, async (req, res) => {
                 carbon_storage AS "碳儲存量",
                 carbon_sequestration_per_year AS "推估年碳吸存量"
             FROM tree_survey 
-            WHERE project_name = $1
+            WHERE (
+                project_code IN (
+                    SELECT project_code FROM projects
+                    WHERE name = $1 OR project_code = $1
+                )
+                OR project_name = $1
+            )
               AND (is_placeholder IS NULL OR is_placeholder = false)
               AND species_name != '__PLACEHOLDER__'
               AND species_name != '預設樹種'
         `;
-        const params = [projectName];
+        const params = [projectNameOrCode];
         let paramIdx = 2;
 
         if (req.projectFilter) {
@@ -264,10 +274,9 @@ router.get('/by_project/:projectName', projectAuthFilter, async (req, res) => {
 
         sql += ` ORDER BY project_tree_id ASC`;
         const { rows } = await db.query(sql, params);
-        // 將回應包裹在標準格式中
         res.json({ success: true, data: rows });
     } catch (err) {
-        console.error(`獲取專案 [${projectName}] 的樹木資料錯誤:`, err);
+        console.error(`獲取專案 [${projectNameOrCode}] 的樹木資料錯誤:`, err);
         res.status(500).json({ success: false, message: '查詢資料庫時發生錯誤' });
     }
 });

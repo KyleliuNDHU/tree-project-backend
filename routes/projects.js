@@ -69,71 +69,70 @@ router.get('/', projectAuthFilter, async (req, res) => {
 });
 
 // 根據專案區位獲取專案列表
-// [Phase A] 優先從 projects 表查詢
-// [T7] 加 projectAuthFilter：Lvl<4 只能看被授權的專案
-// [Bug A 修復] 支援 ?city=X：只回傳「該專案至少有一棵樹的座標解析縣市 = X」的專案
+// [P3 / Bug 3] 一勞永逸版：
+//   - 唯一資料源 = projects + project_areas (透過 area_id JOIN)
+//   - 移除 tree_survey fallback (避免靠 project_name 字串相等，遇到
+//     projects.name 含「（B1）」suffix 而 tree_survey 不含時整段斷掉)
+//   - city 過濾：
+//     1. 優先用 project_areas.city (denormalized cache，9 個港都已設好)
+//     2. project_areas.city = NULL 時退回座標掃描，但用 project_code JOIN
+//        而非 project_name 字串相等
 router.get('/by_area/:area', projectAuthFilter, async (req, res) => {
     const { area } = req.params;
     const { city } = req.query;
     try {
-        let rows = [];
-
-        // 優先查 projects + project_areas
-        try {
-            const result = await db.query(`
-                SELECT p.name, p.project_code AS code, pa.area_name AS area
-                FROM projects p
-                JOIN project_areas pa ON pa.id = p.area_id
-                WHERE pa.area_name = $1 AND p.is_active = true
-                ORDER BY p.name
-            `, [area]);
-            rows = result.rows;
-        } catch (e) {
-            console.warn('[Phase A fallback] by_area projects 表查詢失敗:', e.message);
-        }
-
-        // Fallback
-        if (rows.length === 0) {
-            const fallback = await db.query(`
-                SELECT DISTINCT project_name AS name, project_code AS code, project_location AS area
-                FROM tree_survey
-                WHERE project_location = $1 AND project_name IS NOT NULL AND project_name != ''
-                ORDER BY project_name
-            `, [area]);
-            rows = fallback.rows;
-        }
+        const result = await db.query(`
+            SELECT p.name, p.project_code AS code, pa.area_name AS area, pa.city AS area_city
+            FROM projects p
+            JOIN project_areas pa ON pa.id = p.area_id
+            WHERE pa.area_name = $1 AND p.is_active = true
+            ORDER BY p.name
+        `, [area]);
+        let rows = result.rows;
 
         // [T7] 依 projectFilter 過濾；null = 無限制
         if (Array.isArray(req.projectFilter)) {
             rows = rows.filter(r => req.projectFilter.includes(r.code));
         }
 
-        // [Bug A] city 過濾：只保留「該專案至少有一棵樹解析到該 city」的專案
+        // city 過濾
         if (city && rows.length > 0) {
             const cityCandidates = (city.endsWith('市') || city.endsWith('縣'))
                 ? [city]
                 : [city + '市', city + '縣'];
-            const projectNames = rows.map(r => r.name);
-            const { rows: trees } = await db.query(`
-                SELECT project_name, x_coord, y_coord
-                FROM tree_survey
-                WHERE project_name = ANY($1::text[])
-                  AND is_placeholder IS NOT TRUE
-                  AND x_coord IS NOT NULL AND y_coord IS NOT NULL
-                  AND x_coord != 0 AND y_coord != 0
-            `, [projectNames]);
-            const projectCities = new Map();
-            for (const t of trees) {
-                const detected = resolveCountyByLngLat(Number(t.x_coord), Number(t.y_coord));
-                if (!detected || !detected.name) continue;
-                if (!projectCities.has(t.project_name)) projectCities.set(t.project_name, new Set());
-                projectCities.get(t.project_name).add(detected.name);
+
+            // 1. 優先用 project_areas.city
+            const allHaveAreaCity = rows.every(r => r.area_city != null);
+            if (allHaveAreaCity) {
+                rows = rows.filter(r => cityCandidates.includes(r.area_city));
+            } else {
+                // 2. Fallback：座標掃描，用 project_code JOIN 避免 name 漂移
+                const projectCodes = rows.map(r => r.code);
+                const { rows: trees } = await db.query(`
+                    SELECT project_code, x_coord, y_coord
+                    FROM tree_survey
+                    WHERE project_code = ANY($1::text[])
+                      AND is_placeholder IS NOT TRUE
+                      AND x_coord IS NOT NULL AND y_coord IS NOT NULL
+                      AND x_coord != 0 AND y_coord != 0
+                `, [projectCodes]);
+                const projectCities = new Map();
+                for (const t of trees) {
+                    const detected = resolveCountyByLngLat(Number(t.x_coord), Number(t.y_coord));
+                    if (!detected || !detected.name) continue;
+                    if (!projectCities.has(t.project_code)) projectCities.set(t.project_code, new Set());
+                    projectCities.get(t.project_code).add(detected.name);
+                }
+                rows = rows.filter(r => {
+                    if (r.area_city) return cityCandidates.includes(r.area_city);
+                    const cities = projectCities.get(r.code);
+                    return cities && cityCandidates.some(c => cities.has(c));
+                });
             }
-            rows = rows.filter(r => {
-                const cities = projectCities.get(r.name);
-                return cities && cityCandidates.some(c => cities.has(c));
-            });
         }
+
+        // 移除 internal-only 欄位避免 leak schema
+        rows = rows.map(({ area_city, ...rest }) => rest);
 
         res.json({ success: true, data: rows });
     } catch (err) {
