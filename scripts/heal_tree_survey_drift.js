@@ -35,7 +35,8 @@ const FIELDS = [
 
 async function main() {
     // 一次撈出所有有 project_id 的 tree_survey + LEFT JOIN canonical 來源
-    // tree_species.id 是 TEXT；species_id 為 '無' / NULL 時 ts.species_id IS NOT DISTINCT FROM s.id 不會命中 → s 欄位為 NULL
+    // species 比對需與 09 trigger 邏輯一致：species_id IN ('', '無', NULL) 是 sentinel
+    // (代表「未識別 / 不適用」，常見於枯立木)，不可用 tree_species 覆蓋。
     const { rows } = await db.query(`
         SELECT
             ts.id,
@@ -48,7 +49,11 @@ async function main() {
             p.name               AS canon_project_name,
             p.project_code       AS canon_project_code,
             pa.area_name         AS canon_project_location,
-            s.name               AS canon_species_name
+            CASE
+                WHEN ts.species_id IS NULL OR ts.species_id = '' OR ts.species_id = '無'
+                    THEN NULL
+                ELSE s.name
+            END                  AS canon_species_name
         FROM tree_survey ts
         LEFT JOIN projects p       ON p.id = ts.project_id
         LEFT JOIN project_areas pa ON pa.id = p.area_id
