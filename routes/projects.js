@@ -244,8 +244,13 @@ router.get('/by_code/:code', projectAuthFilter, async (req, res) => {
 });
 
 // 新增專案
-// [Phase B] 不再建立 placeholder tree_survey 記錄，直接寫入 projects 表
-// 專案代碼改由 projects 表的數據生成，不再依賴 tree_survey
+// [Phase B] 直接寫入 projects 表 (single source of truth)
+// 不再寫入 placeholder tree_survey 紀錄：
+//   - GET 端早已從 projects + project_areas 主查 (此檔上半部)
+//   - placeholder 會被 Bug 3 的 by_area JOIN 用「project_location」當 key
+//     誤導區位歸屬
+//   - 也是 Bug 2 (test 專案無法刪除) 的副作用：以前 DELETE handler 用
+//     tree_survey COUNT > 0 才允許刪 → 沒樹的純 projects 列就刪不掉
 router.post('/add', requireRole('業務管理員'), async (req, res) => {
     const { name, area } = req.body;
     if (!name || !area) {
@@ -260,6 +265,7 @@ router.post('/add', requireRole('業務管理員'), async (req, res) => {
         await client.query('SELECT pg_advisory_xact_lock(2)');
 
         // 從 tree_survey 和 projects 兩個表取最大代碼，確保不衝突
+        // (tree_survey 仍納入是為了相容歷史資料的純數字 project_code)
         const { rows: maxCodeRows } = await client.query(`
             SELECT GREATEST(
                 COALESCE((SELECT MAX(CAST(project_code AS INTEGER)) FROM tree_survey WHERE project_code ~ '^[0-9]+$'), 0),
@@ -277,21 +283,13 @@ router.post('/add', requireRole('業務管理員'), async (req, res) => {
             areaId = areaRows[0].id;
         }
 
-        // 寫入 projects 表
+        // 寫入 projects 表 (single source of truth)
         await client.query(
             `INSERT INTO projects (project_code, name, area_id, description)
              VALUES ($1, $2, $3, '由系統自動建立')
              ON CONFLICT (project_code) DO UPDATE SET name = $2, area_id = COALESCE($3, projects.area_id)`,
             [nextCode.toString(), name, areaId]
         );
-
-        // [雙寫向後相容] 仍插入 placeholder 記錄到 tree_survey
-        // 這確保舊的 SELECT DISTINCT 查詢仍可找到此專案
-        const placeholderSystemId = `PLACEHOLDER-${nextCode}`;
-        await client.query(`
-            INSERT INTO tree_survey (project_name, project_code, project_location, species_name, system_tree_id, project_tree_id, is_placeholder)
-            VALUES ($1, $2, $3, '__PLACEHOLDER__', $4, 'PT-0', true)
-        `, [name, nextCode.toString(), area, placeholderSystemId]);
 
         await client.query('COMMIT');
 
@@ -337,10 +335,22 @@ router.post('/add', requireRole('業務管理員'), async (req, res) => {
     }
 });
 
-// 刪除專案 (刪除該專案代碼下的所有樹木+邊界+區域資料) — 業務管理員以上
+// 刪除專案 — 業務管理員以上
+// [Phase B / Bug 2] 改用 projects 表為「專案是否存在」的判定主鍵
+//   - 舊邏輯用 SELECT COUNT(*) FROM tree_survey 當門檻，
+//     導致只有 projects 紀錄、沒有任何樹的測試/孤兒專案永遠 404
+//     (例如 test吳全/test花慈/「無」/t1)
+//   - 新邏輯：projects 表查到就刪，級聯清理所有 dependants
+//   - 級聯範圍 (與 information_schema 對 project_code 的所有出現一致)：
+//     1. project_boundaries
+//     2. pending_tree_measurements (補上：原本漏處理！)
+//     3. tree_survey
+//     4. user_projects
+//     5. users.associated_projects 逗號字串 (相容舊欄位)
+//     6. projects (本身)
 router.delete('/:code', requireRole('業務管理員'), async (req, res) => {
     const { code } = req.params;
-    
+
     if (!code) {
         return res.status(400).json({ success: false, message: '請提供專案代碼' });
     }
@@ -349,48 +359,93 @@ router.delete('/:code', requireRole('業務管理員'), async (req, res) => {
     try {
         await client.query('BEGIN');
 
-        // 檢查專案是否存在
-        const checkQuery = `SELECT COUNT(*) as count FROM tree_survey WHERE project_code = $1`;
-        const { rows: checkRows } = await client.query(checkQuery, [code]);
-        
-        if (parseInt(checkRows[0].count) === 0) {
-            await client.query('ROLLBACK');
-            return res.status(404).json({ success: false, message: '找不到指定專案或該專案已無資料' });
+        // 1. 以 projects 表為主鍵存在性檢查；找不到才檢查 tree_survey 兜底
+        //    (相容遺留資料：projects 沒寫但 tree_survey 有的舊紀錄)
+        const { rows: projRows } = await client.query(
+            'SELECT id, name FROM projects WHERE project_code = $1 LIMIT 1', [code]
+        );
+        let projectName = projRows.length > 0 ? projRows[0].name : null;
+
+        if (!projectName) {
+            const { rows: legacyRows } = await client.query(
+                'SELECT DISTINCT project_name FROM tree_survey WHERE project_code = $1 LIMIT 1', [code]
+            );
+            projectName = legacyRows.length > 0 ? legacyRows[0].project_name : null;
         }
 
-        // 取得專案名稱（用於刪除邊界）
-        const { rows: nameRows } = await client.query('SELECT DISTINCT project_name FROM tree_survey WHERE project_code = $1 LIMIT 1', [code]);
-        const projectName = nameRows.length > 0 ? nameRows[0].project_name : null;
-
-        // 1. 刪除專案邊界
-        if (projectName) {
-            await client.query('DELETE FROM project_boundaries WHERE project_name = $1 OR project_code = $2', [projectName, code]);
+        // 兩邊都沒有 → 真的不存在才回 404
+        if (!projectName && projRows.length === 0) {
+            const { rows: tsCheck } = await client.query(
+                'SELECT 1 FROM tree_survey WHERE project_code = $1 LIMIT 1', [code]
+            );
+            if (tsCheck.length === 0) {
+                await client.query('ROLLBACK');
+                return res.status(404).json({ success: false, message: '找不到指定專案' });
+            }
         }
 
-        // 2. 刪除專案下所有樹木資料
-        const deleteQuery = `DELETE FROM tree_survey WHERE project_code = $1`;
-        await client.query(deleteQuery, [code]);
+        // 2. 刪除專案邊界 (用 project_code 為主，project_name 為輔以相容歷史)
+        const delBoundary = await client.query(
+            'DELETE FROM project_boundaries WHERE project_code = $1 OR ($2::text IS NOT NULL AND project_name = $2)',
+            [code, projectName]
+        );
 
-        // 3. 清理使用者的 associated_projects 中的此專案代碼（舊）
-        const { rows: allUsers } = await client.query('SELECT user_id, associated_projects FROM users WHERE associated_projects IS NOT NULL');
-        for (const user of allUsers) {
-            const projects = user.associated_projects.split(',').filter(p => p.trim() !== code);
-            await client.query('UPDATE users SET associated_projects = $1 WHERE user_id = $2', [projects.join(','), user.user_id]);
+        // 3. 刪除 pending 量測 (補上：原本漏的！)
+        const delPending = await client.query(
+            'DELETE FROM pending_tree_measurements WHERE project_code = $1', [code]
+        );
+
+        // 4. 刪除樹木資料
+        const delTrees = await client.query(
+            'DELETE FROM tree_survey WHERE project_code = $1', [code]
+        );
+
+        // 5. 清理 user_projects 多對多
+        const delUserProj = await client.query(
+            'DELETE FROM user_projects WHERE project_code = $1', [code]
+        );
+
+        // 6. 清理 users.associated_projects 逗號字串 (相容舊欄位)
+        //    只更新確實含此 code 的列，避免無謂寫入
+        const { rows: dirtyUsers } = await client.query(
+            `SELECT user_id, associated_projects FROM users
+             WHERE associated_projects IS NOT NULL
+               AND ('' || ',' || associated_projects || ',') LIKE '%,' || $1 || ',%'`,
+            [code]
+        );
+        for (const u of dirtyUsers) {
+            const cleaned = (u.associated_projects || '')
+                .split(',')
+                .map(s => s.trim())
+                .filter(s => s !== '' && s !== code)
+                .join(',');
+            await client.query('UPDATE users SET associated_projects = $1 WHERE user_id = $2', [cleaned, u.user_id]);
         }
 
-        // [Phase A 雙寫] 清理 user_projects 和 projects 表
-        try {
-            await client.query('DELETE FROM user_projects WHERE project_code = $1', [code]);
-            await client.query('DELETE FROM projects WHERE project_code = $1', [code]);
-        } catch (dualWriteErr) {
-            console.error('[Phase A 雙寫] 清理新表失敗 (非致命):', dualWriteErr.message);
-        }
+        // 7. 最後刪除 projects 主紀錄
+        const delProj = await client.query(
+            'DELETE FROM projects WHERE project_code = $1', [code]
+        );
 
         await client.query('COMMIT');
-        
-        res.json({ 
-            success: true, 
-            message: `專案 (代碼: ${code}) 及其所有樹木資料、邊界已刪除` 
+
+        // 清除快取 (associated_projects 已變更)
+        try {
+            const { invalidateUserProjectsCache } = require('../middleware/projectAuth');
+            for (const u of dirtyUsers) invalidateUserProjectsCache(u.user_id);
+        } catch (_) { /* non-fatal */ }
+
+        res.json({
+            success: true,
+            message: `專案 (代碼: ${code}) 已刪除`,
+            details: {
+                boundaries: delBoundary.rowCount,
+                pending: delPending.rowCount,
+                trees: delTrees.rowCount,
+                user_projects: delUserProj.rowCount,
+                projects: delProj.rowCount,
+                users_cleaned: dirtyUsers.length,
+            }
         });
     } catch (err) {
         await client.query('ROLLBACK');

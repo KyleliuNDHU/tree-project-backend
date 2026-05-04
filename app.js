@@ -10,6 +10,7 @@ const {
     cleanupUnusedProjectAreas,
     cleanupUnusedSpecies,
     cleanupOrphanedPlaceholders,
+    cleanupOrphanProjects,
     cleanupOldChatLogs,
     cleanupOldLoginAttempts
 } = require('./utils/cleanup');
@@ -196,6 +197,7 @@ app.listen(PORT, () => {
         try { await cleanupOrphanedPlaceholders(); } catch (e) { console.error('[Scheduler] cleanupOrphanedPlaceholders error:', e.message); }
         try { await cleanupUnusedSpecies(); } catch (e) { console.error('[Scheduler] cleanupUnusedSpecies error:', e.message); }
         try { await cleanupUnusedProjectAreas(); } catch (e) { console.error('[Scheduler] cleanupUnusedProjectAreas error:', e.message); }
+        try { await cleanupOrphanProjects(); } catch (e) { console.error('[Scheduler] cleanupOrphanProjects error:', e.message); }
         try { await cleanupOldChatLogs(); } catch (e) { console.error('[Scheduler] cleanupOldChatLogs error:', e.message); }
         try { await cleanupOldLoginAttempts(); } catch (e) { console.error('[Scheduler] cleanupOldLoginAttempts error:', e.message); }
         try { await scheduledSynonymMaintenance(); } catch (e) { console.error('[Scheduler] scheduledSynonymMaintenance error:', e.message); }

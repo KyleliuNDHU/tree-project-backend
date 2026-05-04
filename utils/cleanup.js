@@ -111,10 +111,58 @@ const cleanupOldChatLogs = async () => {
   }
 };
 
+/**
+ * [Bug 2 P2] 清理孤兒專案 (projects 表)
+ *   條件 (全部 AND)：
+ *     1. 沒有任何 tree_survey 紀錄
+ *     2. 沒有任何 pending_tree_measurements 紀錄
+ *     3. 沒有任何 project_boundaries 紀錄
+ *     4. 沒有任何 user_projects 關聯
+ *     5. 不在任何 users.associated_projects 字串裡 (相容舊欄位)
+ *     6. created_at 已超過 24 小時 (避免砍掉剛建立、還沒輸入第一筆資料的新專案)
+ *   - 與 cleanupOrphanedPlaceholders 互補：那支砍 tree_survey 的 PLACEHOLDER 列；
+ *     此處砍 projects 主鍵已無任何依賴的列。
+ *   - 透過 hourly scheduler 觸發，自動清掉 test/誤建專案，不再污染 UI。
+ */
+const cleanupOrphanProjects = async () => {
+  try {
+    const sql = `
+      DELETE FROM projects p
+      WHERE p.created_at < NOW() - INTERVAL '24 hours'
+        AND NOT EXISTS (SELECT 1 FROM tree_survey ts WHERE ts.project_code = p.project_code)
+        AND NOT EXISTS (SELECT 1 FROM pending_tree_measurements pm WHERE pm.project_code = p.project_code)
+        AND NOT EXISTS (SELECT 1 FROM project_boundaries pb WHERE pb.project_code = p.project_code)
+        AND NOT EXISTS (SELECT 1 FROM user_projects up WHERE up.project_code = p.project_code)
+        AND NOT EXISTS (
+          SELECT 1 FROM users u
+          WHERE u.associated_projects IS NOT NULL
+            AND u.associated_projects != ''
+            AND (',' || u.associated_projects || ',') LIKE '%,' || p.project_code || ',%'
+        )
+      RETURNING project_code, name
+    `;
+    const result = await db.query(sql);
+    if (result.rowCount > 0) {
+      const samples = result.rows.slice(0, 5).map(r => `${r.project_code}(${r.name})`).join(', ');
+      console.log(`[Cleanup] Cleaned up ${result.rowCount} orphan projects: ${samples}${result.rowCount > 5 ? '...' : ''}`);
+    } else {
+      console.log('[Cleanup] No orphan projects to clean up.');
+    }
+  } catch (err) {
+    // pending_tree_measurements 可能尚未建立 (新環境)
+    if (err.code === '42P01') {
+      console.log('[Cleanup] Some dependent table missing, skipping orphan projects cleanup.');
+    } else {
+      console.error('[Cleanup] Error cleaning up orphan projects:', err);
+    }
+  }
+};
+
 module.exports = {
     cleanupUnusedProjectAreas,
     cleanupUnusedSpecies,
     cleanupOrphanedPlaceholders,
+    cleanupOrphanProjects,
     cleanupOldChatLogs,
     cleanupOldLoginAttempts,
 };
