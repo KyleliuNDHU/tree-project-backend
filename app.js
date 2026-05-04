@@ -104,12 +104,9 @@ const treeSpeciesRoutes = require('./routes/treeSpecies');
 const reportsRoutes = require('./routes/reports');
 const statisticsRoutes = require('./routes/statistics');
 const aiRoutes = require('./routes/ai');
-const carbonRoutes = require('./routes/carbon');
 const adminRoutes = require('./routes/admin');
 const locationRoutes = require('./routes/location');
 const managementRoutes = require('./routes/management');
-const carbonDataRoutes = require('./routes/carbon_data'); 
-const knowledgeRoutes = require('./routes/knowledge'); 
 const speciesIdentificationRoutes = require('./routes/speciesIdentification'); // 樹種辨識路由
 const pendingMeasurementsRoutes = require('./routes/pending_measurements'); // 待測量樹木路由
 const projectBoundariesRoutes = require('./routes/project_boundaries'); // V3 專案邊界路由
@@ -128,12 +125,9 @@ apiRouter.use('/tree_species', treeSpeciesRoutes);
 apiRouter.use('/', reportsRoutes); // 包含 /export
 apiRouter.use('/tree_statistics', statisticsRoutes);
 apiRouter.use('/', aiRoutes); // 包含 /chat, /reports/ai-sustainability 等
-apiRouter.use('/carbon', carbonRoutes);
 apiRouter.use('/admin', adminRoutes);
 apiRouter.use('/location', locationRoutes);
 apiRouter.use('/tree-management', managementRoutes);
-apiRouter.use('/tree-carbon-data', carbonDataRoutes); // 掛載新的路由
-apiRouter.use('/knowledge', knowledgeRoutes); // 掛載知識庫路由
 apiRouter.use('/species', speciesIdentificationRoutes); // 掛載樹種辨識路由
 apiRouter.use('/pending-measurements', pendingMeasurementsRoutes); // 掛載待測量樹木路由
 apiRouter.use('/project-boundaries', projectBoundariesRoutes); // 掛載專案邊界路由

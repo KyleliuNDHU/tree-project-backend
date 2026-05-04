@@ -2,11 +2,9 @@ const express = require('express');
 const router = express.Router();
 const db = require('../config/db');
 const rateLimit = require('express-rate-limit');
-const { getSimilarPassages } = require('../services/knowledgeEmbeddingService');
 const { generateGeminiChatResponse } = require('../services/geminiService');
 const reportController = require('../controllers/reportController');
 const aiReportController = require('../controllers/aiReportController');
-const openaiController = require('../controllers/openaiController');
 const format = require('pg-format');
 const ExcelJS = require('exceljs');
 const path = require('path');
@@ -683,11 +681,8 @@ router.get('/reports/ai-sustainability/pdf', requireRole('調查管理員'), aiL
     }
 });
 
-// 其他 AI 相關路由 — 調查管理員以上
-router.post('/sustainability-policy', requireRole('調查管理員'), aiLimiter, openaiController.generateSustainabilityPolicyRecommendations);
-router.get('/carbon-education/:topic', requireRole('調查管理員'), aiLimiter, openaiController.generateCarbonEducationContent);
-router.post('/carbon-footprint/advice', requireRole('調查管理員'), aiLimiter, openaiController.generateCarbonFootprintAdvice);
-router.post('/species-comparison', requireRole('調查管理員'), aiLimiter, openaiController.generateSpeciesCarbonComparison);
+// [Stage 0.3] 已移除 sustainability-policy / carbon-education / carbon-footprint/advice / species-comparison：
+//   依賴已刪除的 tree_carbon_data 表，且前端从未呼叫。
 
 
 // ============================================

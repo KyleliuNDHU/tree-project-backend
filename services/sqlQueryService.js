@@ -20,7 +20,6 @@ const db = require('../config/db');
 const ALLOWED_TABLES = [
     'tree_survey',
     'tree_species', 
-    'tree_carbon_data',
     'project_areas',
     'tree_survey_with_areas'  // View
 ];
@@ -119,9 +118,6 @@ const SCHEMA_INFO = `
 
 ### 2. tree_species (樹種資料表)
 - id, name (中文名), scientific_name (學名)
-
-### 3. tree_carbon_data (樹種碳匯參數)
-- common_name_zh (中文名), carbon_absorption_min/max (碳吸收範圍), growth_rate (生長速率), carbon_efficiency (碳效率)
 
 ## Few-Shot 範例 (Q→SQL)
 

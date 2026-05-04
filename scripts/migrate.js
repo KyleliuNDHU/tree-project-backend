@@ -20,18 +20,14 @@ const migrationFiles = [
   'system_settings_and_audit.pg.sql', // [New] System settings and Audit logs
   'project_areas.pg.sql',
   'tree_species.pg.sql',
-  'species_region_score.pg.sql',
-  'tree_carbon_data.pg.sql',
   'tree_survey.pg.sql', // Structure only
   '00_normalization_schema.pg.sql', // [Moved] Run AFTER tree_survey is created
   'tree_management_actions.pg.sql',
   'chat_logs.pg.sql', // 新增 chat_logs 表格
   '02_chat_logs_add_session.pg.sql', // [New] 加入 session_id 欄位支援多會話
   '04_chat_logs_agent_mode.pg.sql', // [New] Agent 模式支援 (chat_mode + metadata)
-  'tree_knowledge_embeddings_v2.pg.sql', // 新增 AI 知識庫表格
   '01_sync_project_id_trigger.sql', // [New] Project ID synchronization trigger
   'ml_training_data.pg.sql', // ML 訓練數據表
-  'emission_factors.pg.sql', // 排放因子表
   'z_pending_tree_measurements.pg.sql', // [New] 待測量樹木資料表 - 兩階段測量工作流程 (z_ 確保最後執行)
   'tree_images.pg.sql', // [New] 樹木影像資料表 - 關聯到 tree_survey 與 pending_measurements
   'species_synonyms.pg.sql', // [New] 樹種同義詞/名稱變體對照表 - 統一不同量測員的命名差異
@@ -177,25 +173,8 @@ async function migrate() {
     console.log('Resetting the primary key sequence for tree_survey...');
     await client.query(`SELECT setval(pg_get_serial_sequence('tree_survey', 'id'), COALESCE(MAX(id), 1), true) FROM tree_survey;`);
 
-    // [2025.11 優化] 移除不再需要的 RAG 相關腳本
-    // 現在使用 Text-to-SQL 架構，不需要 embedding 和知識庫
-    // 以下腳本已停用：
-    // - populate_knowledge (RAG 知識庫)
-    // - generateEmbeddings (向量嵌入)
-    // - enrich_species_synonyms (AI 同義詞擴充)
-    
-    // 只保留 species_region_score，因為這是統計數據，對報表有用
-    const populateScores = require('./populateSpeciesRegionScore');
-
-    console.log('Sequence reset successfully.');
-
-    try {
-        console.log('Calculating/Populating species region scores...');
-        await populateScores();
-        console.log('Species region scores populated successfully.');
-    } catch (kErr) {
-        console.error('Warning: Species region score population failed, but continuing:', kErr.message);
-    }
+    // [Stage 0.3] 已移除 species_region_score / tree_carbon_data / emission_factors / RAG 訓練腳本。
+    //   原「 populateSpeciesRegionScore 」依賴 tree_carbon_data 表，三者均為未使用功能。
 
     console.log('Database migration completed successfully!');
   } catch (error) {
