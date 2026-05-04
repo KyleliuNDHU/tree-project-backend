@@ -37,7 +37,8 @@ const migrationFiles = [
   '07_backfill_projects_area_id.pg.sql', // [Heal] Backfill projects.area_id from project_location + heal placeholder names
   '08_text_integrity_check.pg.sql', // [L3] 禁止 U+FFFD 寫入關鍵字串欄位 (見 utils/textValidation.js)
   '09_tree_survey_cache_sync_trigger.sql', // [Stage 2] 擴充 BEFORE trigger 同步 project_name/code/location/species_name cache
-  '10_projects_cascade_trigger.pg.sql' // [Stage 2] projects rename 時 cascade 更新 tree_survey + pending_tree_measurements
+  '10_projects_cascade_trigger.pg.sql', // [Stage 2] projects rename 時 cascade 更新 tree_survey + pending_tree_measurements
+  '11_species_cascade_trigger.pg.sql' // [Stage 2] tree_species rename 時 cascade 更新 species_name cache
 ];
 
 // Define the order for view creation

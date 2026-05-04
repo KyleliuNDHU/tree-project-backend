@@ -270,5 +270,66 @@ module.exports = {
                     'tree_survey.project_location should follow new area');
             },
         },
+        {
+            name: 'AFTER cascade: UPDATE tree_species.name → tree_survey.species_name 同步',
+            run: async (ctx) => {
+                if (!ctx.db.isAvailable()) {
+                    throw new Error('SKIP: TEST_DB_URL not set');
+                }
+                await ctx.api.login('admin');
+
+                // 建臨時 tree_species
+                const sid = 'T' + Date.now().toString().slice(-6) + Math.floor(Math.random() * 100);
+                const oldName = 'TestSpecies_' + Date.now();
+                await ctx.db.query(
+                    `INSERT INTO tree_species (id, name) VALUES ($1, $2)`,
+                    [sid, oldName]
+                );
+                ctx.cleanup.track('species', sid, async () => {
+                    await ctx.db.query(`DELETE FROM tree_species WHERE id = $1`, [sid]);
+                });
+
+                // 建區位 + 專案
+                const area = ctx.factories.buildArea();
+                const rArea = await ctx.api.post('project_areas', area);
+                ctx.assert.assertJsonOk(rArea);
+                ctx.cleanup.track('area', rArea.body.data.id);
+
+                const projBody = ctx.factories.buildProject({ area: area.area_name });
+                const rProj = await ctx.api.post('projects/add', { name: projBody.name, area: projBody.area });
+                ctx.assert.assertJsonOk(rProj);
+                const code = rProj.body.project.code;
+                ctx.cleanup.track('project', code);
+
+                // 直連 DB 建一棵樹用此 species_id
+                const ins = await ctx.db.query(`
+                    INSERT INTO tree_survey
+                      (project_location, project_code, project_name,
+                       system_tree_id, project_tree_id, species_id, species_name,
+                       x_coord, y_coord, status, notes, tree_notes,
+                       tree_height_m, dbh_cm, survey_notes, survey_time)
+                    VALUES ($1, $2, $3,
+                            'ST-SPCAS-' || $4, 'PT-SPCAS-' || $4, $5, $6,
+                            121.51, 23.86, '良好', '無', '無',
+                            10.0, 25.0, 'species_cascade_test', NOW())
+                    RETURNING id
+                `, [area.area_name, code, projBody.name, Date.now(), sid, oldName]);
+                const treeId = ins.rows[0].id;
+                ctx.cleanup.track('tree', treeId);
+
+                // rename species
+                const newName = oldName + '_renamed';
+                await ctx.db.query(
+                    `UPDATE tree_species SET name = $1 WHERE id = $2`,
+                    [newName, sid]
+                );
+
+                const after = await ctx.db.query(
+                    `SELECT species_name FROM tree_survey WHERE id = $1`, [treeId]
+                );
+                assert.strictEqual(after.rows[0].species_name, newName,
+                    'tree_survey.species_name should follow tree_species.name');
+            },
+        },
     ],
 };
