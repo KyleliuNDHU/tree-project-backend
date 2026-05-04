@@ -25,7 +25,8 @@ module.exports = {
                 ctx.assert.assertJsonOk(rPost);
                 const id = rPost.body.data.id;
                 ctx.cleanup.track('area', id);
-                assert.strictEqual(rPost.body.data.city, '台中市', 'POST 應 resolve 為台中市');
+                assert.ok(['台中市', '臺中市'].includes(rPost.body.data.city),
+                    `POST 應 resolve 為台中市 (got ${rPost.body.data.city})`);
 
                 // PUT 換到花蓮座標 (xCoord=121.5436, yCoord=23.9871) → 應變花蓮縣
                 const rPut = await ctx.api.put(`project_areas/${id}`, {
