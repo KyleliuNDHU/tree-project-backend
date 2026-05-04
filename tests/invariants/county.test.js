@@ -89,8 +89,8 @@ module.exports = {
                 assert.strictEqual(county.resolveAreaCity({ areaName: '基隆港東區' }), '基隆市');
                 assert.strictEqual(county.resolveAreaCity({ areaName: '高雄港' }), '高雄市');
                 assert.strictEqual(county.resolveAreaCity({ areaName: '蘇澳港北側' }), '宜蘭縣');
-                assert.strictEqual(county.resolveAreaCity({ areaName: '安平港' }), '台南市');
-                assert.strictEqual(county.resolveAreaCity({ areaName: '臺中港' }), '台中市');
+                assert.strictEqual(county.resolveAreaCity({ areaName: '安平港' }), '臺南市');
+                assert.strictEqual(county.resolveAreaCity({ areaName: '臺中港' }), '臺中市');
                 assert.strictEqual(county.resolveAreaCity({ areaName: '台北港' }), '新北市');
             },
         },
@@ -108,6 +108,20 @@ module.exports = {
                 assert.strictEqual(county.resolveAreaCity({}), null);
                 assert.strictEqual(county.resolveAreaCity({ lng: NaN, lat: NaN }), null);
                 assert.strictEqual(county.resolveAreaCity({ areaName: '某不可解析的字串XYZ' }), null);
+            },
+        },
+        // ─── Bug 4 修復：兩條路徑輸出必一致（都是「臺」形式） ──────
+        {
+            name: 'county.resolveAreaCity: 座標路徑與港口名路徑輸出必一致（臺形式）',
+            run: async () => {
+                // 臺中港追蹤座標（台中航務中心附近） vs areaName 兩路徑未來都要 臺中市
+                const byCoord = county.resolveAreaCity({ lng: 120.5197, lat: 24.2856 });
+                const byName = county.resolveAreaCity({ areaName: '臺中港' });
+                assert.strictEqual(byCoord, byName, `coord=${byCoord} name=${byName} 不一致`);
+                assert.strictEqual(byCoord, '臺中市');
+                // 安平港同樣
+                const an = county.resolveAreaCity({ areaName: '安平港' });
+                assert.strictEqual(an, '臺南市');
             },
         },
         {

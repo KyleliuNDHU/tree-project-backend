@@ -168,6 +168,9 @@ async function main() {
             console.log(yellow('\n  --bail triggered, stopping.'));
             break;
         }
+
+        // case 之間留 250ms gap 避開 nginx burst + app-level rate limit
+        await new Promise((r) => setTimeout(r, 250));
     }
 
     await dbClient.close();
