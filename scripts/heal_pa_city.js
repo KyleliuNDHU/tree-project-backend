@@ -75,7 +75,9 @@ async function main() {
             : resolveAreaCity({ areaName: a.area_name });
 
         if (!computed) continue; // 無法判斷的不動
-        if (computed !== a.city) {
+        // 「台」與「臺」視為等價，僅異體字差異不算 diff
+        const canon = (s) => (s || '').replace(/臺/g, '台');
+        if (canon(computed) !== canon(a.city)) {
             diffs.push({
                 id: a.id,
                 area_code: a.area_code,

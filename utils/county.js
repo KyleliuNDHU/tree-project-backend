@@ -103,14 +103,24 @@ function resolveAreaCity({ lng, lat, areaName } = {}) {
 }
 
 /**
- * 將輸入縣市標準化為候選清單（處理使用者打「花蓮」沒帶尾綴的情況）。
+ * 將輸入縣市標準化為候選清單（處理使用者打「花蓮」沒帶尾綴的情況，
+ * 以及「台」與「臺」異體字混用 — 內政部官方界線使用「臺」，但歷史資料/
+ * 港口權威表多使用「台」，必須兩種都接受）。
  * @param {string} input
  * @returns {string[]}
  */
 function normalizeCityCandidates(input) {
     if (!input || typeof input !== 'string') return [];
-    if (input.endsWith('市') || input.endsWith('縣')) return [input];
-    return [`${input}市`, `${input}縣`];
+    const variants = new Set();
+    const swap = (s) => s.replace(/台/g, '臺');
+    const swapBack = (s) => s.replace(/臺/g, '台');
+    const base = input.endsWith('市') || input.endsWith('縣') ? [input] : [`${input}市`, `${input}縣`];
+    for (const b of base) {
+        variants.add(b);
+        variants.add(swap(b));
+        variants.add(swapBack(b));
+    }
+    return Array.from(variants);
 }
 
 /**
