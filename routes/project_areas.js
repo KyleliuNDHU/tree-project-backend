@@ -187,6 +187,29 @@ router.put('/:id', requireRole('專案管理員'), async (req, res) => {
 router.delete('/:id', requireRole('專案管理員'), async (req, res) => {
     const { id } = req.params;
     try {
+        const { rows: areaRows } = await db.query('SELECT area_name FROM project_areas WHERE id = $1', [id]);
+        if (areaRows.length === 0) {
+            return res.status(404).json({ success: false, message: '找不到要刪除的區位' });
+        }
+
+        const areaName = areaRows[0].area_name;
+        const { rows: refRows } = await db.query(`
+            SELECT
+                (SELECT COUNT(*)::int FROM projects WHERE area_id = $1) AS projects,
+                (SELECT COUNT(*)::int FROM tree_survey WHERE project_location = $2) AS trees,
+                (SELECT COUNT(*)::int FROM pending_tree_measurements WHERE project_area = $2) AS pending,
+                (SELECT COUNT(*)::int FROM project_boundaries WHERE project_area = $2) AS boundaries
+        `, [id, areaName]);
+        const refs = refRows[0] || {};
+        const totalRefs = (refs.projects || 0) + (refs.trees || 0) + (refs.pending || 0) + (refs.boundaries || 0);
+        if (totalRefs > 0) {
+            return res.status(409).json({
+                success: false,
+                message: '區位仍被專案、邊界或樹木資料使用，無法刪除',
+                data: { area_name: areaName, references: refs },
+            });
+        }
+
         const { rowCount } = await db.query('DELETE FROM project_areas WHERE id = $1', [id]);
         if (rowCount > 0) {
             res.status(200).json({ success: true, message: '區位刪除成功' });
