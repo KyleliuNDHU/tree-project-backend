@@ -70,6 +70,14 @@ ml_service/inspect_xiang.py
 ml_service/probe_ov_outputs.py
 ml_service/test_dbh_full_pipeline.py
 ml_service/ml_service.err
+ml_service/_da3_ov_bench.py
+ml_service/benchmark_matrix/da3_field_check.csv
+ml_service/benchmark_matrix_eval_smoke*/
+ml_service/benchmark_matrix_eval_phonebbox_smoke_*/
+ml_service/benchmark_matrix_fixcheck*/
+ml_service/benchmark_matrix_smoke*/
+ml_service/phone_flow_sim_20260505/
+ml_service/trunk_detector_training/tree_trunk_seg_best_openvino_model/
 
 # --- ML Models (Too large for Git) ---
 ml_service/models/
