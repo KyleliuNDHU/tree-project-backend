@@ -967,12 +967,12 @@ router.post('/transfer', projectAuthFilter, async (req, res) => {
         console.warn('[Transfer] tree_measurement_raw insert skipped:', rawErr.message);
       }
 
-      // 遷移照片：將 tree_images 的 pending_measurement_id → tree_survey_id
+      // 遷移照片：將 tree_images 的 pending owner 轉為正式 tree_survey owner。
       try {
         await client.query(`
           UPDATE tree_images 
-          SET tree_survey_id = $1, pending_measurement_id = NULL
-          WHERE pending_measurement_id = $2
+          SET owner_type = 'survey', owner_id = $1
+          WHERE owner_type = 'pending' AND owner_id = $2
         `, [treeSurveyId, p.id]);
       } catch (imgErr) {
         console.warn(`[Transfer] tree_images migration skipped for pending_id=${p.id}:`, imgErr.message);

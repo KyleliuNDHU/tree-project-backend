@@ -46,32 +46,33 @@ router.post('/upload', async (req, res) => {
         });
 
         // 3. 確定 owner_type + owner_id（2NF 正規化）
-        let ownerType = 'pending'; // 預設
-        let ownerId = parseInt(tree_id) || 0;
+        const requestedSource = source === 'pending' || source === 'survey' ? source : null;
+        let ownerType = requestedSource || 'pending';
+        let ownerId = parseInt(tree_id, 10) || 0;
 
-        if (source === 'pending' && !isNaN(parseInt(tree_id))) {
+        if (source === 'pending' && !isNaN(parseInt(tree_id, 10))) {
             const pendingCheck = await client.query('SELECT id FROM pending_tree_measurements WHERE id = $1', [tree_id]);
             if (pendingCheck.rows.length > 0) {
                 ownerType = 'pending';
-                ownerId = parseInt(tree_id);
+                ownerId = parseInt(tree_id, 10);
             }
-        } else if (source === 'survey' && !isNaN(parseInt(tree_id))) {
+        } else if (source === 'survey' && !isNaN(parseInt(tree_id, 10))) {
             const surveyCheck = await client.query('SELECT id FROM tree_survey WHERE id = $1', [tree_id]);
             if (surveyCheck.rows.length > 0) {
                 ownerType = 'survey';
-                ownerId = parseInt(tree_id);
+                ownerId = parseInt(tree_id, 10);
             }
-        } else if (!isNaN(parseInt(tree_id))) {
+        } else if (!isNaN(parseInt(tree_id, 10))) {
             // 向下相容：未傳 source 時先查 pending 再查 survey
             const pendingCheck = await client.query('SELECT id FROM pending_tree_measurements WHERE id = $1', [tree_id]);
             if (pendingCheck.rows.length > 0) {
                 ownerType = 'pending';
-                ownerId = parseInt(tree_id);
+                ownerId = parseInt(tree_id, 10);
             } else {
                 const surveyCheck = await client.query('SELECT id FROM tree_survey WHERE id = $1', [tree_id]);
                 if (surveyCheck.rows.length > 0) {
                     ownerType = 'survey';
-                    ownerId = parseInt(tree_id);
+                    ownerId = parseInt(tree_id, 10);
                 }
             }
         }
