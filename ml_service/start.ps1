@@ -3,10 +3,12 @@
 # ============================================================
 # 使用方式:
 #   cd backend\ml_service
-#   .\start.ps1                  # 預設模式 (DA3 + OpenVINO iGPU)
+#   .\start.ps1                  # 預設模式 (DA3 + OpenVINO NPU)
 #   .\start.ps1 -Preset pro      # Depth Pro 模式 (PyTorch)
 #   .\start.ps1 -Preset pro_ov   # Depth Pro + OpenVINO INT8-W
-#   .\start.ps1 -Preset da3      # DA3 Metric Large + OpenVINO FP16 iGPU
+#   .\start.ps1 -Preset da3      # DA3 Metric Large + OpenVINO FP16 NPU
+#   .\start.ps1 -Da3Device NPU    # DA3 OpenVINO on Intel AI Boost NPU
+#   .\start.ps1 -Da3Ir 602x448    # DA3 high-res IR (patch-14 aligned)
 #   .\start.ps1 -Verify          # 啟用 numpy 驗證
 #   .\start.ps1 -Workers 2       # 多 worker (需較大 RAM)
 # ============================================================
@@ -18,7 +20,15 @@ param(
     [switch]$Verify,
     [switch]$Debug,
     [int]$Workers = 1,
-    [int]$Port = 0
+    [int]$Port = 0,
+
+    [ValidateSet('AUTO', 'GPU', 'NPU', 'CPU')]
+    [string]$Da3Device = 'NPU',
+
+    [ValidateSet('504x378', '602x448')]
+    [string]$Da3Ir = '504x378',
+
+    [string]$ServerYoloDevice = 'intel:gpu'
 )
 
 $ErrorActionPreference = 'Stop'
@@ -62,7 +72,7 @@ switch ($Preset) {
         Write-Host "`n  Model: DA V2 + OpenVINO iGPU acceleration" -ForegroundColor Cyan
     }
     'da3' {
-        # DA3METRIC-LARGE (ICLR 2026 Oral) + OpenVINO FP16 on Intel Arc iGPU.
+        # DA3METRIC-LARGE (ICLR 2026 Oral) + OpenVINO FP16 on Intel AI Boost NPU by default.
         # OV IR auto-loaded by depth_estimation._try_load_da3 if present at
         #   openvino_models/da3_metric_large/openvino_model.xml
         # (export it via: python da3_to_openvino.py)
@@ -70,10 +80,16 @@ switch ($Preset) {
         # ML_USE_OPENVINO is informational here — DA3 OV path is auto-detected.
         $env:ML_DEPTH_MODEL = 'da3_metric_large'
         $env:ML_USE_OPENVINO = 'true'
-        Write-Host "`n  Model: DA3 Metric Large + OpenVINO FP16 iGPU (~500ms warm)" -ForegroundColor Cyan
-        $da3OvXml = Join-Path $ScriptDir 'openvino_models\da3_metric_large\openvino_model.xml'
+        $env:ML_DA3_OV_DEVICE = $Da3Device
+        if ($Da3Ir -eq '602x448') {
+            $env:ML_DA3_OV_DIR = 'openvino_models\da3_metric_large_602x448'
+        } else {
+            $env:ML_DA3_OV_DIR = 'openvino_models\da3_metric_large'
+        }
+        Write-Host "`n  Model: DA3 Metric Large + OpenVINO FP16 ($Da3Device, $Da3Ir)" -ForegroundColor Cyan
+        $da3OvXml = Join-Path $ScriptDir (Join-Path $env:ML_DA3_OV_DIR 'openvino_model.xml')
         if (Test-Path $da3OvXml) {
-            Write-Host "  DA3 OV IR: found (504x378 FP16, will load on iGPU)" -ForegroundColor Green
+            Write-Host "  DA3 OV IR: found ($Da3Ir FP16, device=$Da3Device)" -ForegroundColor Green
         } else {
             Write-Host "  DA3 OV IR: NOT FOUND — will fall back to PyTorch CPU" -ForegroundColor Yellow
             Write-Host "  Run: python da3_to_openvino.py  to export." -ForegroundColor DarkGray
@@ -94,11 +110,13 @@ if ($Port -gt 0) {
 }
 
 # --- Optional flags ---
-# SAM segmentation removed (2026-04-28). Trunk segmentation is now
-# performed exclusively on-device with YOLOv8-seg; the phone uploads the
-# binary mask via trunk_mask_base64. Server-side SAM is hard-disabled.
+# SAM segmentation removed (2026-04-28). Trunk segmentation now uses YOLOv8-seg:
+# ScannerPage sends a local bbox and the ML service generates the mask with
+# server-side YOLO; legacy phone-uploaded masks are still accepted for rollback.
 $env:ML_ENABLE_SAM = 'false'
 if (-not $env:ML_SEG_MODEL)    { $env:ML_SEG_MODEL = 'depth_heuristic' }
+if (-not $env:ML_SERVER_YOLO_DEVICE) { $env:ML_SERVER_YOLO_DEVICE = $ServerYoloDevice }
+if (-not $env:ML_SERVER_YOLO_IMGSZ)  { $env:ML_SERVER_YOLO_IMGSZ = '640' }
 
 if ($Verify) {
     $env:ML_VERIFY_NUMPY = 'true'
@@ -124,7 +142,10 @@ Write-Host "  ----------------------------------------" -ForegroundColor DarkCya
 Write-Host "  Port:      $($env:PORT)" -ForegroundColor White
 Write-Host "  Model:     $($env:ML_DEPTH_MODEL)" -ForegroundColor White
 Write-Host "  OpenVINO:  $($env:ML_USE_OPENVINO)" -ForegroundColor White
-Write-Host "  Segmentation: on-device YOLOv8-seg (server SAM disabled)" -ForegroundColor White
+Write-Host "  DA3 IR:    $($env:ML_DA3_OV_DIR)" -ForegroundColor White
+Write-Host "  DA3 Device:$($env:ML_DA3_OV_DEVICE)" -ForegroundColor White
+Write-Host "  Segmentation: server YOLOv8-seg opt-in (SAM disabled)" -ForegroundColor White
+Write-Host "  Server YOLO: device=$($env:ML_SERVER_YOLO_DEVICE), imgsz=$($env:ML_SERVER_YOLO_IMGSZ)" -ForegroundColor White
 Write-Host "  API Key:   $(if ($env:ML_API_KEY) { $env:ML_API_KEY.Substring(0,8) + '...' } else { 'NOT SET' })" -ForegroundColor $(if ($env:ML_API_KEY) { 'White' } else { 'Red' })
 Write-Host "  Workers:   $Workers" -ForegroundColor White
 

@@ -226,31 +226,61 @@ def get_default_model_path() -> Path:
 class YoloV8mSimulator:
     """Run YOLOv8m-seg .pt via ultralytics (server-grade, ~27M params)."""
 
-    def __init__(self, model_path: Path | str, imgsz: int = 640):
+    def __init__(self, model_path: Path | str, imgsz: int = 640,
+                 device: Optional[str] = None):
         from ultralytics import YOLO  # local import → optional dep
-        self.model = YOLO(str(model_path))
+        self.model = YOLO(str(model_path), task="segment")
         self.imgsz = imgsz
+        self.device = device
 
     def detect(self, img: Image.Image, conf_thresh: float = 0.15,
-               want_full_mask: bool = True) -> Optional[YoloDetection]:
+               want_full_mask: bool = True,
+               bbox_hint: Optional[tuple[float, float, float, float]] = None
+               ) -> Optional[YoloDetection]:
         W, H = img.size
-        res = self.model(img, conf=conf_thresh, imgsz=self.imgsz, verbose=False)[0]
+        res = self.model(
+            img, conf=conf_thresh, imgsz=self.imgsz,
+            verbose=False, device=self.device,
+        )[0]
         if res.boxes is None or len(res.boxes) == 0:
             return None
         conf = res.boxes.conf.cpu().numpy()
+        boxes_xyxy = res.boxes.xyxy.cpu().numpy()
         best = int(conf.argmax())
-        x1, y1, x2, y2 = res.boxes.xyxy[best].cpu().numpy().tolist()
+        if bbox_hint is not None:
+            hx1, hy1, hx2, hy2 = bbox_hint
+            ix1 = np.maximum(boxes_xyxy[:, 0], hx1)
+            iy1 = np.maximum(boxes_xyxy[:, 1], hy1)
+            ix2 = np.minimum(boxes_xyxy[:, 2], hx2)
+            iy2 = np.minimum(boxes_xyxy[:, 3], hy2)
+            inter = np.maximum(0.0, ix2 - ix1) * np.maximum(0.0, iy2 - iy1)
+            area_a = np.maximum(0.0, boxes_xyxy[:, 2] - boxes_xyxy[:, 0]) * np.maximum(0.0, boxes_xyxy[:, 3] - boxes_xyxy[:, 1])
+            area_b = max(0.0, hx2 - hx1) * max(0.0, hy2 - hy1)
+            iou = inter / np.maximum(area_a + area_b - inter, 1e-6)
+            if float(iou.max()) > 0.0:
+                best = int(np.argmax(iou + 0.01 * conf))
+        x1, y1, x2, y2 = boxes_xyxy[best].tolist()
 
         mask_pixel_width = None
         mask_full = None
         if res.masks is not None and want_full_mask:
-            # res.masks.data is (N, h, w) in letterbox model space.
-            # ultralytics already crops letterbox padding before resize,
-            # so passing through Image.resize → (W, H) gives correct alignment.
+            # res.masks.data may still be in the square letterbox canvas used
+            # by YOLO preprocessing. Crop the unpadded content before resizing
+            # back to the original image, or portrait photos get compressed
+            # horizontally by about 0.75 (480px content inside 640px canvas).
             m = res.masks.data[best].cpu().numpy()  # float 0/1
             mask_lr = (m > 0.5).astype(np.uint8) * 255
+            mask_h, mask_w = mask_lr.shape
+            content_scale = min(mask_w / max(W, 1), mask_h / max(H, 1))
+            content_w = max(1, min(mask_w, int(round(W * content_scale))))
+            content_h = max(1, min(mask_h, int(round(H * content_scale))))
+            pad_x = max(0, (mask_w - content_w) // 2)
+            pad_y = max(0, (mask_h - content_h) // 2)
+            mask_content = mask_lr[pad_y:pad_y + content_h, pad_x:pad_x + content_w]
+            if mask_content.size == 0:
+                mask_content = mask_lr
             mask_full = np.array(
-                Image.fromarray(mask_lr, mode='L').resize((W, H), Image.NEAREST)
+                Image.fromarray(mask_content, mode='L').resize((W, H), Image.NEAREST)
             )
             # mask_pixel_width = max horizontal contiguous run inside bbox
             xi1, yi1 = max(0, int(x1)), max(0, int(y1))
@@ -286,4 +316,12 @@ def get_default_v8m_path() -> Path:
     return (
         Path(__file__).resolve().parent
         / "trunk_detector_training" / "tree_trunk_seg_best.pt"
+    )
+
+
+def get_default_v8m_openvino_path() -> Path:
+    """Path to the OpenVINO export of the server-grade YOLOv8m-seg model."""
+    return (
+        Path(__file__).resolve().parent
+        / "trunk_detector_training" / "tree_trunk_seg_best_openvino_model"
     )

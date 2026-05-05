@@ -168,15 +168,12 @@ router.post('/login', loginLimiter, async (req, res) => {
             }
         }
 
-        // ML Service 設定（所有已登入使用者都可取得，確保 App 無需手動設定）
-        // 優先用公開 URL（ngrok/Funnel），讓手機 App 能直接連線
+        // ML Service 設定（所有已登入使用者都可取得，確保 App 無需手動設定）。
+        // 優先用手機可連到的公開/Tailscale URL；API key 僅保留在後端內部使用。
         const mlConfig = {};
         const mlPublicUrl = process.env.ML_SERVICE_PUBLIC_URL || process.env.ML_SERVICE_URL;
         if (mlPublicUrl) {
             mlConfig.url = mlPublicUrl;
-        }
-        if (process.env.ML_API_KEY) {
-            mlConfig.apiKey = process.env.ML_API_KEY;
         }
 
         res.status(200).json({

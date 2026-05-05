@@ -104,6 +104,9 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
         # Skip rate limiting for health check
         if request.url.path.endswith("/health"):
             return await call_next(request)
+
+        if os.environ.get("ML_BENCHMARK_MODE", "").lower() == "true":
+            return await call_next(request)
         
         client_ip = request.client.host if request.client else "unknown"
         now = time.time()
@@ -125,6 +128,110 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
         return response
 
 _model_load_lock = asyncio.Lock()
+_SERVER_YOLO_SEGMENTER = None
+
+
+def _get_server_yolo_segmenter():
+    """Lazy-load server-side YOLOv8-seg for detection-only phone mode."""
+    global _SERVER_YOLO_SEGMENTER
+    if _SERVER_YOLO_SEGMENTER is not None:
+        return _SERVER_YOLO_SEGMENTER
+
+    from pathlib import Path
+    from yolo_simulator import (
+        YoloV8mSimulator,
+        get_default_v8m_openvino_path,
+        get_default_v8m_path,
+    )
+
+    model_env = os.environ.get("ML_SERVER_YOLO_MODEL", "").strip()
+    if model_env:
+        model_path = Path(model_env)
+        if not model_path.is_absolute():
+            model_path = Path(__file__).parent / model_path
+    else:
+        ov_path = get_default_v8m_openvino_path()
+        model_path = ov_path if ov_path.exists() else get_default_v8m_path()
+
+    if not model_path.exists():
+        raise FileNotFoundError(f"Server YOLO model not found: {model_path}")
+
+    device_env = os.environ.get("ML_SERVER_YOLO_DEVICE", "").strip()
+    device = device_env or ("intel:gpu" if model_path.is_dir() else None)
+    imgsz = int(os.environ.get("ML_SERVER_YOLO_IMGSZ", "640"))
+    _SERVER_YOLO_SEGMENTER = YoloV8mSimulator(
+        model_path,
+        imgsz=imgsz,
+        device=device,
+    )
+    print(f"[ServerYOLO] Loaded {model_path} imgsz={imgsz} device={device or 'default'}")
+    return _SERVER_YOLO_SEGMENTER
+
+
+_DISTANCE_STRATEGY_DEPTH_MODEL = "depth_model"
+_DISTANCE_STRATEGY_EXTERNAL_OVERRIDE = "external_override"
+_ALLOWED_DISTANCE_STRATEGIES = {
+    _DISTANCE_STRATEGY_DEPTH_MODEL,
+    _DISTANCE_STRATEGY_EXTERNAL_OVERRIDE,
+}
+
+
+def _normalize_distance_strategy(value: Optional[str]) -> str:
+    strategy = (value or _DISTANCE_STRATEGY_DEPTH_MODEL).strip().lower()
+    if strategy not in _ALLOWED_DISTANCE_STRATEGIES:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                "Invalid distance_strategy: "
+                f"{value}. Use depth_model or external_override."
+            ),
+        )
+    return strategy
+
+
+def _resolve_external_distance(
+    reference_distance: Optional[float],
+    instrument_distance: Optional[float],
+    distance_source: Optional[str] = None,
+) -> dict:
+    ref = reference_distance if (reference_distance is not None and reference_distance > 0) else None
+    inst = instrument_distance if (instrument_distance is not None and instrument_distance > 0) else None
+    src = distance_source or "none"
+    chosen = None
+    chosen_source = "none"
+    notes = []
+
+    if ref is not None and inst is not None:
+        deviation = abs(ref - inst) / inst if inst > 0 else float("inf")
+        if deviation < 0.15:
+            chosen = ref
+            chosen_source = "gps_validated"
+            notes.append(
+                f"GPS ({ref:.2f}m) validated by instrument HD ({inst:.2f}m), deviation {deviation:.0%}"
+            )
+        else:
+            chosen = inst
+            chosen_source = "instrument_preferred"
+            notes.append(
+                f"GPS ({ref:.2f}m) disagrees with instrument HD ({inst:.2f}m) by {deviation:.0%}, using instrument"
+            )
+    elif ref is not None:
+        chosen = ref
+        chosen_source = f"gps_{src}" if src == "gps" else "reference"
+        notes.append(f"Reference distance: {ref:.2f}m (source: {src})")
+    elif inst is not None:
+        chosen = inst
+        chosen_source = "instrument"
+        notes.append(f"Instrument HD: {inst:.2f}m")
+
+    return {
+        "reference_distance_m": ref,
+        "instrument_distance_m": inst,
+        "distance_source": src,
+        "chosen_distance_m": chosen,
+        "chosen_source": chosen_source,
+        "notes": notes,
+    }
 
 from depth_estimation import (
     estimate_depth, estimate_depth_rich, estimate_depth_with_info,
@@ -259,11 +366,10 @@ async def startup_event():
     except Exception as e:
         print(f"[Startup] Warning: Could not pre-load depth model: {e}")
         print("[Startup] Depth model will be loaded on first request.")
-    # SAM segmentation removed (2026-04-28). Trunk masks now come exclusively
-    # from the on-device YOLOv8-seg model on the phone (uploaded as
-    # trunk_mask_base64). Server-side SAM was deemed unsuitable for trunk
-    # segmentation in this pipeline and was fully removed to avoid biasing
-    # benchmark comparisons.
+    # SAM segmentation removed (2026-04-28). Trunk masks come from YOLOv8-seg:
+    # either legacy phone-uploaded masks or the current opt-in server YOLO path.
+    # Server-side SAM was deemed unsuitable for trunk segmentation in this
+    # pipeline and was fully removed to avoid biasing benchmark comparisons.
 
 @app.exception_handler(RequestValidationError)
 async def validation_exception_handler(request: Request, exc: RequestValidationError):
@@ -449,11 +555,9 @@ async def ws_scan(websocket: WebSocket):
                 y2=best_trunk.bbox_y2,
             )
 
-            # Trunk segmentation removed from server (2026-04-28).
-            # The live-scan WebSocket previously ran SAM here to render a
-            # mask overlay; we now rely on the phone's on-device YOLOv8-seg
-            # for masks. The viewfinder simply returns the bbox without a
-            # pixel-precise overlay.
+            # The legacy live-scan WebSocket returns a bbox only. The current
+            # DBH scanner path uploads a still image + bbox to /auto-measure-dbh,
+            # where server-side YOLOv8-seg can generate the mask.
             seg_existing = (
                 best_trunk.mask.astype(np.uint8)
                 if best_trunk.mask is not None else None
@@ -785,30 +889,40 @@ async def auto_measure_dbh_endpoint(
     distance_source: Optional[str] = Form(default=None,
         description="Which distance source the frontend chose: "
                     "'gps' (phone GPS), 'instrument' (VLGEO2 HD), or 'none'."),
+    distance_strategy: Optional[str] = Form(default="depth_model",
+        description="Distance strategy for DBH calculation. Production default is "
+                    "'depth_model', which keeps the depth model distance. "
+                    "Benchmarks may explicitly use 'external_override' to "
+                    "replace depth with reference_distance/instrument_distance."),
     # ── 新增: 使用者觸碰點 (Phase 2: SAM prompt) ──────────────
     # 使用者在手機上點擊目標樹幹 → 送出座標作為 SAM 分割的 prompt
     tap_x: Optional[int] = Form(default=None,
         description="User tap X coordinate on the tree trunk (for SAM segmentation)"),
     tap_y: Optional[int] = Form(default=None,
         description="User tap Y coordinate on the tree trunk (for SAM segmentation)"),
-    # ── [Edge AI] Local bounding box from ML Kit ──────────────
+    # ── [Edge AI] Local bounding box from phone YOLO ───────────
     bbox_x1: Optional[float] = Form(default=None),
     bbox_y1: Optional[float] = Form(default=None),
     bbox_x2: Optional[float] = Form(default=None),
     bbox_y2: Optional[float] = Form(default=None),
     # ── [方案A] YOLOv8-seg mask pixel width ───────────────────
     mask_pixel_width: Optional[float] = Form(default=None,
-        description="Trunk pixel width computed on-device from YOLOv8-seg mask. "
+        description="Legacy trunk pixel width computed on-device from YOLOv8-seg mask. "
                     "Overrides depth-edge detection when provided."),
     trunk_mask_base64: Optional[str] = Form(default=None,
-        description="Base64-encoded PNG of the on-device YOLO-seg trunk mask "
+        description="Legacy base64-encoded PNG of the on-device YOLO-seg trunk mask "
                     "(grayscale, same width as JPEG). When provided the server "
                     "measures DBH on every multi-row sample directly from this "
-                    "mask instead of the depth-edge fallback. This is the "
-                    "recommended way: SAM on server is no longer needed."),
+                    "mask instead of the depth-edge fallback."),
+    use_server_yolo_mask: bool = Form(default=False,
+        description="If true and trunk_mask_base64 is absent, run server-side "
+                    "YOLOv8-seg (OpenVINO IR when available) to generate the "
+                    "trunk mask from the uploaded JPEG and bbox."),
+    server_yolo_conf: float = Form(default=0.15,
+        description="Confidence threshold for server-side YOLOv8-seg mask generation."),
     preview_width_px: Optional[float] = Form(default=None,
         description="Preview frame portrait width (short-side px) on which the "
-                    "on-device YOLO mask was computed. Required for correct "
+                    "legacy on-device YOLO mask was computed. Required for correct "
                     "scaling when preview and JPEG resolutions differ (iOS, "
                     "low-end Android). If omitted, assume preview == JPEG."),
     return_visualization: bool = Form(default=True,
@@ -835,6 +949,7 @@ async def auto_measure_dbh_endpoint(
         
         if mode is not None and mode not in ('fast', 'balanced', 'accurate'):
             raise HTTPException(status_code=400, detail=f"無效的精度模式: {mode}，請使用 fast/balanced/accurate")
+        distance_strategy = _normalize_distance_strategy(distance_strategy)
 
         img_bytes = await image.read()
         if len(img_bytes) > 20 * 1024 * 1024:
@@ -895,14 +1010,29 @@ async def auto_measure_dbh_endpoint(
             effective_fov = depth_result.auto_fov_degrees
             focal_source = f"depth_pro_fov ({depth_result.auto_fov_degrees:.1f}°)"
 
-        # Step 2: Auto trunk detection
+        # Step 2: Auto trunk detection. If the client already supplied a
+        # bbox (phone detection-only mode / benchmark GT bbox), skip the
+        # depth-gradient detector; it would repeat work and costs ~100ms.
+        has_local_bbox = (
+            bbox_x1 is not None and bbox_y1 is not None
+            and bbox_x2 is not None and bbox_y2 is not None
+        )
         t1 = time.time()
-        detection = detect_trunks(depth_map)
+        if has_local_bbox:
+            class MockDetection:
+                def __init__(self):
+                    self.trunks = []
+                    self.best_trunk_index = -1
+                    self.notes = ["Server depth detector skipped; client bbox provided"]
+                    self.depth_stats = {}
+            detection = MockDetection()
+        else:
+            detection = detect_trunks(depth_map)
         detect_time = time.time() - t1
 
         # Step 3: Use the best detected trunk for DBH measurement
         # If Edge AI local_bbox is provided, we use that instead of server auto-detection
-        if bbox_x1 is not None and bbox_y1 is not None and bbox_x2 is not None and bbox_y2 is not None:
+        if has_local_bbox:
             bbox = BoundingBox(
                 x1=max(0, min(W - 1, int(bbox_x1 * scale))),
                 y1=max(0, min(H - 1, int(bbox_y1 * scale))),
@@ -974,19 +1104,19 @@ async def auto_measure_dbh_endpoint(
             )
 
         # Step 3.5: Trunk segmentation
-        # Server-side SAM was removed (2026-04-28). The trunk mask now
-        # comes exclusively from the phone (on-device YOLOv8-seg) via the
-        # ``trunk_mask_base64`` form field. ``seg_time`` is kept in the
-        # response for backwards compatibility but should always be ~0.
+        # Current scanner path: phone sends bbox only and the server generates
+        # a mask with YOLOv8-seg OpenVINO. Legacy callers may still upload
+        # trunk_mask_base64 from on-device YOLOv8-seg.
         t_seg = time.time()
         seg_mask_applied = False
-        seg_time = time.time() - t_seg
+        segmentation_source = None
+        server_yolo_info = None
 
-        # ── Decode on-device YOLO-seg mask PNG if provided ──
-        # This is the recommended path (replaces server-side SAM). When the
-        # phone sends us a precise trunk mask we feed it into measure_dbh so
+        # ── Decode legacy on-device YOLO-seg mask PNG if provided ──
+        # When a caller sends a precise trunk mask we feed it into measure_dbh so
         # every sampled row is measured FROM THE MASK (not depth edges).
         on_device_mask_np = None
+        server_yolo_mask_np = None
         if trunk_mask_base64:
             try:
                 raw = base64.b64decode(trunk_mask_base64)
@@ -1000,6 +1130,7 @@ async def auto_measure_dbh_endpoint(
                 if m_img.size != target_wh:
                     m_img = m_img.resize(target_wh, Image.NEAREST)
                 on_device_mask_np = (np.array(m_img) > 127).astype(np.uint8)
+                segmentation_source = "on_device_yolo_seg"
                 print(f"[AutoMeasure] Decoded on-device mask: shape={on_device_mask_np.shape} "
                       f"positive_px={int(on_device_mask_np.sum())} "
                       f"(resized to depth_map space {target_wh})")
@@ -1007,9 +1138,41 @@ async def auto_measure_dbh_endpoint(
                 print(f"[AutoMeasure] Failed to decode on-device mask: {e}")
                 on_device_mask_np = None
 
-        # Prefer on-device mask (YOLOv8-seg from the phone) for measurement.
-        # Server-side SAM has been removed (2026-04-28).
-        effective_mask_np = on_device_mask_np
+        if on_device_mask_np is None and use_server_yolo_mask:
+            try:
+                segmenter = _get_server_yolo_segmenter()
+                det = segmenter.detect(
+                    pil_image,
+                    conf_thresh=server_yolo_conf,
+                    want_full_mask=True,
+                    bbox_hint=(bbox.x1, bbox.y1, bbox.x2, bbox.y2),
+                )
+                if det is not None and det.mask_full is not None:
+                    server_yolo_mask_np = (det.mask_full > 127).astype(np.uint8)
+                    segmentation_source = "server_yolo_seg"
+                    seg_mask_applied = True
+                    server_yolo_info = {
+                        "confidence": det.confidence,
+                        "bbox": {
+                            "x1": det.bbox_x1,
+                            "y1": det.bbox_y1,
+                            "x2": det.bbox_x2,
+                            "y2": det.bbox_y2,
+                        },
+                        "mask_pixel_width": det.mask_pixel_width,
+                        "positive_px": int(server_yolo_mask_np.sum()),
+                    }
+                    print(f"[AutoMeasure] Server YOLO mask: shape={server_yolo_mask_np.shape} "
+                          f"positive_px={int(server_yolo_mask_np.sum())} "
+                          f"conf={det.confidence:.3f}")
+                else:
+                    print("[AutoMeasure] Server YOLO produced no usable mask")
+            except Exception as e:
+                print(f"[AutoMeasure] Server YOLO mask failed: {e}")
+
+        # Prefer the phone mask when present; otherwise use opt-in server mask.
+        effective_mask_np = on_device_mask_np if on_device_mask_np is not None else server_yolo_mask_np
+        seg_time = time.time() - t_seg
 
         # Step 4: Measure DBH using auto-detected bbox
         t2 = time.time()
@@ -1022,11 +1185,10 @@ async def auto_measure_dbh_endpoint(
         )
         calc_time = time.time() - t2
 
-        # ── On-device YOLOv8-seg mask width override ──
+        # ── Legacy on-device YOLOv8-seg mask width override ──
         # When the phone uploads a mask_pixel_width hint (computed from the
         # YOLOv8-seg output before sending the full PNG mask), use it to
-        # override the depth-edge estimate. This is the recommended path now
-        # that server-side SAM has been removed.
+        # override the depth-edge estimate.
         if mask_pixel_width is not None and mask_pixel_width > 10.0:
             try:
                 # 座標空間校正：mask_pixel_width 是在前端 camera preview 幀上計算的，
@@ -1066,6 +1228,8 @@ async def auto_measure_dbh_endpoint(
                     ],
                 )
                 seg_mask_applied = True
+                if segmentation_source is None:
+                    segmentation_source = "on_device_mask_width"
             except Exception as e:
                 result.notes.append(f"方案A mask override skipped: {e}")
 
@@ -1076,7 +1240,7 @@ async def auto_measure_dbh_endpoint(
         # when the three depth strategies all fail. We annotate it so the
         # response is transparent (caller can display a "please re-aim" hint).
         no_mask_available = (
-            on_device_mask_np is None
+            effective_mask_np is None
             and not seg_mask_applied
             and (mask_pixel_width is None or mask_pixel_width <= 10.0)
         )
@@ -1095,7 +1259,7 @@ async def auto_measure_dbh_endpoint(
         subpixel_width = None
         ellipse_width = None
         refinement_skip_due_to_mask = (
-            seg_mask_applied or on_device_mask_np is not None
+            seg_mask_applied or effective_mask_np is not None
         )
 
         if (not refinement_skip_due_to_mask
@@ -1155,46 +1319,19 @@ async def auto_measure_dbh_endpoint(
             except Exception as e:
                 result.notes.append(f"Ellipse fitting skipped: {e}")
 
-        # ── Smart distance selection & depth correction ───────────────
-        # Priority: GPS (if accurate) > Instrument HD > Monocular depth
-        # Cross-validate GPS vs Instrument when both available
-        depth_source = "monocular"
-        chosen_distance = None
-        correction_notes = []
-        
-        _ref = reference_distance if (reference_distance is not None and reference_distance > 0) else None
-        _inst = instrument_distance if (instrument_distance is not None and instrument_distance > 0) else None
-        _src = distance_source or "none"
-        
-        if _ref is not None and _inst is not None:
-            deviation = abs(_ref - _inst) / _inst if _inst > 0 else float('inf')
-            # Tighter tolerance: GPS 水平精度通常 ±5-10m，但拍樹距離多在 1-5m。
-            # 15% 偏差 (例如 3m vs 3.45m) 已是顯著落差，此時信任儀器 HD。
-            # 原本 50% 太寬鬆 → 50cm 樹被錯放成 75cm 的風險。
-            if deviation < 0.15:
-                # GPS 與儀器吻合 → 用 GPS (實際位置誤差較小時)
-                chosen_distance = _ref
-                depth_source = "gps_validated"
-                correction_notes.append(
-                    f"GPS ({_ref:.2f}m) validated by instrument HD ({_inst:.2f}m), deviation {deviation:.0%}"
-                )
-            else:
-                # 分歧大 → 信任儀器 HD (校正過的光學測距)
-                chosen_distance = _inst
-                depth_source = "instrument_preferred"
-                correction_notes.append(
-                    f"GPS ({_ref:.2f}m) disagrees with instrument HD ({_inst:.2f}m) by {deviation:.0%}, using instrument"
-                )
-        elif _ref is not None:
-            chosen_distance = _ref
-            depth_source = f"gps_{_src}" if _src == "gps" else "reference"
-            correction_notes.append(f"Reference distance: {_ref:.2f}m (source: {_src})")
-        elif _inst is not None:
-            chosen_distance = _inst
-            depth_source = "instrument"
-            correction_notes.append(f"Instrument HD: {_inst:.2f}m")
-        
-        if chosen_distance is not None:
+        # ── Distance strategy ─────────────────────────────────────────
+        # Production measurement must use the depth model distance. External
+        # distances (GPS / VLGEO2 HD / benchmark CapDis) are metadata unless a
+        # benchmark/debug caller explicitly opts in with external_override.
+        external_distance = _resolve_external_distance(
+            reference_distance, instrument_distance, distance_source,
+        )
+        depth_source = "depth_model"
+        chosen_distance = external_distance["chosen_distance_m"]
+        correction_notes = external_distance["notes"]
+
+        if chosen_distance is not None and distance_strategy == _DISTANCE_STRATEGY_EXTERNAL_OVERRIDE:
+            depth_source = external_distance["chosen_source"]
             original_depth = result.trunk_depth_m
             if original_depth > 0:
                 scale_factor = chosen_distance / original_depth
@@ -1236,6 +1373,11 @@ async def auto_measure_dbh_endpoint(
                     ],
                 )
                 depth_source = f"{depth_source}_fallback"
+        elif chosen_distance is not None:
+            result.notes.append(
+                "External distance received for QA/benchmark reference only; "
+                "DBH uses depth model distance."
+            )
 
         if focal_source != "default":
             result.notes.append(f"Focal source: {focal_source}")
@@ -1289,14 +1431,14 @@ async def auto_measure_dbh_endpoint(
                 for t in detection.trunks
             ],
             "depth_source": depth_source,
+            "distance_strategy": distance_strategy,
             "reference_distance_m": reference_distance,
             "instrument_distance_m": instrument_distance,
+            "external_distance": external_distance,
             "segmentation": {
-                "applied": seg_mask_applied,
-                "source": (
-                    "on_device_yolo_seg" if on_device_mask_np is not None
-                    else ("on_device_mask_width" if seg_mask_applied else None)
-                ),
+                "applied": bool(effective_mask_np is not None or seg_mask_applied),
+                "source": segmentation_source,
+                "server_yolo": server_yolo_info,
             },
             "timing": {
                 "depth_estimation_ms": round(depth_time * 1000, 1),
@@ -1310,18 +1452,18 @@ async def auto_measure_dbh_endpoint(
             "backend_used": depth_result.backend_used,
         }
 
-        # Mask overlay: visualize the on-device YOLOv8-seg mask if provided.
-        if on_device_mask_np is not None and on_device_mask_np.sum() > 0:
+        # Mask overlay: visualize the segmentation mask if provided/generated.
+        if effective_mask_np is not None and effective_mask_np.sum() > 0:
             try:
-                # on_device_mask_np lives in processed/depth_map space; the
-                # overlay helper expects a mask in pil_image (original) space.
-                if on_device_mask_np.shape != (H_orig, W_orig):
+                # effective_mask_np lives in processed/depth_map space; the
+                # overlay helper receives pil_image, which is also processed.
+                if effective_mask_np.shape != (H, W):
                     overlay_mask_img = Image.fromarray(
-                        (on_device_mask_np * 255).astype(np.uint8), mode="L"
-                    ).resize((W_orig, H_orig), Image.NEAREST)
+                        (effective_mask_np * 255).astype(np.uint8), mode="L"
+                    ).resize((W, H), Image.NEAREST)
                     overlay_mask = (np.array(overlay_mask_img) > 127).astype(np.uint8)
                 else:
-                    overlay_mask = on_device_mask_np
+                    overlay_mask = effective_mask_np
                 response["segmentation_mask_overlay_base64"] = (
                     _mask_to_overlay_base64(pil_image, overlay_mask)
                 )
@@ -1461,6 +1603,7 @@ async def auto_measure_dbh_multi_endpoint(
     phone_model: Optional[str] = Form(default=None),
     reference_distance: Optional[float] = Form(default=None),
     instrument_distance: Optional[float] = Form(default=None),
+    distance_strategy: Optional[str] = Form(default="depth_model"),
     mode: Optional[str] = Form(default=None),
 ):
     """
@@ -1474,6 +1617,7 @@ async def auto_measure_dbh_multi_endpoint(
         raise HTTPException(status_code=400, detail="At least 2 images required")
     if len(images) > 3:
         raise HTTPException(status_code=400, detail="Maximum 3 images supported for multi-shot")
+    distance_strategy = _normalize_distance_strategy(distance_strategy)
 
     try:
         dbh_results = []
@@ -1535,20 +1679,18 @@ async def auto_measure_dbh_multi_endpoint(
         multi_boost = 0.1 if cv < 0.15 else 0.05 if cv < 0.3 else 0
         final_confidence = min(1.0, float(base_confidence + multi_boost))
 
-        # Apply distance correction to median
-        _ref = reference_distance if (reference_distance and reference_distance > 0) else None
-        _inst = instrument_distance if (instrument_distance and instrument_distance > 0) else None
-        chosen_dist = _ref or _inst
-        depth_source = "monocular_multi"
+        external_distance = _resolve_external_distance(reference_distance, instrument_distance)
+        chosen_dist = external_distance["chosen_distance_m"]
+        depth_source = "depth_model_multi"
 
-        if chosen_dist:
+        if chosen_dist and distance_strategy == _DISTANCE_STRATEGY_EXTERNAL_OVERRIDE:
             median_result = dbh_results[len(dbh_results) // 2]
             if median_result.trunk_depth_m > 0:
                 sf = chosen_dist / median_result.trunk_depth_m
                 corr_chord = median_result.chord_length_m * sf
                 corr_dbh = cylindrical_correction(corr_chord, chosen_dist) * 100.0
                 median_dbh = round(corr_dbh, 2)
-                depth_source = "multi_corrected"
+                depth_source = f"multi_{external_distance['chosen_source']}"
                 final_confidence = min(1.0, final_confidence + 0.1)
 
         return JSONResponse(content={
@@ -1563,6 +1705,8 @@ async def auto_measure_dbh_multi_endpoint(
             "individual_dbh_cm": [round(d, 2) for d in dbh_values],
             "method": f"multi_median_{len(dbh_results)}shot+{depth_source}",
             "depth_source": depth_source,
+            "distance_strategy": distance_strategy,
+            "external_distance": external_distance,
             "notes": [
                 f"Multi-shot fusion: {len(dbh_results)}/{len(images)} images valid",
                 f"DBH range: {min(dbh_values):.1f} - {max(dbh_values):.1f} cm (CV={cv:.1%})",

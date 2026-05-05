@@ -79,7 +79,6 @@ async function fetchFromMlService(path) {
 router.get('/status', async (req, res) => {
     try {
         const mlUrl = process.env.ML_SERVICE_URL;
-        const mlApiKey = process.env.ML_API_KEY;
 
         if (!mlUrl) {
             return res.json({
@@ -89,15 +88,14 @@ router.get('/status', async (req, res) => {
             });
         }
 
-        // 派發 ML 設定給前端 App
-        // ML_SERVICE_PUBLIC_URL: 給 App 用的公開 URL（ngrok / Tailscale Funnel）
-        // ML_SERVICE_URL: 給後端 proxy 用的內部 URL（Tailscale 直連）
+        // 派發 ML 設定給前端 App。
+        // ML_SERVICE_PUBLIC_URL: 給 App 用的手機可達 URL（Tailscale/LAN/HTTPS）
+        // ML_SERVICE_URL: 給後端 proxy 用的內部 URL
         const publicUrl = process.env.ML_SERVICE_PUBLIC_URL || mlUrl;
         return res.json({
             success: true,
             configured: true,
             ml_service_url: publicUrl,
-            ml_api_key: mlApiKey,
             online: true,
         });
     } catch (err) {

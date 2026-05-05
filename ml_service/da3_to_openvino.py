@@ -34,16 +34,17 @@ ROOT = Path(__file__).resolve().parent
 DA3_SRC = ROOT / "third_party" / "depth-anything-3" / "src"
 sys.path.insert(0, str(DA3_SRC))
 
-OUT_DIR = ROOT / "openvino_models" / "da3_metric_large"
-OUT_DIR.mkdir(parents=True, exist_ok=True)
+# Default OUT_DIR points at the production 504x378 IR; CLI --out-dir overrides.
+DEFAULT_OUT_DIR = ROOT / "openvino_models" / "da3_metric_large"
 
 XIANG_RGB_DIR = Path(r"C:\projects\tree_project\trunk_training_data\xiang_zenodo\data and code\tree\treeRGB")
-# Fixed export shape: 504x378 (matches DA3 InputProcessor portrait output;
+# Default export shape: 504x378 (matches DA3 InputProcessor portrait output;
 # trees are always portrait phone photos). DA3 has positional embeddings that
 # bake into the graph at trace time, so dynamic H/W is not supported.
+# CLI --export-h / --export-w override these defaults (and update the smoke
+# preprocessor accordingly so the input shape matches the IR).
 EXPORT_H = 504
 EXPORT_W = 378
-PROCESS_RES = 504  # DA3 default (long edge)
 
 if hasattr(sys.stdout, "reconfigure"):
     try:
@@ -103,22 +104,22 @@ def load_da3():
     return m
 
 
-def make_dummy_input(h=EXPORT_H, w=EXPORT_W):
+def make_dummy_input(h: int = EXPORT_H, w: int = EXPORT_W):
     return torch.randn(1, 3, h, w, dtype=torch.float32)
 
 
 # --------------------------------------------------------------------------
 # Tier A: openvino.convert_model on PyTorch wrapper
 # --------------------------------------------------------------------------
-def tier_a(wrapper: torch.nn.Module, dummy: torch.Tensor) -> bool:
-    print(f"\n=== Tier A: openvino.convert_model (PyTorch frontend, fixed {EXPORT_H}x{EXPORT_W}) ===")
+def tier_a(wrapper: torch.nn.Module, dummy: torch.Tensor, out_dir: Path) -> bool:
+    print(f"\n=== Tier A: openvino.convert_model (PyTorch frontend, fixed {tuple(dummy.shape)}) ===")
     try:
         import openvino as ov
         wrapper.eval()
         with torch.no_grad():
             ov_model = ov.convert_model(wrapper, example_input=dummy)
-        ov.save_model(ov_model, str(OUT_DIR / "openvino_model.xml"), compress_to_fp16=True)
-        print(f"  ✅ Saved → {OUT_DIR / 'openvino_model.xml'}")
+        ov.save_model(ov_model, str(out_dir / "openvino_model.xml"), compress_to_fp16=True)
+        print(f"  ✅ Saved → {out_dir / 'openvino_model.xml'}")
         return True
     except Exception as e:
         print(f"  ❌ Tier A failed: {type(e).__name__}: {e}")
@@ -129,9 +130,9 @@ def tier_a(wrapper: torch.nn.Module, dummy: torch.Tensor) -> bool:
 # --------------------------------------------------------------------------
 # Tier B: torch.onnx.export → openvino.convert_model
 # --------------------------------------------------------------------------
-def tier_b(wrapper: torch.nn.Module, dummy: torch.Tensor) -> bool:
+def tier_b(wrapper: torch.nn.Module, dummy: torch.Tensor, out_dir: Path) -> bool:
     print("\n=== Tier B: torch.onnx.export (dynamo) → ov.convert_model ===")
-    onnx_path = OUT_DIR / "da3_mono.onnx"
+    onnx_path = out_dir / "da3_mono.onnx"
     try:
         wrapper.eval()
         with torch.no_grad():
@@ -158,8 +159,8 @@ def tier_b(wrapper: torch.nn.Module, dummy: torch.Tensor) -> bool:
     try:
         import openvino as ov
         ov_model = ov.convert_model(str(onnx_path))
-        ov.save_model(ov_model, str(OUT_DIR / "openvino_model.xml"), compress_to_fp16=True)
-        print(f"  ✅ OV IR saved → {OUT_DIR / 'openvino_model.xml'}")
+        ov.save_model(ov_model, str(out_dir / "openvino_model.xml"), compress_to_fp16=True)
+        print(f"  ✅ OV IR saved → {out_dir / 'openvino_model.xml'}")
         return True
     except Exception as e:
         print(f"  ❌ OV convert failed: {type(e).__name__}: {e}")
@@ -170,7 +171,7 @@ def tier_b(wrapper: torch.nn.Module, dummy: torch.Tensor) -> bool:
 # --------------------------------------------------------------------------
 # Tier C: torch.jit.trace → openvino.convert_model
 # --------------------------------------------------------------------------
-def tier_c(wrapper: torch.nn.Module, dummy: torch.Tensor) -> bool:
+def tier_c(wrapper: torch.nn.Module, dummy: torch.Tensor, out_dir: Path) -> bool:
     print("\n=== Tier C: torch.jit.trace → ov.convert_model ===")
     try:
         wrapper.eval()
@@ -178,8 +179,8 @@ def tier_c(wrapper: torch.nn.Module, dummy: torch.Tensor) -> bool:
             traced = torch.jit.trace(wrapper, dummy, strict=False)
         import openvino as ov
         ov_model = ov.convert_model(traced, example_input=dummy)
-        ov.save_model(ov_model, str(OUT_DIR / "openvino_model.xml"), compress_to_fp16=True)
-        print(f"  ✅ Traced + OV IR saved → {OUT_DIR / 'openvino_model.xml'}")
+        ov.save_model(ov_model, str(out_dir / "openvino_model.xml"), compress_to_fp16=True)
+        print(f"  ✅ Traced + OV IR saved → {out_dir / 'openvino_model.xml'}")
         return True
     except Exception as e:
         print(f"  ❌ Tier C failed: {type(e).__name__}: {e}")
@@ -190,8 +191,10 @@ def tier_c(wrapper: torch.nn.Module, dummy: torch.Tensor) -> bool:
 # --------------------------------------------------------------------------
 # Smoke test: 5 Xiang images, OV-iGPU vs PyTorch FP32
 # --------------------------------------------------------------------------
-def smoke_test(da3_pytorch, n: int = 5, device_label: str = "GPU") -> str:
-    print(f"\n=== Smoke test: {n} Xiang images, OV {device_label} vs PyTorch FP32 ===")
+def smoke_test(da3_pytorch, out_dir: Path, export_h: int, export_w: int,
+               n: int = 5, device_label: str = "GPU") -> str:
+    print(f"\n=== Smoke test: {n} Xiang images, OV {device_label} vs PyTorch FP32 "
+          f"(IR shape {export_h}x{export_w}) ===")
     if not XIANG_RGB_DIR.exists():
         return f"❌ Xiang dir not found: {XIANG_RGB_DIR}"
     files = sorted([f for f in XIANG_RGB_DIR.iterdir() if f.suffix.lower() in (".jpg", ".jpeg", ".png")])[:n]
@@ -205,7 +208,14 @@ def smoke_test(da3_pytorch, n: int = 5, device_label: str = "GPU") -> str:
     target_device = device_label if device_label in devices else "CPU"
     print(f"  Using OV device: {target_device}")
 
-    ov_model = core.read_model(str(OUT_DIR / "openvino_model.xml"))
+    ov_model = core.read_model(str(out_dir / "openvino_model.xml"))
+    # NPU requires fully-static shapes. The PyTorch tracer often leaves
+    # input rank-dynamic even when given a fixed example_input, so reshape
+    # explicitly here. Safe for GPU/CPU too (no-op when already static).
+    try:
+        ov_model.reshape({0: ov.PartialShape([1, 3, export_h, export_w])})
+    except Exception as e:
+        print(f"  ⚠ reshape({1},{3},{export_h},{export_w}) failed: {e}")
     compiled = core.compile_model(ov_model, target_device)
     output_node = compiled.outputs[0]
 
@@ -213,10 +223,12 @@ def smoke_test(da3_pytorch, n: int = 5, device_label: str = "GPU") -> str:
     diffs_pct = []
     ov_times, pt_times = [], []
 
+    # Preprocess to the IR's exact static shape (PIL resize is W,H).
+    target_size = (export_w, export_h)
+    process_long_edge = max(export_h, export_w)
     for img_p in files:
         img = Image.open(img_p).convert("RGB")
-        # Preprocess: simple resize to 504×504 for both PT and OV (DA3's standard process_res)
-        img_proc = img.resize((PROCESS_RES, PROCESS_RES), Image.BILINEAR)
+        img_proc = img.resize(target_size, Image.BILINEAR)
         arr = np.array(img_proc, dtype=np.float32) / 255.0
         # ImageNet norm
         mean = np.array([0.485, 0.456, 0.406], dtype=np.float32)
@@ -233,7 +245,7 @@ def smoke_test(da3_pytorch, n: int = 5, device_label: str = "GPU") -> str:
         # PyTorch FP32 reference (use the original DA3 inference path so it's fair)
         t0 = time.time()
         with torch.no_grad():
-            pred = da3_pytorch.inference([img], export_dir=None, process_res=PROCESS_RES)
+            pred = da3_pytorch.inference([img], export_dir=None, process_res=process_long_edge)
         pt_times.append(time.time() - t0)
         pt_depth = np.asarray(pred.depth[0], dtype=np.float32)
 
@@ -266,7 +278,8 @@ def smoke_test(da3_pytorch, n: int = 5, device_label: str = "GPU") -> str:
                f"  speedup = {np.mean(pt_times)/max(np.mean(ov_times),1e-6):.1f}x")
     print(summary)
     lines.append(summary)
-    (OUT_DIR / "_smoke_report.txt").write_text("\n".join(lines), encoding="utf-8")
+    report_path = out_dir / f"_smoke_report_{target_device}.txt"
+    report_path.write_text("\n".join(lines), encoding="utf-8")
     return summary
 
 
@@ -281,35 +294,57 @@ def main():
     ap.add_argument("--skip-smoke", action="store_true",
                     help="skip the built-in smoke test (use da3_ov_validate.py instead)")
     ap.add_argument("--smoke-n", type=int, default=5)
-    ap.add_argument("--device", default="GPU", help="OV device for smoke (GPU / CPU / NPU)")
+    ap.add_argument("--device", default="GPU",
+                    help="OV device for smoke (GPU / CPU / NPU)")
+    ap.add_argument("--export-h", type=int, default=EXPORT_H,
+                    help=f"IR static height (default {EXPORT_H})")
+    ap.add_argument("--export-w", type=int, default=EXPORT_W,
+                    help=f"IR static width (default {EXPORT_W})")
+    ap.add_argument("--out-dir", default=None,
+                    help="Override output dir. Default: openvino_models/"
+                         "da3_metric_large{,_<H>x<W>} (only the default "
+                         "504x378 lands in the prod path; non-default shapes "
+                         "go to a sibling dir to avoid clobbering production).")
     args = ap.parse_args()
+
+    if args.out_dir:
+        out_dir = Path(args.out_dir)
+    elif args.export_h == EXPORT_H and args.export_w == EXPORT_W:
+        out_dir = DEFAULT_OUT_DIR
+    else:
+        out_dir = ROOT / "openvino_models" / f"da3_metric_large_{args.export_h}x{args.export_w}"
+    out_dir.mkdir(parents=True, exist_ok=True)
+    print(f"[info] export dir: {out_dir}")
 
     da3 = load_da3()
 
     if not args.skip_export:
         wrapper = DA3MonoWrapper(da3)
-        dummy = make_dummy_input()
-        print(f"[info] dummy input shape: {tuple(dummy.shape)}  (PROCESS_RES={PROCESS_RES})")
+        dummy = make_dummy_input(h=args.export_h, w=args.export_w)
+        print(f"[info] dummy input shape: {tuple(dummy.shape)}")
 
-        ok = tier_a(wrapper, dummy)
+        ok = tier_a(wrapper, dummy, out_dir)
         if not ok:
-            ok = tier_b(wrapper, dummy)
+            ok = tier_b(wrapper, dummy, out_dir)
         if not ok:
-            ok = tier_c(wrapper, dummy)
+            ok = tier_c(wrapper, dummy, out_dir)
         if not ok:
             print("\n💥 All export tiers failed. See errors above.")
             sys.exit(2)
 
-    if not (OUT_DIR / "openvino_model.xml").exists():
-        print(f"❌ OV IR not found at {OUT_DIR / 'openvino_model.xml'}")
+    ir_path = out_dir / "openvino_model.xml"
+    if not ir_path.exists():
+        print(f"❌ OV IR not found at {ir_path}")
         sys.exit(2)
 
     if args.skip_smoke:
         print("[ok] skipping built-in smoke test (run da3_ov_validate.py for apples-to-apples)")
         return
 
-    summary = smoke_test(da3, n=args.smoke_n, device_label=args.device)
-    print(f"\n📄 Smoke report: {OUT_DIR / '_smoke_report.txt'}")
+    summary = smoke_test(da3, out_dir=out_dir,
+                         export_h=args.export_h, export_w=args.export_w,
+                         n=args.smoke_n, device_label=args.device)
+    print(f"\n📄 Smoke report: {out_dir / f'_smoke_report_{args.device}.txt'}")
 
 
 if __name__ == "__main__":

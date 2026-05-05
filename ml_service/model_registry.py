@@ -427,7 +427,7 @@ def print_config_summary():
     if ENABLE_SAM_SEGMENTATION:
         print(f"  Segmentation: {seg.display_name}")
     else:
-        print(f"  Segmentation: on-device YOLOv8-seg (server SAM disabled)")
+        print(f"  Segmentation: YOLOv8-seg masks (server opt-in, SAM disabled)")
     print(f"  ONNX Runtime: {'Enabled' if USE_ONNX_RUNTIME else 'Disabled'}")
     print(f"  OpenVINO:     {'Enabled' if ENABLE_OPENVINO else 'Disabled'}")
     print(f"  CPU Threads:  {CPU_THREADS}")

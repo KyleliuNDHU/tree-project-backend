@@ -16,6 +16,7 @@ Hardware auto-detection priority:
   4. PyTorch CPU (fallback)
 """
 
+import os
 import torch
 import numpy as np
 from PIL import Image
@@ -326,24 +327,77 @@ def _try_load_da3(model_id: str, config) -> bool:
         _backend_type = f"da3_{_device}"
         print(f"[DepthEstimation] DA3 loaded ({config.params_m}M params) on {_device}")
 
-        # ---- Optional: load DA3 OpenVINO IR for iGPU acceleration ----
+        # ---- Optional: load DA3 OpenVINO IR for iGPU/NPU acceleration ----
+        # Selection (override via env vars):
+        #   ML_DA3_OV_DIR   absolute or relative path to the IR dir (defaults
+        #                   to openvino_models/da3_metric_large)
+        #   ML_DA3_OV_DEVICE  GPU | NPU | CPU | AUTO  (default: AUTO →
+        #                   prefer GPU > NPU > CPU; benchmarks force a single
+        #                   device by setting this explicitly)
         try:
             from pathlib import Path as _P
-            ov_xml = _P(__file__).parent / "openvino_models" / "da3_metric_large" / "openvino_model.xml"
+            ov_dir_env = os.environ.get("ML_DA3_OV_DIR", "").strip()
+            if ov_dir_env:
+                ov_dir = _P(ov_dir_env)
+                if not ov_dir.is_absolute():
+                    ov_dir = _P(__file__).parent / ov_dir
+            else:
+                ov_dir = _P(__file__).parent / "openvino_models" / "da3_metric_large"
+            ov_xml = ov_dir / "openvino_model.xml"
+            ov_cache_dir = _P(__file__).parent / "openvino_models" / "_ov_cache"
+            ov_cache_dir.mkdir(parents=True, exist_ok=True)
             if ov_xml.exists():
                 import openvino as ov
                 core = ov.Core()
                 devs = core.available_devices
-                target = "GPU" if "GPU" in devs else "CPU"
+                pref = os.environ.get("ML_DA3_OV_DEVICE", "AUTO").strip().upper()
+                if pref in devs:
+                    target = pref
+                elif pref == "AUTO":
+                    target = ("GPU" if "GPU" in devs
+                              else "NPU" if "NPU" in devs
+                              else "CPU")
+                else:
+                    print(f"[DepthEstimation] DA3 OV requested device '{pref}' "
+                          f"not in {devs}; falling back to AUTO")
+                    target = ("GPU" if "GPU" in devs
+                              else "NPU" if "NPU" in devs
+                              else "CPU")
                 ov_model = core.read_model(str(ov_xml))
                 # Read the static export shape from the IR (e.g. 504x378).
+                # Even when traced with a fixed example_input, OV's PT
+                # frontend sometimes leaves dimensions dynamic, so fall
+                # through several strategies before giving up.
                 in_shape = ov_model.inputs[0].get_partial_shape()
+                H = W = None
                 try:
-                    H = int(in_shape[2].get_length())
-                    W = int(in_shape[3].get_length())
+                    if not in_shape[2].is_dynamic:
+                        H = int(in_shape[2].get_length())
+                    if not in_shape[3].is_dynamic:
+                        W = int(in_shape[3].get_length())
                 except Exception:
-                    H, W = 504, 378  # fallback to known export
-                _da3_ov_compiled = core.compile_model(ov_model, target)
+                    pass
+                if H is None or W is None:
+                    # Try the dir name (e.g. da3_metric_large_602x448)
+                    for tok in ov_dir.name.split("_"):
+                        if "x" in tok:
+                            a, _, b = tok.partition("x")
+                            if a.isdigit() and b.isdigit():
+                                H, W = int(a), int(b)
+                                break
+                if H is None or W is None:
+                    H, W = 504, 378  # final fallback (matches default IR)
+                # NPU requires fully-static shapes; reshape is a no-op for
+                # GPU/CPU when the IR is already static, so always do it.
+                try:
+                    ov_model.reshape({0: ov.PartialShape([1, 3, H, W])})
+                except Exception as _re:
+                    print(f"[DepthEstimation] DA3 OV reshape({H},{W}) warning: {_re}")
+                _da3_ov_compiled = core.compile_model(
+                    ov_model,
+                    target,
+                    {"CACHE_DIR": str(ov_cache_dir)},
+                )
                 _da3_ov_input_shape = (H, W)
                 _da3_ov_device = target
                 _da3_input_processor = _model.input_processor
