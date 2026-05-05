@@ -366,10 +366,8 @@ async def startup_event():
     except Exception as e:
         print(f"[Startup] Warning: Could not pre-load depth model: {e}")
         print("[Startup] Depth model will be loaded on first request.")
-    # SAM segmentation removed (2026-04-28). Trunk masks come from YOLOv8-seg:
-    # either legacy phone-uploaded masks or the current opt-in server YOLO path.
-    # Server-side SAM was deemed unsuitable for trunk segmentation in this
-    # pipeline and was fully removed to avoid biasing benchmark comparisons.
+    # Trunk masks come from YOLOv8-seg: either legacy phone-uploaded masks or
+    # the current backend-generated mask path.
 
 @app.exception_handler(RequestValidationError)
 async def validation_exception_handler(request: Request, exc: RequestValidationError):
@@ -894,12 +892,12 @@ async def auto_measure_dbh_endpoint(
                     "'depth_model', which keeps the depth model distance. "
                     "Benchmarks may explicitly use 'external_override' to "
                     "replace depth with reference_distance/instrument_distance."),
-    # ── 新增: 使用者觸碰點 (Phase 2: SAM prompt) ──────────────
-    # 使用者在手機上點擊目標樹幹 → 送出座標作為 SAM 分割的 prompt
+    # ── Legacy tap coordinates ────────────────────────────────
+    # Kept for API compatibility; current phone flow sends a YOLO bbox instead.
     tap_x: Optional[int] = Form(default=None,
-        description="User tap X coordinate on the tree trunk (for SAM segmentation)"),
+        description="Legacy tap X coordinate on the tree trunk"),
     tap_y: Optional[int] = Form(default=None,
-        description="User tap Y coordinate on the tree trunk (for SAM segmentation)"),
+        description="Legacy tap Y coordinate on the tree trunk"),
     # ── [Edge AI] Local bounding box from phone YOLO ───────────
     bbox_x1: Optional[float] = Form(default=None),
     bbox_y1: Optional[float] = Form(default=None),
@@ -1251,7 +1249,7 @@ async def auto_measure_dbh_endpoint(
             )
 
         # Step 4.5: Subpixel + Ellipse refinement (mode-dependent)
-        # Skip when ANY seg mask was applied (SAM override OR on-device
+        # Skip when ANY seg mask was applied (server YOLO or legacy on-device
         # YOLOv8-seg mask fed into measure_dbh). The mask width is more
         # accurate than depth-gradient refinement, and running subpixel
         # would silently overwrite the mask width with a noisier estimate.

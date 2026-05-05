@@ -10,10 +10,11 @@ Supports multiple backends:
   - ONNX Runtime: CPU-optimized inference via optimum
 
 Hardware auto-detection priority:
-  1. OpenVINO + Intel iGPU (if ML_USE_OPENVINO=true and openvino installed)
-  2. CUDA GPU (if available)
-  3. ONNX Runtime CPU (if ML_USE_ONNX=true and exported)
-  4. PyTorch CPU (fallback)
+    1. Requested DA3 OpenVINO device (ML_DA3_OV_DEVICE), when available
+    2. OpenVINO + Intel GPU/NPU/CPU (if ML_USE_OPENVINO=true)
+    3. CUDA GPU (if available)
+    4. ONNX Runtime CPU (if ML_USE_ONNX=true and exported)
+    5. PyTorch CPU (fallback)
 """
 
 import os
@@ -88,6 +89,10 @@ def _probe_backend() -> str:
             from openvino import Core
             core = Core()
             devices = core.available_devices
+            requested_da3_device = os.environ.get("ML_DA3_OV_DEVICE", "").strip().upper()
+            if requested_da3_device in devices:
+                print(f"[Hardware] OpenVINO requested device {requested_da3_device} available: {devices}")
+                return f"openvino_{requested_da3_device.lower()}"
             if "GPU" in devices:
                 print(f"[Hardware] OpenVINO GPU (Intel Arc iGPU) detected: {devices}")
                 return "openvino_gpu"

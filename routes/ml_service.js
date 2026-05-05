@@ -100,10 +100,55 @@ function appendRequestFields(formData, body) {
     }
 }
 
+function inferImageContentType(file) {
+    const mimetype = (file.mimetype || '').toLowerCase();
+    if (mimetype.startsWith('image/')) return mimetype;
+
+    const ext = (file.originalname || '').split('.').pop()?.toLowerCase();
+    switch (ext) {
+        case 'jpg':
+        case 'jpeg':
+            return 'image/jpeg';
+        case 'png':
+            return 'image/png';
+        case 'webp':
+            return 'image/webp';
+        case 'heic':
+        case 'heif':
+            return 'image/heic';
+        case 'gif':
+            return 'image/gif';
+        default:
+            break;
+    }
+
+    const buffer = file.buffer || Buffer.alloc(0);
+    if (buffer.length >= 3 && buffer[0] === 0xff && buffer[1] === 0xd8 && buffer[2] === 0xff) {
+        return 'image/jpeg';
+    }
+    if (buffer.length >= 8 &&
+        buffer[0] === 0x89 && buffer[1] === 0x50 && buffer[2] === 0x4e && buffer[3] === 0x47 &&
+        buffer[4] === 0x0d && buffer[5] === 0x0a && buffer[6] === 0x1a && buffer[7] === 0x0a) {
+        return 'image/png';
+    }
+    if (buffer.length >= 12 && buffer.subarray(0, 4).toString('ascii') === 'RIFF' &&
+        buffer.subarray(8, 12).toString('ascii') === 'WEBP') {
+        return 'image/webp';
+    }
+    if (buffer.length >= 12 && buffer.subarray(4, 8).toString('ascii') === 'ftyp') {
+        const brand = buffer.subarray(8, 12).toString('ascii').toLowerCase();
+        if (brand.startsWith('heic') || brand.startsWith('heif') || brand.startsWith('mif1')) {
+            return 'image/heic';
+        }
+    }
+
+    return 'image/jpeg';
+}
+
 function appendImageFile(formData, fieldName, file) {
     formData.append(fieldName, file.buffer, {
         filename: file.originalname || `${fieldName}.jpg`,
-        contentType: file.mimetype || 'application/octet-stream',
+        contentType: inferImageContentType(file),
         knownLength: file.size,
     });
 }

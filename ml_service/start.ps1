@@ -110,11 +110,10 @@ if ($Port -gt 0) {
 }
 
 # --- Optional flags ---
-# SAM segmentation removed (2026-04-28). Trunk segmentation now uses YOLOv8-seg:
-# ScannerPage sends a local bbox and the ML service generates the mask with
-# server-side YOLO; legacy phone-uploaded masks are still accepted for rollback.
+# Trunk masks now come from YOLOv8-seg. The legacy segmentation switch is kept
+# off so old .env values cannot reactivate the retired segmentation path.
 $env:ML_ENABLE_SAM = 'false'
-if (-not $env:ML_SEG_MODEL)    { $env:ML_SEG_MODEL = 'depth_heuristic' }
+$env:ML_SEG_MODEL = 'server_yolo_v8_seg'
 if (-not $env:ML_SERVER_YOLO_DEVICE) { $env:ML_SERVER_YOLO_DEVICE = $ServerYoloDevice }
 if (-not $env:ML_SERVER_YOLO_IMGSZ)  { $env:ML_SERVER_YOLO_IMGSZ = '640' }
 
@@ -144,8 +143,8 @@ Write-Host "  Model:     $($env:ML_DEPTH_MODEL)" -ForegroundColor White
 Write-Host "  OpenVINO:  $($env:ML_USE_OPENVINO)" -ForegroundColor White
 Write-Host "  DA3 IR:    $($env:ML_DA3_OV_DIR)" -ForegroundColor White
 Write-Host "  DA3 Device:$($env:ML_DA3_OV_DEVICE)" -ForegroundColor White
-Write-Host "  Segmentation: server YOLOv8-seg opt-in (SAM disabled)" -ForegroundColor White
-Write-Host "  Server YOLO: device=$($env:ML_SERVER_YOLO_DEVICE), imgsz=$($env:ML_SERVER_YOLO_IMGSZ)" -ForegroundColor White
+Write-Host "  Trunk mask: server YOLOv8-seg (per request)" -ForegroundColor White
+Write-Host "  Mask Device: device=$($env:ML_SERVER_YOLO_DEVICE), imgsz=$($env:ML_SERVER_YOLO_IMGSZ)" -ForegroundColor White
 Write-Host "  API Key:   $(if ($env:ML_API_KEY) { $env:ML_API_KEY.Substring(0,8) + '...' } else { 'NOT SET' })" -ForegroundColor $(if ($env:ML_API_KEY) { 'White' } else { 'Red' })
 Write-Host "  Workers:   $Workers" -ForegroundColor White
 
@@ -157,6 +156,19 @@ if ($env:VIRTUAL_ENV) {
     $PythonExe = "$ScriptDir\venv\Scripts\python.exe"
 } else {
     $PythonExe = "python"
+}
+
+$openvinoDevices = $null
+try {
+    $openvinoDevices = & $PythonExe -c "
+try:
+    from openvino import Core
+    print(', '.join(Core().available_devices))
+except Exception:
+    print('unavailable')
+" 2>$null
+} catch {
+    $openvinoDevices = 'unavailable'
 }
 
 # --- GPU 偵測 ---
@@ -193,7 +205,8 @@ except Exception:
 }
 if (-not $gpuInfo) { $gpuInfo = 'CPU only' }
 $gpuColor = if ($gpuInfo -and $gpuInfo -notmatch 'CPU only') { 'Green' } else { 'DarkGray' }
-Write-Host "  GPU:       $gpuInfo" -ForegroundColor $gpuColor
+Write-Host "  OpenVINO devices: $openvinoDevices" -ForegroundColor $(if ($openvinoDevices -match 'NPU') { 'Green' } else { 'DarkGray' })
+Write-Host "  PyTorch device:   $gpuInfo" -ForegroundColor $gpuColor
 
 Write-Host "  ========================================" -ForegroundColor DarkCyan
 Write-Host ""
@@ -226,10 +239,14 @@ if ($LASTEXITCODE -ne 0) {
 
 # --- 自動檢查模型 (Models) ---
 Write-Host "  [Check] Verifying AI models..." -ForegroundColor DarkGray
-$ModelsPath = Join-Path $ScriptDir "models"
-if (-not (Test-Path "$ModelsPath\depth_pro_pt") -and -not (Test-Path "$ModelsPath\sam2_tiny_pt")) {
-    Write-Host "  [Check] Models are missing! Automatically downloading and setting up models..." -ForegroundColor Yellow
-    & $PythonExe setup_models.py
+$Da3ModelXml = Join-Path $ScriptDir (Join-Path $env:ML_DA3_OV_DIR 'openvino_model.xml')
+$ServerYoloXml = Join-Path $ScriptDir 'trunk_detector_training\tree_trunk_seg_best_openvino_model\tree_trunk_seg_best.xml'
+if ($env:ML_DEPTH_MODEL -eq 'da3_metric_large' -and -not (Test-Path $Da3ModelXml)) {
+    Write-Host "  [Check] DA3 OpenVINO IR missing: $Da3ModelXml" -ForegroundColor Yellow
+    Write-Host "  [Check] Run: python da3_to_openvino.py" -ForegroundColor DarkGray
+}
+if (-not (Test-Path $ServerYoloXml)) {
+    Write-Host "  [Check] Server YOLO OpenVINO IR missing: $ServerYoloXml" -ForegroundColor Yellow
 }
 
 # --- 自動啟動 Ngrok (可選) ---

@@ -11,16 +11,11 @@ Architecture:
   tree_segmentation.py ← reads from here to pick the segmentation model
   app.py               ← reads from here for health/status info
 
-ARCHITECTURAL CHOICE: Depth Pro + SAM 2
-----------------------------------------
-We use Apple Depth Pro (ICLR 2025 SOTA) for depth and SAM 2.1 for segmentation because:
-  1. Depth Pro provides ~40% sharper boundaries vs Depth Anything V2, critical for
-     accurate DBH measurement where trunk edges must be precise.
-  2. Depth Pro outputs metric depth with built-in focal length and FOV estimation,
-     eliminating manual EXIF/camera calibration for most phones.
-  3. SAM 2.1 produces pixel-perfect trunk masks for cylindrical correction;
-     combined with Depth Pro's sharp depth, this yields research-grade DBH accuracy.
-  4. On Intel Arc iGPU, OpenVINO accelerates Depth Pro to ~5-8s (vs ~25s on CPU).
+CURRENT ARCHITECTURE: DA3 + server YOLOv8-seg
+---------------------------------------------
+Production DBH uses DA3 Metric Large for metric depth and YOLOv8-seg for trunk
+masks. The phone may provide a local trunk bbox; the backend then generates a
+server-side mask and measures DBH from DA3 depth plus the mask geometry.
 
 FP16 MEMORY OPTIMIZATION (OpenVINO):
 ------------------------------------
@@ -31,10 +26,10 @@ integrated GPUs. FP16 typically reduces VRAM by ~50% and can enable inference
 on Intel Arc iGPU where FP32 might OOM.
 
 UPGRADE GUIDE:
-  Phase 1: Change DEFAULT_DEPTH_MODEL to "da_v2_base"
-  Phase 2: Set ENABLE_SAM_SEGMENTATION = True
-  Phase 3: Change DEFAULT_DEPTH_MODEL to "da3_metric_large" (requires testing)
-  Phase 4: Enable ONNX by setting USE_ONNX_RUNTIME = True (after exporting)
+    Phase 1: Change DEFAULT_DEPTH_MODEL to "da_v2_base"
+    Phase 2: Use server YOLOv8-seg masks for trunk boundaries
+    Phase 3: Change DEFAULT_DEPTH_MODEL to "da3_metric_large"
+    Phase 4: Export OpenVINO IR for the selected depth model/device
 """
 
 import os
@@ -193,6 +188,20 @@ class SegmentationModelConfig:
 
 # All available segmentation approaches
 SEGMENTATION_MODELS: Dict[str, SegmentationModelConfig] = {
+
+    "server_yolo_v8_seg": SegmentationModelConfig(
+        model_id="models/yolov8m-tree-trunk-seg-openvino",
+        display_name="Server YOLOv8-seg trunk mask",
+        params_m=25.9,
+        license="dataset/model dependent",
+        expected_cpu_time_s=0.1,
+        backend="server_yolo",
+        needs_prompt=False,
+        notes=(
+            "Current production mask path. Uses phone bbox when available and "
+            "generates the trunk mask on the backend."
+        ),
+    ),
     
     # ── Current: No ML model, depth-based only ─────────────────
     "depth_heuristic": SegmentationModelConfig(
@@ -290,9 +299,9 @@ SEGMENTATION_MODELS: Dict[str, SegmentationModelConfig] = {
 # 👇 Phase 1: Set "da_v2_base" for faster inference (~5s). Phase 3: "da3_metric_large".
 DEFAULT_DEPTH_MODEL = os.environ.get("ML_DEPTH_MODEL", "depth_pro")
 
-# 👇 Phase 2: Change to "sam2_tiny" for pixel-perfect segmentation
-# 👇 Phase 3: Change to "grounded_sam" for zero-shot tree detection
-DEFAULT_SEG_MODEL = os.environ.get("ML_SEG_MODEL", "depth_heuristic")
+# Current production mask path: server YOLOv8-seg. Older .env files may still
+# contain retired segmentation model names; start.ps1 overrides them.
+DEFAULT_SEG_MODEL = os.environ.get("ML_SEG_MODEL", "server_yolo_v8_seg")
 
 # 👇 Phase 1+: Set to True after converting models to ONNX
 #    ONNX Runtime gives 1.5-2.5x speedup on Intel CPU, zero accuracy loss.
@@ -324,7 +333,7 @@ OPENVINO_DEVICE = os.environ.get("ML_OV_DEVICE", "AUTO")
 #    Set via env var for quick testing: ML_INPUT_SIZE=384
 INPUT_SIZE_OVERRIDE = int(os.environ.get("ML_INPUT_SIZE", "0"))  # 0 = use model default
 
-# 👇 Phase 2: Enable SAM segmentation (requires sam2 to be installed)
+# Legacy segmentation switch. Production keeps this disabled.
 ENABLE_SAM_SEGMENTATION = os.environ.get("ML_ENABLE_SAM", "false").lower() == "true"
 
 # 👇 OpenVINO acceleration for Intel Arc iGPU / NPU / CPU (default: enabled)
@@ -363,21 +372,21 @@ ACCURACY_PRESETS: Dict[str, AccuracyPreset] = {
     ),
     "balanced": AccuracyPreset(
         depth_model="depth_pro",
-        seg_model="sam2_tiny",
+        seg_model="server_yolo_v8_seg",
         input_size=0,
         use_multi_row=True,
         use_subpixel=True,
         use_ellipse_fit=False,
-        description="平衡模式 (~8-11s): Depth Pro + SAM 2.1 + 亞像素邊緣",
+        description="平衡模式: 深度模型 + server YOLOv8-seg + 亞像素邊緣",
     ),
     "accurate": AccuracyPreset(
         depth_model="depth_pro",
-        seg_model="sam2_small",
+        seg_model="server_yolo_v8_seg",
         input_size=0,
         use_multi_row=True,
         use_subpixel=True,
         use_ellipse_fit=True,
-        description="精確模式 (~10-15s): Depth Pro + SAM 2.1 Small + 亞像素 + 橢圓擬合",
+        description="精確模式: 深度模型 + server YOLOv8-seg + 亞像素 + 橢圓擬合",
     ),
 }
 
@@ -424,15 +433,16 @@ def print_config_summary():
     print(f"  Model ID:     {depth.model_id}")
     print(f"  License:      {depth.license}")
     print(f"  Est. Time:    ~{depth.expected_cpu_time_s}s on CPU")
-    if ENABLE_SAM_SEGMENTATION:
-        print(f"  Segmentation: {seg.display_name}")
-    else:
-        print(f"  Segmentation: YOLOv8-seg masks (server opt-in, SAM disabled)")
+    print(f"  Trunk Mask:   {seg.display_name}")
+    print(f"  Mask Device:  {os.environ.get('ML_SERVER_YOLO_DEVICE', 'intel:gpu')}")
     print(f"  ONNX Runtime: {'Enabled' if USE_ONNX_RUNTIME else 'Disabled'}")
     print(f"  OpenVINO:     {'Enabled' if ENABLE_OPENVINO else 'Disabled'}")
+    if os.environ.get("ML_DA3_OV_DEVICE"):
+        print(f"  DA3 Device:   {os.environ.get('ML_DA3_OV_DEVICE')}")
+    if os.environ.get("ML_DA3_OV_DIR"):
+        print(f"  DA3 IR:       {os.environ.get('ML_DA3_OV_DIR')}")
     print(f"  CPU Threads:  {CPU_THREADS}")
     print(f"  Input Size:   {INPUT_SIZE_OVERRIDE if INPUT_SIZE_OVERRIDE else 'model default'}")
-    print(f"  SAM Enabled:  {ENABLE_SAM_SEGMENTATION}")
     print("=" * 60)
 
 
