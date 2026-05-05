@@ -21,6 +21,7 @@ pids/
 *.pid
 *.seed
 *.pid.lock
+.last_good_commit
 data/apiKeys.json
 
 # --- Database ---
