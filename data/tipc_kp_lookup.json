@@ -1,0 +1,1148 @@
+{
+  "_meta": {
+    "description": "TIPC carbon_storage K_sp lookup (kg CO₂ per DBH²·H).",
+    "formula": "carbon_storage_kg = round(K_sp · DBH_cm² · H_m, 2)",
+    "K_decomposition": "K_sp = F · (π/4) · BEF · (1+R) · CF · (44/12) · 0.1 · D_wood",
+    "constants": {
+      "F_broadleaf": 0.45,
+      "F_conifer": 0.5,
+      "pi_over_4": 0.79,
+      "BEF": 1.4,
+      "R": 0.24,
+      "CF": 0.4691,
+      "CO2_per_C": 3.6667,
+      "unit_factor": 0.1,
+      "default_D_wood": 0.53
+    },
+    "coefficient_broadleaf_x_Dwood": 0.1061515,
+    "coefficient_conifer_x_Dwood": 0.1179461,
+    "default_K_broadleaf": 0.0562603,
+    "default_K_conifer": 0.0625114,
+    "source_definitions": {
+      "tipc_reverse_engineered": "Single K_sp fits all CSV rows within rounding tolerance (±0.005 kg).",
+      "tipc_default_0.530": "Implied D_wood within 0.001 of TIPC platform default 0.530.",
+      "tipc_non_uniform_median": "No single K fits all rows; median K used (rare; investigate).",
+      "default_fallback": "Species not in CSV; runtime falls back to broadleaf/conifer default K."
+    },
+    "references": [
+      "環境部 (2023). 溫室氣體減量方法學 AR-TMS0001 造林與植林碳匯專案",
+      "農業部林業及自然保育署 (2024). 森林碳匯調查與監測手冊, 表 6-4"
+    ],
+    "build_script": "backend/scripts/build_tipc_kp_lookup.py",
+    "csv_source": "database/initial_data/tree_survey_data.csv",
+    "validation": {
+      "total": 7044,
+      "match_strict_<0.005kg": 6917,
+      "match_loose_<0.01kg": 6994,
+      "by_source": {
+        "tipc_reverse_engineered": {
+          "matched": 5758,
+          "total": 5838,
+          "rate": 98.63
+        },
+        "tipc_default_0.530": {
+          "matched": 1157,
+          "total": 1195,
+          "rate": 96.82
+        },
+        "default_fallback": {
+          "matched": 2,
+          "total": 11,
+          "rate": 18.18
+        }
+      }
+    }
+  },
+  "default_broadleaf": {
+    "K_sp": 0.0562603,
+    "F": 0.45,
+    "D_wood": 0.53,
+    "source": "tipc_default_0.530"
+  },
+  "default_conifer": {
+    "K_sp": 0.0625114,
+    "F": 0.5,
+    "D_wood": 0.53,
+    "source": "tipc_default_0.530"
+  },
+  "species": {
+    "欖仁": {
+      "K_sp": 0.0522433,
+      "F": 0.45,
+      "D_wood": 0.4922,
+      "n_samples": 1093,
+      "source": "tipc_reverse_engineered",
+      "interval": [
+        0.0522433,
+        0.0522433
+      ]
+    },
+    "臺灣欒樹": {
+      "K_sp": 0.0640218,
+      "F": 0.45,
+      "D_wood": 0.6031,
+      "n_samples": 996,
+      "source": "tipc_reverse_engineered",
+      "interval": [
+        0.0640218,
+        0.0640218
+      ]
+    },
+    "木賊葉木麻黃": {
+      "K_sp": 0.070255,
+      "F": 0.45,
+      "D_wood": 0.6618,
+      "n_samples": 591,
+      "source": "tipc_reverse_engineered",
+      "interval": [
+        0.070255,
+        0.070255
+      ]
+    },
+    "白樹仔": {
+      "K_sp": 0.0562424,
+      "F": 0.45,
+      "D_wood": 0.5298,
+      "n_samples": 391,
+      "source": "tipc_default_0.530",
+      "interval": [
+        0.0562423,
+        0.0562425
+      ]
+    },
+    "水黃皮": {
+      "K_sp": 0.0779992,
+      "F": 0.45,
+      "D_wood": 0.7348,
+      "n_samples": 382,
+      "source": "tipc_reverse_engineered",
+      "interval": [
+        0.0779991,
+        0.0779992
+      ]
+    },
+    "黃槿": {
+      "K_sp": 0.046842,
+      "F": 0.45,
+      "D_wood": 0.4413,
+      "n_samples": 366,
+      "source": "tipc_reverse_engineered",
+      "interval": [
+        0.046842,
+        0.046842
+      ]
+    },
+    "苦楝": {
+      "K_sp": 0.0566478,
+      "F": 0.45,
+      "D_wood": 0.5337,
+      "n_samples": 331,
+      "source": "tipc_reverse_engineered",
+      "interval": [
+        0.0566477,
+        0.0566478
+      ]
+    },
+    "中東海棗": {
+      "K_sp": 0.0562424,
+      "F": 0.45,
+      "D_wood": 0.5298,
+      "n_samples": 287,
+      "source": "tipc_default_0.530",
+      "interval": [
+        0.0562424,
+        0.0562424
+      ]
+    },
+    "小葉南洋杉": {
+      "K_sp": 0.0539927,
+      "F": 0.5,
+      "D_wood": 0.4578,
+      "n_samples": 226,
+      "source": "tipc_reverse_engineered",
+      "interval": [
+        0.0539926,
+        0.0539929
+      ]
+    },
+    "阿勒勃": {
+      "K_sp": 0.0871802,
+      "F": 0.45,
+      "D_wood": 0.8213,
+      "n_samples": 218,
+      "source": "tipc_reverse_engineered",
+      "interval": [
+        0.0871802,
+        0.0871802
+      ]
+    },
+    "榕樹": {
+      "K_sp": 0.0418389,
+      "F": 0.45,
+      "D_wood": 0.3941,
+      "n_samples": 140,
+      "source": "tipc_reverse_engineered",
+      "interval": [
+        0.0418389,
+        0.0418389
+      ]
+    },
+    "黃金風鈴木": {
+      "K_sp": 0.0910848,
+      "F": 0.45,
+      "D_wood": 0.8581,
+      "n_samples": 139,
+      "source": "tipc_reverse_engineered",
+      "interval": [
+        0.0910836,
+        0.0910861
+      ]
+    },
+    "蒲葵": {
+      "K_sp": 0.0562423,
+      "F": 0.45,
+      "D_wood": 0.5298,
+      "n_samples": 111,
+      "source": "tipc_default_0.530",
+      "interval": [
+        0.0562423,
+        0.0562424
+      ]
+    },
+    "孟加拉榕": {
+      "K_sp": 0.0562424,
+      "F": 0.45,
+      "D_wood": 0.5298,
+      "n_samples": 93,
+      "source": "tipc_default_0.530",
+      "interval": [
+        0.0562424,
+        0.0562424
+      ]
+    },
+    "肯氏南洋杉": {
+      "K_sp": 0.0506181,
+      "F": 0.5,
+      "D_wood": 0.4292,
+      "n_samples": 92,
+      "source": "tipc_reverse_engineered",
+      "interval": [
+        0.0506181,
+        0.0506181
+      ]
+    },
+    "銀合歡": {
+      "K_sp": 0.0741032,
+      "F": 0.45,
+      "D_wood": 0.6981,
+      "n_samples": 76,
+      "source": "tipc_reverse_engineered",
+      "interval": [
+        0.0741031,
+        0.0741033
+      ]
+    },
+    "大葉桃花心木": {
+      "K_sp": 0.0531603,
+      "F": 0.45,
+      "D_wood": 0.5008,
+      "n_samples": 73,
+      "source": "tipc_reverse_engineered",
+      "interval": [
+        0.0531603,
+        0.0531603
+      ]
+    },
+    "蘭嶼羅漢松": {
+      "K_sp": 0.0525492,
+      "F": 0.5,
+      "D_wood": 0.4455,
+      "n_samples": 66,
+      "source": "tipc_reverse_engineered",
+      "interval": [
+        0.0525481,
+        0.0525502
+      ]
+    },
+    "烏臼": {
+      "K_sp": 0.0595384,
+      "F": 0.45,
+      "D_wood": 0.5609,
+      "n_samples": 65,
+      "source": "tipc_reverse_engineered",
+      "interval": [
+        0.0595384,
+        0.0595384
+      ]
+    },
+    "菲島福木": {
+      "K_sp": 0.0832386,
+      "F": 0.45,
+      "D_wood": 0.7841,
+      "n_samples": 62,
+      "source": "tipc_reverse_engineered",
+      "interval": [
+        0.0832386,
+        0.0832387
+      ]
+    },
+    "木棉": {
+      "K_sp": 0.0291461,
+      "F": 0.45,
+      "D_wood": 0.2746,
+      "n_samples": 62,
+      "source": "tipc_reverse_engineered",
+      "interval": [
+        0.0291461,
+        0.0291461
+      ]
+    },
+    "金龜樹": {
+      "K_sp": 0.0741032,
+      "F": 0.45,
+      "D_wood": 0.6981,
+      "n_samples": 59,
+      "source": "tipc_reverse_engineered",
+      "interval": [
+        0.0741031,
+        0.0741032
+      ]
+    },
+    "鴨腳木": {
+      "K_sp": 0.0562424,
+      "F": 0.45,
+      "D_wood": 0.5298,
+      "n_samples": 58,
+      "source": "tipc_default_0.530",
+      "interval": [
+        0.0562424,
+        0.0562424
+      ]
+    },
+    "無葉檉柳": {
+      "K_sp": 0.066367,
+      "F": 0.45,
+      "D_wood": 0.6252,
+      "n_samples": 51,
+      "source": "tipc_reverse_engineered",
+      "interval": [
+        0.0663657,
+        0.0663683
+      ]
+    },
+    "月橘": {
+      "K_sp": 0.0798775,
+      "F": 0.45,
+      "D_wood": 0.7525,
+      "n_samples": 50,
+      "source": "tipc_reverse_engineered",
+      "interval": [
+        0.0798746,
+        0.0798803
+      ]
+    },
+    "其他": {
+      "K_sp": 0.0562424,
+      "F": 0.45,
+      "D_wood": 0.5298,
+      "n_samples": 48,
+      "source": "tipc_default_0.530",
+      "interval": [
+        0.0562424,
+        0.0562424
+      ]
+    },
+    "瓊崖海棠": {
+      "K_sp": 0.0643147,
+      "F": 0.45,
+      "D_wood": 0.6059,
+      "n_samples": 47,
+      "source": "tipc_reverse_engineered",
+      "interval": [
+        0.0643147,
+        0.0643147
+      ]
+    },
+    "美人樹": {
+      "K_sp": 0.0301869,
+      "F": 0.45,
+      "D_wood": 0.2844,
+      "n_samples": 47,
+      "source": "tipc_reverse_engineered",
+      "interval": [
+        0.0301865,
+        0.0301874
+      ]
+    },
+    "雨豆樹": {
+      "K_sp": 0.0762826,
+      "F": 0.45,
+      "D_wood": 0.7186,
+      "n_samples": 43,
+      "source": "tipc_reverse_engineered",
+      "interval": [
+        0.0762826,
+        0.0762826
+      ]
+    },
+    "小葉欖仁": {
+      "K_sp": 0.0620389,
+      "F": 0.45,
+      "D_wood": 0.5844,
+      "n_samples": 41,
+      "source": "tipc_reverse_engineered",
+      "interval": [
+        0.0620389,
+        0.062039
+      ]
+    },
+    "菩提樹": {
+      "K_sp": 0.0562424,
+      "F": 0.45,
+      "D_wood": 0.5298,
+      "n_samples": 38,
+      "source": "tipc_default_0.530",
+      "interval": [
+        0.0562424,
+        0.0562424
+      ]
+    },
+    "黑板樹": {
+      "K_sp": 0.0427869,
+      "F": 0.45,
+      "D_wood": 0.4031,
+      "n_samples": 32,
+      "source": "tipc_reverse_engineered",
+      "interval": [
+        0.0427869,
+        0.0427869
+      ]
+    },
+    "海檬果": {
+      "K_sp": 0.0423256,
+      "F": 0.45,
+      "D_wood": 0.3987,
+      "n_samples": 32,
+      "source": "tipc_reverse_engineered",
+      "interval": [
+        0.0423252,
+        0.0423259
+      ]
+    },
+    "刺桐": {
+      "K_sp": 0.0305131,
+      "F": 0.45,
+      "D_wood": 0.2874,
+      "n_samples": 30,
+      "source": "tipc_reverse_engineered",
+      "interval": [
+        0.030513,
+        0.0305132
+      ]
+    },
+    "構樹": {
+      "K_sp": 0.0305655,
+      "F": 0.45,
+      "D_wood": 0.2879,
+      "n_samples": 29,
+      "source": "tipc_reverse_engineered",
+      "interval": [
+        0.0305652,
+        0.0305658
+      ]
+    },
+    "盾柱木": {
+      "K_sp": 0.062118,
+      "F": 0.45,
+      "D_wood": 0.5852,
+      "n_samples": 29,
+      "source": "tipc_reverse_engineered",
+      "interval": [
+        0.0621156,
+        0.0621203
+      ]
+    },
+    "火焰木": {
+      "K_sp": 0.0386609,
+      "F": 0.45,
+      "D_wood": 0.3642,
+      "n_samples": 27,
+      "source": "tipc_reverse_engineered",
+      "interval": [
+        0.0386606,
+        0.0386611
+      ]
+    },
+    "緬梔": {
+      "K_sp": 0.0556915,
+      "F": 0.45,
+      "D_wood": 0.5246,
+      "n_samples": 26,
+      "source": "tipc_reverse_engineered",
+      "interval": [
+        0.055691,
+        0.055692
+      ]
+    },
+    "錫蘭肉桂": {
+      "K_sp": 0.0524751,
+      "F": 0.45,
+      "D_wood": 0.4943,
+      "n_samples": 26,
+      "source": "tipc_reverse_engineered",
+      "interval": [
+        0.0524741,
+        0.0524761
+      ]
+    },
+    "毛柿": {
+      "K_sp": 0.0705839,
+      "F": 0.45,
+      "D_wood": 0.6649,
+      "n_samples": 25,
+      "source": "tipc_reverse_engineered",
+      "interval": [
+        0.070583,
+        0.0705848
+      ]
+    },
+    "牛油果": {
+      "K_sp": 0.0562424,
+      "F": 0.45,
+      "D_wood": 0.5298,
+      "n_samples": 25,
+      "source": "tipc_default_0.530",
+      "interval": [
+        0.0562424,
+        0.0562424
+      ]
+    },
+    "落羽松": {
+      "K_sp": 0.0479428,
+      "F": 0.5,
+      "D_wood": 0.4065,
+      "n_samples": 25,
+      "source": "tipc_reverse_engineered",
+      "interval": [
+        0.0479428,
+        0.0479429
+      ]
+    },
+    "鐵色": {
+      "K_sp": 0.0776158,
+      "F": 0.45,
+      "D_wood": 0.7312,
+      "n_samples": 24,
+      "source": "tipc_reverse_engineered",
+      "interval": [
+        0.0776105,
+        0.0776212
+      ]
+    },
+    "洋紅風鈴木": {
+      "K_sp": 0.0562422,
+      "F": 0.45,
+      "D_wood": 0.5298,
+      "n_samples": 23,
+      "source": "tipc_default_0.530",
+      "interval": [
+        0.0562421,
+        0.0562424
+      ]
+    },
+    "洋紫荊": {
+      "K_sp": 0.0562424,
+      "F": 0.45,
+      "D_wood": 0.5298,
+      "n_samples": 23,
+      "source": "tipc_default_0.530",
+      "interval": [
+        0.0562423,
+        0.0562426
+      ]
+    },
+    "黃連木": {
+      "K_sp": 0.0684428,
+      "F": 0.45,
+      "D_wood": 0.6448,
+      "n_samples": 22,
+      "source": "tipc_reverse_engineered",
+      "interval": [
+        0.0684427,
+        0.068443
+      ]
+    },
+    "大王椰子": {
+      "K_sp": 0.0562424,
+      "F": 0.45,
+      "D_wood": 0.5298,
+      "n_samples": 18,
+      "source": "tipc_default_0.530",
+      "interval": [
+        0.0562423,
+        0.0562424
+      ]
+    },
+    "芒果樹": {
+      "K_sp": 0.0553582,
+      "F": 0.45,
+      "D_wood": 0.5215,
+      "n_samples": 18,
+      "source": "tipc_reverse_engineered",
+      "interval": [
+        0.0553582,
+        0.0553583
+      ]
+    },
+    "白榕": {
+      "K_sp": 0.0522482,
+      "F": 0.45,
+      "D_wood": 0.4922,
+      "n_samples": 18,
+      "source": "tipc_reverse_engineered",
+      "interval": [
+        0.0522482,
+        0.0522483
+      ]
+    },
+    "大葉山欖": {
+      "K_sp": 0.055848,
+      "F": 0.45,
+      "D_wood": 0.5261,
+      "n_samples": 16,
+      "source": "tipc_reverse_engineered",
+      "interval": [
+        0.0558477,
+        0.0558483
+      ]
+    },
+    "白千層": {
+      "K_sp": 0.0665046,
+      "F": 0.45,
+      "D_wood": 0.6265,
+      "n_samples": 15,
+      "source": "tipc_reverse_engineered",
+      "interval": [
+        0.0665045,
+        0.0665046
+      ]
+    },
+    "竹柏": {
+      "K_sp": 0.0525492,
+      "F": 0.45,
+      "D_wood": 0.495,
+      "n_samples": 14,
+      "source": "tipc_reverse_engineered",
+      "interval": [
+        0.0525489,
+        0.0525494
+      ]
+    },
+    "茄苳": {
+      "K_sp": 0.0583647,
+      "F": 0.45,
+      "D_wood": 0.5498,
+      "n_samples": 11,
+      "source": "tipc_reverse_engineered",
+      "interval": [
+        0.0583646,
+        0.0583647
+      ]
+    },
+    "鐵刀木": {
+      "K_sp": 0.0719236,
+      "F": 0.45,
+      "D_wood": 0.6776,
+      "n_samples": 11,
+      "source": "tipc_reverse_engineered",
+      "interval": [
+        0.0719235,
+        0.0719236
+      ]
+    },
+    "酒瓶蘭": {
+      "K_sp": 0.0562424,
+      "F": 0.45,
+      "D_wood": 0.5298,
+      "n_samples": 11,
+      "source": "tipc_default_0.530",
+      "interval": [
+        0.0562423,
+        0.0562426
+      ]
+    },
+    "墨水樹": {
+      "K_sp": 0.0562424,
+      "F": 0.45,
+      "D_wood": 0.5298,
+      "n_samples": 10,
+      "source": "tipc_default_0.530",
+      "interval": [
+        0.0562423,
+        0.0562425
+      ]
+    },
+    "風鈴木": {
+      "K_sp": 0.0562424,
+      "F": 0.45,
+      "D_wood": 0.5298,
+      "n_samples": 10,
+      "source": "tipc_default_0.530",
+      "interval": [
+        0.0562421,
+        0.0562426
+      ]
+    },
+    "白玉蘭": {
+      "K_sp": 0.05179,
+      "F": 0.45,
+      "D_wood": 0.4879,
+      "n_samples": 9,
+      "source": "tipc_reverse_engineered",
+      "interval": [
+        0.051788,
+        0.051792
+      ]
+    },
+    "印度橡膠樹": {
+      "K_sp": 0.0562424,
+      "F": 0.45,
+      "D_wood": 0.5298,
+      "n_samples": 9,
+      "source": "tipc_default_0.530",
+      "interval": [
+        0.0562423,
+        0.0562425
+      ]
+    },
+    "鳳凰木": {
+      "K_sp": 0.0632056,
+      "F": 0.45,
+      "D_wood": 0.5954,
+      "n_samples": 9,
+      "source": "tipc_reverse_engineered",
+      "interval": [
+        0.0632055,
+        0.0632058
+      ]
+    },
+    "陰香": {
+      "K_sp": 0.0514249,
+      "F": 0.45,
+      "D_wood": 0.4844,
+      "n_samples": 9,
+      "source": "tipc_reverse_engineered",
+      "interval": [
+        0.0514243,
+        0.0514255
+      ]
+    },
+    "血桐": {
+      "K_sp": 0.0480485,
+      "F": 0.45,
+      "D_wood": 0.4526,
+      "n_samples": 8,
+      "source": "tipc_reverse_engineered",
+      "interval": [
+        0.0480485,
+        0.0480485
+      ]
+    },
+    "稜果榕": {
+      "K_sp": 0.0428591,
+      "F": 0.45,
+      "D_wood": 0.4038,
+      "n_samples": 8,
+      "source": "tipc_reverse_engineered",
+      "interval": [
+        0.0428576,
+        0.0428605
+      ]
+    },
+    "檄樹": {
+      "K_sp": 0.0562431,
+      "F": 0.45,
+      "D_wood": 0.5298,
+      "n_samples": 7,
+      "source": "tipc_default_0.530",
+      "interval": [
+        0.056242,
+        0.0562443
+      ]
+    },
+    "朴樹": {
+      "K_sp": 0.0624749,
+      "F": 0.45,
+      "D_wood": 0.5885,
+      "n_samples": 6,
+      "source": "tipc_reverse_engineered",
+      "interval": [
+        0.0624748,
+        0.062475
+      ]
+    },
+    "小葉桑": {
+      "K_sp": 0.0621848,
+      "F": 0.45,
+      "D_wood": 0.5858,
+      "n_samples": 6,
+      "source": "tipc_reverse_engineered",
+      "interval": [
+        0.0621847,
+        0.0621849
+      ]
+    },
+    "臺灣海棗": {
+      "K_sp": 0.0562422,
+      "F": 0.45,
+      "D_wood": 0.5298,
+      "n_samples": 6,
+      "source": "tipc_default_0.530",
+      "interval": [
+        0.0562421,
+        0.0562424
+      ]
+    },
+    "欖仁舅": {
+      "K_sp": 0.0689054,
+      "F": 0.45,
+      "D_wood": 0.6491,
+      "n_samples": 5,
+      "source": "tipc_reverse_engineered",
+      "interval": [
+        0.0689007,
+        0.06891
+      ]
+    },
+    "楊桃": {
+      "K_sp": 0.0562424,
+      "F": 0.45,
+      "D_wood": 0.5298,
+      "n_samples": 5,
+      "source": "tipc_default_0.530",
+      "interval": [
+        0.0562414,
+        0.0562434
+      ]
+    },
+    "潺槁樹": {
+      "K_sp": 0.0562413,
+      "F": 0.45,
+      "D_wood": 0.5298,
+      "n_samples": 4,
+      "source": "tipc_default_0.530",
+      "interval": [
+        0.0562398,
+        0.0562428
+      ]
+    },
+    "馬拉巴栗": {
+      "K_sp": 0.0499638,
+      "F": 0.45,
+      "D_wood": 0.4707,
+      "n_samples": 4,
+      "source": "tipc_reverse_engineered",
+      "interval": [
+        0.0499627,
+        0.049965
+      ]
+    },
+    "樟樹": {
+      "K_sp": 0.0539252,
+      "F": 0.45,
+      "D_wood": 0.508,
+      "n_samples": 3,
+      "source": "tipc_reverse_engineered",
+      "interval": [
+        0.0539251,
+        0.0539252
+      ]
+    },
+    "赤桉": {
+      "K_sp": 0.0562423,
+      "F": 0.45,
+      "D_wood": 0.5298,
+      "n_samples": 3,
+      "source": "tipc_default_0.530",
+      "interval": [
+        0.0562422,
+        0.0562424
+      ]
+    },
+    "可可椰子": {
+      "K_sp": 0.0562421,
+      "F": 0.45,
+      "D_wood": 0.5298,
+      "n_samples": 3,
+      "source": "tipc_default_0.530",
+      "interval": [
+        0.0562417,
+        0.0562424
+      ]
+    },
+    "白水木": {
+      "K_sp": 0.0562426,
+      "F": 0.45,
+      "D_wood": 0.5298,
+      "n_samples": 3,
+      "source": "tipc_default_0.530",
+      "interval": [
+        0.0562419,
+        0.0562433
+      ]
+    },
+    "紅刺露兜": {
+      "K_sp": 0.0562431,
+      "F": 0.45,
+      "D_wood": 0.5298,
+      "n_samples": 3,
+      "source": "tipc_default_0.530",
+      "interval": [
+        0.0562421,
+        0.0562441
+      ]
+    },
+    "龍眼": {
+      "K_sp": 0.074692,
+      "F": 0.45,
+      "D_wood": 0.7036,
+      "n_samples": 2,
+      "source": "tipc_reverse_engineered",
+      "interval": [
+        0.0746918,
+        0.0746923
+      ]
+    },
+    "楓香": {
+      "K_sp": 0.0539046,
+      "F": 0.45,
+      "D_wood": 0.5078,
+      "n_samples": 2,
+      "source": "tipc_reverse_engineered",
+      "interval": [
+        0.0539043,
+        0.053905
+      ]
+    },
+    "土肉桂": {
+      "K_sp": 0.0577087,
+      "F": 0.45,
+      "D_wood": 0.5436,
+      "n_samples": 2,
+      "source": "tipc_reverse_engineered",
+      "interval": [
+        0.0576839,
+        0.0577334
+      ]
+    },
+    "棋盤腳": {
+      "K_sp": 0.0434838,
+      "F": 0.45,
+      "D_wood": 0.4096,
+      "n_samples": 2,
+      "source": "tipc_reverse_engineered",
+      "interval": [
+        0.0434827,
+        0.043485
+      ]
+    },
+    "大葉合歡": {
+      "K_sp": 0.056244,
+      "F": 0.45,
+      "D_wood": 0.5298,
+      "n_samples": 2,
+      "source": "tipc_default_0.530",
+      "interval": [
+        0.0562421,
+        0.0562458
+      ]
+    },
+    "龍柏": {
+      "K_sp": 0.0563008,
+      "F": 0.5,
+      "D_wood": 0.4773,
+      "n_samples": 2,
+      "source": "tipc_reverse_engineered",
+      "interval": [
+        0.0562873,
+        0.0563143
+      ]
+    },
+    "大葉羅漢松/羅漢松": {
+      "K_sp": 0.0536203,
+      "F": 0.45,
+      "D_wood": 0.5051,
+      "n_samples": 2,
+      "source": "tipc_reverse_engineered",
+      "interval": [
+        0.0536175,
+        0.0536231
+      ]
+    },
+    "櫸": {
+      "K_sp": 0.078271,
+      "F": 0.45,
+      "D_wood": 0.7374,
+      "n_samples": 2,
+      "source": "tipc_reverse_engineered",
+      "interval": [
+        0.0782702,
+        0.0782718
+      ]
+    },
+    "艷紫荊": {
+      "K_sp": 0.0828215,
+      "F": 0.45,
+      "D_wood": 0.7802,
+      "n_samples": 2,
+      "source": "tipc_reverse_engineered",
+      "interval": [
+        0.0828205,
+        0.0828226
+      ]
+    },
+    "臺灣胡桃/野核桃": {
+      "K_sp": 0.0505318,
+      "F": 0.45,
+      "D_wood": 0.476,
+      "n_samples": 1,
+      "source": "tipc_reverse_engineered",
+      "interval": [
+        0.0505313,
+        0.0505323
+      ]
+    },
+    "小葉桃花心木": {
+      "K_sp": 0.0562426,
+      "F": 0.45,
+      "D_wood": 0.5298,
+      "n_samples": 1,
+      "source": "tipc_default_0.530",
+      "interval": [
+        0.0562416,
+        0.0562436
+      ]
+    },
+    "破布子": {
+      "K_sp": 0.0472765,
+      "F": 0.45,
+      "D_wood": 0.4454,
+      "n_samples": 1,
+      "source": "tipc_reverse_engineered",
+      "interval": [
+        0.0472751,
+        0.0472778
+      ]
+    },
+    "雞蛋花": {
+      "K_sp": 0.0562401,
+      "F": 0.45,
+      "D_wood": 0.5298,
+      "n_samples": 1,
+      "source": "tipc_default_0.530",
+      "interval": [
+        0.0562352,
+        0.0562451
+      ]
+    },
+    "巴西乳香": {
+      "K_sp": 0.0562367,
+      "F": 0.45,
+      "D_wood": 0.5298,
+      "n_samples": 1,
+      "source": "tipc_default_0.530",
+      "interval": [
+        0.0562295,
+        0.056244
+      ]
+    },
+    "西印度櫻桃": {
+      "K_sp": 0.0337445,
+      "F": 0.45,
+      "D_wood": 0.3179,
+      "n_samples": 1,
+      "source": "tipc_reverse_engineered",
+      "interval": [
+        0.0337351,
+        0.033754
+      ]
+    },
+    "釋迦": {
+      "K_sp": 0.056253,
+      "F": 0.45,
+      "D_wood": 0.5299,
+      "n_samples": 1,
+      "source": "tipc_default_0.530",
+      "interval": [
+        0.0562353,
+        0.0562707
+      ]
+    },
+    "蓮霧": {
+      "K_sp": 0.0685673,
+      "F": 0.45,
+      "D_wood": 0.6459,
+      "n_samples": 1,
+      "source": "tipc_reverse_engineered",
+      "interval": [
+        0.0685663,
+        0.0685683
+      ]
+    },
+    "流蘇": {
+      "K_sp": 0.0717493,
+      "F": 0.45,
+      "D_wood": 0.6759,
+      "n_samples": 1,
+      "source": "tipc_reverse_engineered",
+      "interval": [
+        0.0717419,
+        0.0717566
+      ]
+    },
+    "雀榕": {
+      "K_sp": 0.043895,
+      "F": 0.45,
+      "D_wood": 0.4135,
+      "n_samples": 1,
+      "source": "tipc_reverse_engineered",
+      "interval": [
+        0.0438502,
+        0.0439398
+      ]
+    },
+    "大花紫薇": {
+      "K_sp": 0.0557731,
+      "F": 0.45,
+      "D_wood": 0.5254,
+      "n_samples": 1,
+      "source": "tipc_reverse_engineered",
+      "interval": [
+        0.0557072,
+        0.055839
+      ]
+    },
+    "雞冠刺桐": {
+      "K_sp": 0.0294207,
+      "F": 0.45,
+      "D_wood": 0.2772,
+      "n_samples": 1,
+      "source": "tipc_reverse_engineered",
+      "interval": [
+        0.0294153,
+        0.029426
+      ]
+    },
+    "番石榴": {
+      "K_sp": 0.0675275,
+      "F": 0.45,
+      "D_wood": 0.6361,
+      "n_samples": 1,
+      "source": "tipc_reverse_engineered",
+      "interval": [
+        0.0674962,
+        0.0675587
+      ]
+    }
+  }
+}

@@ -17,6 +17,48 @@
 const db = require('../config/db');
 const OpenAI = require('openai');
 const sqlQueryService = require('./sqlQueryService');
+const path = require('path');
+const fs = require('fs');
+
+// ============================================
+// TIPC K_sp 查表（反推自 AR-TMS0001 / 林業署森林碳匯手冊式 6-4）
+// 公式：carbon_storage_kgCO2e = K_sp · DBH^2 · H
+// 詳見 backend/scripts/build_tipc_kp_lookup.py + backend/data/tipc_kp_lookup.json
+// ============================================
+let TIPC_LOOKUP = null;
+try {
+    const lookupPath = path.join(__dirname, '..', 'data', 'tipc_kp_lookup.json');
+    TIPC_LOOKUP = JSON.parse(fs.readFileSync(lookupPath, 'utf8'));
+} catch (e) {
+    console.warn('[agentService] TIPC K_sp lookup load failed:', e.message);
+    TIPC_LOOKUP = { species: {}, default_broadleaf: { K_sp: 0.106152, F: 0.45, D_wood: 0.530 }, default_conifer: { K_sp: 0.117946, F: 0.50, D_wood: 0.530 } };
+}
+
+const TIPC_CONIFER_NAMES = new Set([
+    '肯氏南洋杉', '小葉南洋杉', '龍柏', '黑松',
+    '臺灣杉', '台灣杉', '紅檾', '臺灣肖楓', '台灣肖楓',
+    '落羽松', '柳杉', '臺灣五葉松', '台灣五葉松',
+    '華山松', '琉球松', '羅漢松', '蘭嶼羅漢松', '圓柏', '刺柏'
+]);
+
+function tipcLookupKsp(speciesName) {
+    if (!speciesName) return { entry: TIPC_LOOKUP.default_broadleaf, source: 'tipc_default_broadleaf', species_matched: null };
+    const name = String(speciesName).trim();
+    const direct = TIPC_LOOKUP.species[name];
+    if (direct) return { entry: direct, source: direct.source || 'tipc_reverse_engineered', species_matched: name };
+    // tolerant 臺/台 + partial match
+    for (const [k, v] of Object.entries(TIPC_LOOKUP.species)) {
+        if (k.includes(name) || name.includes(k)) {
+            return { entry: v, source: v.source || 'tipc_reverse_engineered', species_matched: k };
+        }
+    }
+    const isConifer = TIPC_CONIFER_NAMES.has(name);
+    return {
+        entry: isConifer ? TIPC_LOOKUP.default_conifer : TIPC_LOOKUP.default_broadleaf,
+        source: isConifer ? 'tipc_default_conifer' : 'tipc_default_broadleaf',
+        species_matched: null,
+    };
+}
 
 // ============================================
 // SiliconFlow / DeepSeek 客戶端初始化
@@ -212,7 +254,7 @@ const AGENT_TOOLS = [
         type: 'function',
         function: {
             name: 'carbon_credit_estimate',
-            description: '統計樹木碳匯效益。根據調查資料彙總碳儲存量與 CO₂ 當量，計算方法基於 Chave et al. (2014) 方程。僅提供碳吸存量科學統計，不提供碳權定價或方法學折減率（實際碳信用額度需經授權驗證機構 VVB 核證）。',
+            description: '統計樹木碳匯效益。根據調查資料彙總碳儲存量與 CO₂ 當量，計算方法基於 TIPC AR-TMS0001 (環境部/林業署森林碳匯調查手冊式 6-4)。僅提供碳吸存量科學統計，不提供碳權定價或方法學折減率（實際碳信用額度需經授權驗證機構 VVB 核證）。',
             parameters: {
                 type: 'object',
                 properties: {
@@ -308,54 +350,41 @@ async function toolQueryTreeData({ query, project_area }) {
 
 // --- Tool: calculate_carbon ---
 async function toolCalculateCarbon({ dbh_cm, height_m, species }) {
-    // 碳匯計算公式 — 與前端 tree_input_page.dart 完全一致
-    // 參考: Chave et al. (2014) pan-tropical allometric equation (簡化版)
-    // AGB = e^(−2.48 + 2.4835 × ln(DBH))
-    // TB  = 1.24 × AGB (root-to-shoot ratio)
-    // C   = 0.50 × TB  (IPCC default carbon fraction)
-    // CO₂ = C × 3.67   (molecular weight ratio 44/12)
+    // 碳匯計算公式 — TIPC AR-TMS0001 / 林業署森林碳匯調查與監測手冊式 6-4
+    // carbon_storage_kgCO2e = K_sp · DBH(cm)^2 · H(m)
+    // K_sp 反推自 backend/database/initial_data/tree_survey_data.csv
+    // (見 backend/scripts/build_tipc_kp_lookup.py)
 
     const dbh = dbh_cm || 0;
-    if (dbh <= 0) {
-        return { error: '胸徑 (DBH) 必須大於 0' };
-    }
+    const height = height_m || 0;
+    if (dbh <= 0) return { error: '胸徑 (DBH) 必須大於 0' };
+    if (height <= 0) return { error: '樹高 (H) 必須大於 0；TIPC 公式需要胸徑與樹高二者。' };
 
-    // 步驟一：地上部生物量 (Above-Ground Biomass)
-    const agb_kg = Math.exp(-2.48 + 2.4835 * Math.log(dbh));
-
-    // 步驟二：總生物量 (含根系)
-    const totalBiomass_kg = 1.24 * agb_kg;
-
-    // 步驟三：碳儲存量
-    const carbonStorage_kg = 0.50 * totalBiomass_kg;
-    const carbonStorage_ton = carbonStorage_kg / 1000;
-
-    // 步驟四：CO₂ 當量
-    const co2Equivalent_kg = carbonStorage_kg * 3.67;
-    const co2Equivalent_ton = co2Equivalent_kg / 1000;
-
-    // 步驟五：年碳吸存量 (預設年生長率 3%)
-    const growthRate = 0.03;
-    const annualSequestration_kg = co2Equivalent_kg * growthRate;
+    const { entry, source, species_matched } = tipcLookupKsp(species);
+    const k = entry.K_sp;
+    const carbonStorage_kgCO2e = Math.round(k * dbh * dbh * height * 100) / 100;
+    const carbonStorage_tonCO2e = Math.round(carbonStorage_kgCO2e / 1000 * 1000) / 1000;
 
     return {
-        input: { dbh_cm: dbh, height_m: height_m || null, species: species || '通用' },
-        biomass: {
-            above_ground_kg: Math.round(agb_kg * 100) / 100,
-            total_kg: Math.round(totalBiomass_kg * 100) / 100,
+        input: { dbh_cm: dbh, height_m: height, species: species || '未提供' },
+        formula: 'carbon_storage_kgCO2e = K_sp · DBH^2 · H',
+        coefficients: {
+            K_sp: k,
+            F: entry.F,
+            D_wood: entry.D_wood,
+            n_samples: entry.n_samples || 0,
+            source,
+            species_matched,
         },
         carbon: {
-            storage_kg: Math.round(carbonStorage_kg * 100) / 100,
-            storage_ton: Math.round(carbonStorage_ton * 1000) / 1000,
-            co2_equivalent_kg: Math.round(co2Equivalent_kg * 100) / 100,
-            co2_equivalent_ton: Math.round(co2Equivalent_ton * 1000) / 1000,
+            storage_kg_co2e: carbonStorage_kgCO2e,
+            storage_ton_co2e: carbonStorage_tonCO2e,
         },
         annual: {
-            sequestration_kg_co2: Math.round(annualSequestration_kg * 100) / 100,
-            growth_rate: `${(growthRate * 100).toFixed(1)}%`,
+            note: 'TIPC 年固碳量 (carbon_sequestration_per_year) 內部公式涉及樹齡且未公開，本工具不進行客端重算；請查詢資料庫中的 carbon_sequestration_per_year 欄位。',
         },
-        methodology: 'Chave et al. (2014) 簡化泛熱帶方程，與前端計算一致',
-        note: '此為估算值，實際碳信用需經第三方驗證機構 (VVB) 查驗。',
+        methodology: 'TIPC AR-TMS0001 (環境部 森林司) 與林業署『森林碳匯調查與監測手冊』式 6-4，K_sp 以 7044 筆現場調查資料反推驗證 (詳見 backend/data/tipc_kp_lookup.json)',
+        note: '本計算為 TIPC 平台一致之估算值；實際碳信用需經授權驗證機構 (VVB) 查驗。',
     };
 }
 
@@ -440,8 +469,9 @@ async function toolProjectSummary({ project_area }) {
         return {
             areas: summary.rows,
             totals: totals.rows[0],
+            // DB carbon_storage 已是 kg CO₂e (TIPC 公式內含 44/12)，不再乘 3.667
             co2_equivalent_tons: totals.rows[0]
-                ? Math.round((totals.rows[0].total_carbon_kg * 3.667) / 1000 * 100) / 100
+                ? Math.round((parseFloat(totals.rows[0].total_carbon_kg) || 0) / 1000 * 100) / 100
                 : 0,
         };
     } catch (err) {
@@ -477,12 +507,13 @@ async function toolCarbonCreditEstimate({ project_area, period_years = 10 }) {
             return { message: '未找到符合條件的樹木資料' };
         }
 
-        const totalCarbonKg = parseFloat(stats.total_carbon_kg) || 0;
-        const annualSeqKg = parseFloat(stats.annual_seq_kg) || 0;
+        // DB 中 carbon_storage / carbon_sequestration_per_year 已是 kg CO₂e
+        // (TIPC K_sp 公式內含 44/12)，不再乘 3.667
+        const totalCO2_kg = parseFloat(stats.total_carbon_kg) || 0;
+        const annualCO2_kg = parseFloat(stats.annual_seq_kg) || 0;
 
-        // CO2 當量 (分子量比 44/12 = 3.667)
-        const currentCO2_ton = (totalCarbonKg * 3.667) / 1000;
-        const annualCO2_ton = (annualSeqKg * 3.667) / 1000;
+        const currentCO2_ton = totalCO2_kg / 1000;
+        const annualCO2_ton = annualCO2_kg / 1000;
         const periodCO2_ton = annualCO2_ton * period_years;
 
         return {
@@ -490,17 +521,15 @@ async function toolCarbonCreditEstimate({ project_area, period_years = 10 }) {
             tree_count: parseInt(stats.tree_count),
             avg_dbh_cm: parseFloat(stats.avg_dbh) || 0,
             period_years,
-            methodology: 'Chave et al. (2014) 泛熱帶方程 + IPCC (2006) 碳含量係數',
+            methodology: 'TIPC AR-TMS0001 / 林業署森林碳匯手冊式 6-4 (K_sp · DBH² · H)',
             current_stock: {
-                carbon_ton: Math.round(totalCarbonKg / 1000 * 100) / 100,
                 co2_equivalent_ton: Math.round(currentCO2_ton * 100) / 100,
             },
             projected: {
                 annual_co2_ton: Math.round(annualCO2_ton * 100) / 100,
                 period_co2_ton: Math.round(periodCO2_ton * 100) / 100,
             },
-            note: '碳儲存量基於 Chave et al. (2014) 方程計算，CO₂ 當量以分子量比 44/12 換算。'
-                + '實際碳信用額度需經授權驗證機構 (VVB) 依特定方法學核證後方可取得，'
+            note: '本統計適用 TIPC 平台一致之公式；實際碳信用額度需經授權驗證機構 (VVB) 依特定方法學核證後方可取得，'
                 + '本系統不提供碳權定價或方法學折減率估算。',
         };
     } catch (err) {
