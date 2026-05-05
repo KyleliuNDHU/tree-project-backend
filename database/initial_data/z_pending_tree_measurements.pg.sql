@@ -43,6 +43,7 @@ CREATE TABLE IF NOT EXISTS pending_tree_measurements (
     -- 狀態資訊
     status VARCHAR(20) DEFAULT 'pending',
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
     completed_at TIMESTAMP,
     assigned_to VARCHAR(100),
     priority INTEGER DEFAULT 3,
@@ -52,6 +53,21 @@ CREATE TABLE IF NOT EXISTS pending_tree_measurements (
     measurement_confidence DOUBLE PRECISION,
     measurement_method VARCHAR(50),
     measurement_notes TEXT,
+
+    -- 任務語意
+    survey_mode VARCHAR(20) DEFAULT 'new',
+    target_tree_id BIGINT,
+    match_status VARCHAR(30),
+    gps_source VARCHAR(30),
+    tree_position_source VARCHAR(50),
+    station_position_source VARCHAR(50),
+
+    -- VLGEO2 儀器參數與原始資料追溯
+    gps_hdop DOUBLE PRECISION,
+    device_sn VARCHAR(50),
+    ref_height DOUBLE PRECISION,
+    utm_zone VARCHAR(10),
+    raw_data_snapshot JSONB,
     
     -- 狀態檢查約束
     CONSTRAINT valid_status CHECK (status IN ('pending', 'in_progress', 'completed', 'skipped', 'failed', 'transferred'))
@@ -61,6 +77,11 @@ CREATE TABLE IF NOT EXISTS pending_tree_measurements (
 CREATE INDEX IF NOT EXISTS idx_pending_session ON pending_tree_measurements(session_id);
 CREATE INDEX IF NOT EXISTS idx_pending_status ON pending_tree_measurements(status);
 CREATE INDEX IF NOT EXISTS idx_pending_location ON pending_tree_measurements(tree_latitude, tree_longitude);
+
+DROP TRIGGER IF EXISTS pending_measurements_set_updated_at ON pending_tree_measurements;
+CREATE TRIGGER pending_measurements_set_updated_at
+    BEFORE UPDATE ON pending_tree_measurements
+    FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
 
 COMMENT ON TABLE pending_tree_measurements IS '待測量樹木資料表 - 兩階段測量工作流程 (VLGEO2 → AR DBH)';
 COMMENT ON COLUMN pending_tree_measurements.session_id IS '測量會話識別碼';
@@ -72,3 +93,8 @@ COMMENT ON COLUMN pending_tree_measurements.measured_dbh_cm IS 'AR 測量的胸�
 COMMENT ON COLUMN pending_tree_measurements.measurement_method IS 'DBH 測量方法 (ar_reference, manual, etc)';
 COMMENT ON COLUMN pending_tree_measurements.instrument_dbh_cm IS 'VLGEO2 Remote Diameter 量測值 (cm)';
 COMMENT ON COLUMN pending_tree_measurements.dbh_source IS 'DBH 來源: remote_diameter, vision, manual';
+COMMENT ON COLUMN pending_tree_measurements.gps_hdop IS 'GPS HDOP 精度指標';
+COMMENT ON COLUMN pending_tree_measurements.device_sn IS '儀器序號 (SNR)';
+COMMENT ON COLUMN pending_tree_measurements.ref_height IS '儀器參考高度 REFH (m)';
+COMMENT ON COLUMN pending_tree_measurements.utm_zone IS 'UTM 帶區';
+COMMENT ON COLUMN pending_tree_measurements.raw_data_snapshot IS '完整原始數據快照 (JSON)';
