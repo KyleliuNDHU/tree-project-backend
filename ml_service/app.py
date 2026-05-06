@@ -1110,6 +1110,18 @@ async def auto_measure_dbh_endpoint(
         segmentation_source = None
         server_yolo_info = None
 
+        # ── [Detection-only rollout] Global override ──
+        # When ML_FORCE_SERVER_YOLO is set, ignore any phone-supplied mask and
+        # force server-side YOLOv8-seg. Lets us flip phones to detection-only
+        # without an APK rebuild. Phone keeps drawing a local preview mask
+        # for UX feedback; server mask is what actually measures DBH.
+        if os.environ.get("ML_FORCE_SERVER_YOLO", "").strip().lower() in ("1", "true", "yes"):
+            if trunk_mask_base64 is not None:
+                print("[AutoMeasure] ML_FORCE_SERVER_YOLO=true → discarding phone mask")
+            trunk_mask_base64 = None
+            mask_pixel_width = None
+            use_server_yolo_mask = True
+
         # ── Decode legacy on-device YOLO-seg mask PNG if provided ──
         # When a caller sends a precise trunk mask we feed it into measure_dbh so
         # every sampled row is measured FROM THE MASK (not depth edges).

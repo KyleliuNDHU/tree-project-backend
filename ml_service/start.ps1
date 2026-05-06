@@ -28,7 +28,12 @@ param(
     [ValidateSet('504x378', '602x448')]
     [string]$Da3Ir = '504x378',
 
-    [string]$ServerYoloDevice = 'intel:gpu'
+    [string]$ServerYoloDevice = 'intel:gpu',
+
+    # Force server-side YOLOv8-seg for every /auto_measure_dbh call,
+    # ignoring any phone-supplied trunk_mask_base64. Detection-only is the
+    # current production path; pass -ForceServerYolo:$false to disable.
+    [bool]$ForceServerYolo = $true
 )
 
 $ErrorActionPreference = 'Stop'
@@ -116,6 +121,11 @@ $env:ML_ENABLE_SAM = 'false'
 $env:ML_SEG_MODEL = 'server_yolo_v8_seg'
 if (-not $env:ML_SERVER_YOLO_DEVICE) { $env:ML_SERVER_YOLO_DEVICE = $ServerYoloDevice }
 if (-not $env:ML_SERVER_YOLO_IMGSZ)  { $env:ML_SERVER_YOLO_IMGSZ = '640' }
+
+if ($ForceServerYolo) {
+    $env:ML_FORCE_SERVER_YOLO = 'true'
+    Write-Host "  Force server YOLO: ON (detection-only mode; phone masks ignored)" -ForegroundColor Yellow
+}
 
 if ($Verify) {
     $env:ML_VERIFY_NUMPY = 'true'
