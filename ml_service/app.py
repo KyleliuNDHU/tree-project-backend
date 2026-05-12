@@ -1393,21 +1393,61 @@ async def auto_measure_dbh_endpoint(
             result.notes.append(f"Focal source: {focal_source}")
         result.notes.append(f"Auto-detected trunk (confidence: {best_trunk.confidence:.0%})")
 
-        # Quality gate: add warning for low-confidence or unrealistic DBH
+        # ── Quality gate ────────────────────────────────────────
+        # 1) Low confidence / unrealistic DBH (legacy)
         is_poor_quality = (
             result.confidence < 0.45
             or result.dbh_cm > 200
             or result.dbh_cm < 2
         )
-        if is_poor_quality:
-            result.notes.append("⚠️ 測量品質偏低，建議靠近樹幹或在白天測量")
+
+        # 2) FOV saturation (new): if the trunk takes up > 70 % of the image
+        #    width, the cropped chord no longer represents the trunk diameter
+        #    (the chord is artificially small; cylindrical correction overshoots).
+        #    Empirically the monocular metric depth model also saturates below
+        #    ~ 0.7 m capture distance, so we flag this aggressively.
+        try:
+            img_w_for_fov = depth_map.shape[1]
+        except Exception:
+            img_w_for_fov = 0
+        fov_ratio = (
+            float(result.trunk_pixel_width) / float(img_w_for_fov)
+            if img_w_for_fov > 0 else 0.0
+        )
+        is_too_close = (
+            fov_ratio > 0.70
+            or (result.trunk_depth_m is not None and 0 < result.trunk_depth_m < 0.7)
+        )
+
+        if is_too_close:
+            quality_warning = True
+            quality_code = "too_close"
+            quality_message = (
+                "拍攝距離過近,樹幹超出畫面或深度模型已飽和;"
+                "請退至 1–3 m 後重拍"
+            )
+            result.notes.append(
+                f"⚠️ FOV ratio {fov_ratio:.2f} or depth {result.trunk_depth_m:.2f}m "
+                "indicates near-field saturation"
+            )
+        elif is_poor_quality:
+            quality_warning = True
+            quality_code = "low_confidence"
+            quality_message = "測量品質偏低,建議靠近樹幹或在白天重拍"
+            result.notes.append("⚠️ 測量品質偏低,建議靠近樹幹或在白天測量")
+        else:
+            quality_warning = False
+            quality_code = "ok"
+            quality_message = None
 
         # Build response
         response = {
             "success": True,
             "auto_detected": True,
-            "quality_warning": is_poor_quality,
-            "quality_message": "請靠近或在白天測量" if is_poor_quality else None,
+            "quality_warning": quality_warning,
+            "quality_code": quality_code,
+            "quality_message": quality_message,
+            "fov_ratio": round(fov_ratio, 3),
             "dbh_cm": result.dbh_cm,
             "confidence": result.confidence,
             "trunk_depth_m": result.trunk_depth_m,

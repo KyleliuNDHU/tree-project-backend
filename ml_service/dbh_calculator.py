@@ -676,10 +676,24 @@ def measure_dbh(depth_map: np.ndarray,
         if len(idx) >= 2:
             trunk_pixel_width = float(idx[-1] - idx[0] + 1)
             row_depths = depth_map[row]
-            trunk_slice = row_depths[idx[0]:idx[-1] + 1]
+            # Take depth from the central 1/3 of the mask cross-section to avoid
+            # anti-aliasing artefacts at the mask boundary which can distort the
+            # depth estimate. For very narrow masks (< 9 px) fall back to full
+            # cross-section.
+            full_lo, full_hi = int(idx[0]), int(idx[-1])
+            mask_w = full_hi - full_lo + 1
+            if mask_w >= 9:
+                third = mask_w // 3
+                core_lo = full_lo + third
+                core_hi = full_hi - third
+                trunk_slice = row_depths[core_lo:core_hi + 1]
+                depth_window = f"central 1/3 (x={core_lo}..{core_hi})"
+            else:
+                trunk_slice = row_depths[full_lo:full_hi + 1]
+                depth_window = f"full mask (x={full_lo}..{full_hi})"
             trunk_depth_m = float(np.median(trunk_slice)) if len(trunk_slice) else 0.0
             notes.append(f"Width from mask at row {row}: {trunk_pixel_width:.1f}px "
-                         f"(x={int(idx[0])}..{int(idx[-1])})")
+                         f"(x={full_lo}..{full_hi}); depth from {depth_window}")
         else:
             trunk_pixel_width, measurement_row, trunk_depth_m = \
                 calculate_trunk_width_pixels(depth_map, bbox, measurement_row)
